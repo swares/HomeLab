@@ -1,0 +1,8 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata: { name: ai, namespace: ai-gateway }
+spec:
+  host: ai.apps.lab.home.arpa
+  to: { kind: Service, name: litellm }
+  port: { targetPort: 4000 }
+  tls: { termination: edge, insecureEdgeTerminationPolicy: Redirect }

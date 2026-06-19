@@ -1,0 +1,35 @@
+---
+# Bootstrap Argo CD (upstream, non-HA -- right-sized for one node) and the app-of-apps.
+# MicroShift ships no OLM, so we install Argo directly rather than via an operator.
+- name: Bootstrap Argo CD
+  hosts: microshift
+  become: false                 # runs oc as the kubeconfig owner
+  environment:
+    KUBECONFIG: "/home/{{ ansible_user }}/.kube/config"
+  vars:
+    argo_version: stable        # pin to a release tag in production, e.g. v2.13.3
+    repo_url: "https://github.com/YOURUSER/homelab.git"
+  tasks:
+    - name: Create argocd namespace
+      ansible.builtin.command: oc create namespace argocd
+      register: ns
+      changed_when: "'created' in ns.stdout"
+      failed_when: ns.rc != 0 and 'AlreadyExists' not in ns.stderr
+
+    - name: Install Argo CD
+      ansible.builtin.command: >
+        oc apply -n argocd -f
+        https://raw.githubusercontent.com/argoproj/argo-cd/{{ argo_version }}/manifests/install.yaml
+      register: argo_install
+      changed_when: "'created' in argo_install.stdout or 'configured' in argo_install.stdout"
+
+    - name: Wait for the Argo CD server to be available
+      ansible.builtin.command: >
+        oc rollout status deploy/argocd-server -n argocd --timeout=300s
+      changed_when: false
+
+    - name: Apply the app-of-apps root Application
+      ansible.builtin.command: oc apply -f -
+      args:
+        stdin: "{{ lookup('file', '../../gitops/bootstrap/root-app.yaml') }}"
+      changed_when: true

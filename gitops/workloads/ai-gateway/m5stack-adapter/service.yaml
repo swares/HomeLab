@@ -1,0 +1,6 @@
+apiVersion: v1
+kind: Service
+metadata: { name: m5stack-adapter, namespace: ai-gateway }
+spec:
+  selector: { app: m5stack-adapter }
+  ports: [{ port: 8080, targetPort: 8080 }]

@@ -1,0 +1,60 @@
+---
+# Stand up the NPU/iGPU inference runtimes as host services. These need vendor drivers and
+# device access, so they run on the metal (containerizing with device passthrough is a later
+# step). Exact package names/versions move fast — confirm against each vendor's current wiki.
+#
+# Pieces:
+#   - RKLLama on the two Orange Pi 5 Pro (RK3588S NPU) — Ollama-style LLM server
+#   - OpenVINO Model Server on the Intel boxes (H4 + N150s) — iGPU embeddings/STT/vision
+# Model conversion (HF -> .rkllm) is done OFFLINE on the H4/x86, not on the Pis (RAM-hungry).
+
+- name: RKLLama on Orange Pi 5 Pro NPU nodes
+  hosts: k3s_server          # the two OPi 5 Pro boards
+  become: true
+  tasks:
+    - name: Ensure NPU runtime prerequisites (driver must match model RKLLM version)
+      ansible.builtin.debug:
+        msg: >
+          Confirm RKNPU driver + librkllmrt versions against the board vendor wiki, then pin
+          them. Converted .rkllm models must match the runtime's RKLLM version.
+    - name: Clone RKLLama
+      ansible.builtin.git:
+        repo: https://github.com/NotPunchnox/rkllama.git
+        dest: /opt/rkllama
+        version: main          # pin a release in production
+    # Install/run per the project README (Python deps + ./models for .rkllm files), then
+    # expose its HTTP API on :8080 as a systemd service. Place .rkllm models in /opt/rkllama/models.
+    - name: Reminder — install + enable RKLLama service
+      ansible.builtin.debug:
+        msg: "Run RKLLama's setup, drop .rkllm models in /opt/rkllama/models, expose :8080, enable as a systemd unit."
+
+- name: OpenVINO Model Server on Intel iGPU nodes
+  hosts: x86_nodes:&all      # the three N150s (and optionally the H4)
+  become: true
+  tasks:
+    - name: Ensure Intel GPU userspace (compute runtime) is present for OpenVINO
+      ansible.builtin.debug:
+        msg: "Install Intel GPU compute runtime so OVMS can target the iGPU (/dev/dri)."
+    - name: Run OpenVINO Model Server (container) targeting the iGPU
+      ansible.builtin.debug:
+        msg: >
+          docker run -d --name ovms --device /dev/dri -p 8000:8000
+          -v /opt/models:/models openvino/model_server:latest
+          --config_path /models/config.json --port 9000 --rest_port 8000
+          (recent OVMS exposes an OpenAI-compatible endpoint; confirm path/version).
+
+- name: AI escalation orchestrator (Pi-side, fronts Claude Code) — Tier 3
+  hosts: orchestrator
+  become: true
+  tasks:
+    - name: Node.js + Claude Code CLI are prerequisites (ARM64 supported)
+      ansible.builtin.debug:
+        msg: "Install Node.js LTS and the Claude Code CLI on this ARM box; confirm 'claude' is on PATH."
+    - name: Deploy the framework's orchestrator.py
+      ansible.builtin.debug:
+        msg: >
+          Place scripts/orchestrator.py on the host, set WORKDIR={{ orchestrator_workdir }},
+          CLIENT_ALLOWLIST (the device + LAN) and SERVE_BEARER ($ROUTER_BEARER), serve TLS on
+          :{{ orchestrator_port }} (self-signed ok with ROUTER_TLS_INSECURE=true), and run
+          'python orchestrator.py --serve' as a systemd unit. Fail-closed: it won't start
+          without an allowlist or bearer. Keep WORKDIR scoped — Tier 3 has shell + fs access.

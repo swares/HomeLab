@@ -1,0 +1,5 @@
+# Ansible-managed lab broker. Point the M5Stack framework at {{ ansible_host }}:1883.
+listener 1883 0.0.0.0
+allow_anonymous {{ 'true' if mqtt_allow_anonymous else 'false' }}
+persistence true
+persistence_location /var/lib/mosquitto/

@@ -1,0 +1,70 @@
+---
+# Two backup streams onto the cold tier (8TB primary + 6TB copy), via host systemd timers:
+#   - daily : restic snapshot of live NAS data  (online, no downtime)
+#   - weekly: MicroShift data/etcd snapshot      (brief downtime in a 03:00 window)
+#
+# Cluster *config* is already safe in git (Argo); these cover *data* and *state*.
+- name: Configure backups to the cold tier
+  hosts: microshift
+  become: true
+  vars:
+    restic_repo: "{{ cold_primary_mount }}/restic"          # 8TB primary
+    restic_password_file: /etc/restic/password   # vaulted; created out of band
+    restic_copy_repo: "{{ cold_secondary_mount }}/restic"   # 6TB redundant copy
+    etcd_backup_dir: "{{ cold_primary_mount }}/microshift-backups"
+    restic_offsite_repo: "{{ offsite_restic_repo | default('') }}"   # e.g. b2:bucket:lab — set via host/group vars or Vault; creds in /etc/restic/offsite.env
+  tasks:
+    - name: Install restic
+      ansible.builtin.dnf:
+        name: restic
+        state: present
+
+    - name: Ensure restic password file dir
+      ansible.builtin.file:
+        path: /etc/restic
+        state: directory
+        mode: "0700"
+
+    # --- NAS data backup (restic, daily) ---
+    - name: Render restic backup service + timer
+      ansible.builtin.template:
+        src: "../templates/{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: "0644"
+      loop:
+        - backup-nas.service
+        - backup-nas.timer
+
+    # --- MicroShift state backup (weekly, maintenance window) ---
+    - name: Render etcd/data backup service + timer
+      ansible.builtin.template:
+        src: "../templates/{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: "0644"
+      loop:
+        - backup-etcd.service
+        - backup-etcd.timer
+
+    # --- Offsite copy (3-2-1, daily) — no-ops until restic_offsite_repo is set ---
+    - name: Render offsite copy service + timer
+      ansible.builtin.template:
+        src: "../templates/{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: "0644"
+      loop:
+        - backup-offsite.service
+        - backup-offsite.timer
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable backup timers
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - backup-nas.timer
+        - backup-etcd.timer
+        - backup-offsite.timer

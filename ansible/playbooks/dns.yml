@@ -1,0 +1,101 @@
+---
+# DNS for the lab. Default engine = Pi-hole v6 (set dns_engine=dnsmasq for bare dnsmasq).
+# Primary on RPi 3B #2 (wired); identical config on a Zero 2W secondary — set BOTH as DHCP
+# resolvers. Ad-block is scoped to HOUSEHOLD clients; lab/infra nodes are exempted (below).
+- name: DNS — lab resolver (Pi-hole v6 by default)
+  hosts: dns
+  become: true
+  vars:
+    dns_engine: pihole               # 'pihole' | 'dnsmasq'
+    pihole_web_password_hash: ""     # double-sha256; source from Vault, NOT plaintext here
+
+  tasks:
+    # ---------------- Pi-hole v6 ----------------
+    - name: (pihole) ensure group
+      ansible.builtin.group:
+        name: pihole
+        state: present
+      when: dns_engine == 'pihole'
+
+    - name: (pihole) ensure user
+      ansible.builtin.user:
+        name: pihole
+        group: pihole
+        shell: /usr/sbin/nologin
+        home: /var/lib/pihole
+        system: true
+      when: dns_engine == 'pihole'
+
+    - name: (pihole) config dir
+      ansible.builtin.file:
+        path: /etc/pihole
+        state: directory
+        owner: pihole
+        group: pihole
+        mode: "0775"
+      when: dns_engine == 'pihole'
+
+    - name: (pihole) pre-seed pihole.toml  (REQUIRED before --unattended on a fresh host)
+      ansible.builtin.template:
+        src: ../templates/pihole.toml.j2
+        dest: /etc/pihole/pihole.toml
+        owner: pihole
+        group: pihole
+        mode: "0644"
+      when: dns_engine == 'pihole'
+      notify: restart pihole
+
+    - name: (pihole) unattended install (idempotent — skipped once FTL exists)
+      ansible.builtin.shell:
+        cmd: "curl -sSL https://install.pi-hole.net | bash /dev/stdin --unattended"
+        creates: /etc/systemd/system/pihole-FTL.service
+      when: dns_engine == 'pihole'
+      register: pihole_install
+
+    - name: (pihole) refresh gravity (blocklists)
+      ansible.builtin.command: pihole -g
+      when: dns_engine == 'pihole'
+      changed_when: false
+
+    - name: (pihole) stage client-scoping SQL (exempt lab/infra nodes from ad-block)
+      ansible.builtin.template:
+        src: ../templates/pihole-clients.sql.j2
+        dest: /etc/pihole/lab-clients.sql
+        owner: pihole
+        group: pihole
+        mode: "0644"
+      when: dns_engine == 'pihole'
+      register: lab_clients_sql
+
+    - name: (pihole) apply client scoping to gravity.db (idempotent)
+      ansible.builtin.shell: 'pihole-FTL sqlite3 /etc/pihole/gravity.db ".read /etc/pihole/lab-clients.sql"'
+      when:
+        - dns_engine == 'pihole'
+        - lab_clients_sql.changed or pihole_install.changed
+      notify: restart pihole
+
+    # ---------------- bare dnsmasq (alternative) ----------------
+    - name: (dnsmasq) ensure dnsmasq.d
+      ansible.builtin.file:
+        path: /etc/dnsmasq.d
+        state: directory
+        mode: "0755"
+      when: dns_engine == 'dnsmasq'
+
+    - name: (dnsmasq) deploy lab zone drop-in
+      ansible.builtin.template:
+        src: ../templates/lab-zone.conf.j2
+        dest: /etc/dnsmasq.d/10-lab-zone.conf
+        mode: "0644"
+      when: dns_engine == 'dnsmasq'
+      notify: restart dnsmasq
+
+  handlers:
+    - name: restart pihole
+      ansible.builtin.service:
+        name: pihole-FTL
+        state: restarted
+    - name: restart dnsmasq
+      ansible.builtin.service:
+        name: dnsmasq
+        state: restarted

@@ -1,0 +1,113 @@
+---
+# Storage layer for the H4 core. Corrected model (confirmed complement):
+#
+#   eMMC 256 GB        -> host OS (frees the NVMe entirely)
+#   NVMe 4 TB          -> HOT: etcd, k8s PVs, live NAS data (lv_nas). NOT mirrored (single disk).
+#   8 TB RAID 1 (md0)  -> COLD primary: bulk NAS shares + restic repo + etcd snapshots.
+#   6 TB RAID 1 (md1)  -> COLD secondary: restic copy + archive.
+#
+# Both cold tiers are mdadm RAID 1 mirrors, so each survives a single-disk failure in place
+# (rebuild, no restore). The NVMe hot tier is the remaining single point of failure for LIVE
+# data — which is why it is backed up to the (mirrored) cold tiers, and ideally offsite.
+#
+# NOTE: this playbook MOUNTS pre-existing arrays and never reformats a populated device. It does
+# NOT create the RAID (mdadm --create is destructive and the arrays already exist). The 8 TB
+# mirror may be DEGRADED until the UDMA-CRC/link issue is resolved — see RUNBOOK "UDMA CRC".
+# cold_primary_device=/dev/md0 (8 TB), cold_secondary_device=/dev/md1 (6 TB).
+- name: Configure storage tiers on the H4 core
+  hosts: microshift
+  become: true
+  vars:
+    storage_alert_email: "{{ alert_email | default('root@localhost') }}"
+  tasks:
+    # ---- Monitoring: SMART + mdadm (catch a climbing CRC count or a dropped mirror member) ----
+    - name: Install smartmontools + mdadm
+      ansible.builtin.package:
+        name: [smartmontools, mdadm]
+        state: present
+
+    - name: smartd — scan all disks, alert on SMART failure
+      ansible.builtin.copy:
+        dest: /etc/smartd.conf
+        mode: "0644"
+        content: |
+          # Ansible-managed. Watch attribute 199 (UDMA_CRC) + 5/197/198 (media).
+          DEVICESCAN -a -o on -S on -n standby,q -s (S/../.././02|L/../../6/03) -W 4,45,55 -m {{ storage_alert_email }}
+      notify: restart smartd
+
+    - name: mdadm — email on a degraded/failed array
+      ansible.builtin.lineinfile:
+        path: /etc/mdadm/mdadm.conf
+        regexp: '^MAILADDR'
+        line: "MAILADDR {{ storage_alert_email }}"
+        create: true
+      notify: restart mdmonitor
+
+    # ---- Cold tiers: two mdadm RAID 1 mirrors (8 TB md0 primary, 6 TB md1 secondary) ----
+    - name: Filesystem on the cold mirrors (never reformats a populated array)
+      community.general.filesystem:
+        fstype: xfs
+        dev: "{{ item }}"
+        force: false
+      loop:
+        - "{{ cold_primary_device }}"     # /dev/md0 — 8 TB mirror
+        - "{{ cold_secondary_device }}"   # /dev/md1 — 6 TB mirror
+
+    - name: Mount the cold mirrors
+      ansible.posix.mount:
+        path: "{{ item.path }}"
+        src: "{{ item.src }}"
+        fstype: xfs
+        opts: defaults,noatime
+        state: mounted
+      loop:
+        - { path: "{{ cold_primary_mount }}",   src: "{{ cold_primary_device }}" }
+        - { path: "{{ cold_secondary_mount }}", src: "{{ cold_secondary_device }}" }
+
+    - name: Create cold-tier subdirectories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0750"
+      loop:
+        - "{{ cold_primary_mount }}/restic"               # primary NAS/data backups
+        - "{{ cold_primary_mount }}/microshift-backups"   # cluster/etcd snapshots
+        - "{{ cold_secondary_mount }}/restic"             # second copy (restic copy)
+        - "{{ cold_secondary_mount }}/archive"            # cold/bulk shares
+
+    # ---- Hot tier: NVMe LVM for live NAS data + k8s PVs ----
+    - name: Create the LVMS volume group on the reserved NVMe partition
+      community.general.lvg:
+        vg: "{{ microshift_vg }}"
+        pvs: "{{ microshift_pv_device }}"
+
+    - name: Create the live NAS logical volume
+      community.general.lvol:
+        vg: "{{ microshift_vg }}"
+        lv: "{{ nas_lv }}"
+        size: 1500G
+        shrink: false
+
+    - name: Filesystem on the NAS LV
+      community.general.filesystem:
+        fstype: xfs
+        dev: "/dev/{{ microshift_vg }}/{{ nas_lv }}"
+        force: false
+
+    - name: Mount the live NAS share
+      ansible.posix.mount:
+        path: "{{ nas_mount }}"
+        src: "/dev/{{ microshift_vg }}/{{ nas_lv }}"
+        fstype: xfs
+        opts: defaults,noatime
+        state: mounted
+
+  handlers:
+    - name: restart smartd
+      ansible.builtin.service:
+        name: smartd
+        state: restarted
+    - name: restart mdmonitor
+      ansible.builtin.service:
+        name: mdmonitor
+        state: restarted

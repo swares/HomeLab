@@ -1,0 +1,12 @@
+[Unit]
+Description=MicroShift data/etcd snapshot to cold tier (8TB)
+RequiresMountsFor={{ cold_primary_mount }}
+
+[Service]
+Type=oneshot
+# Authoritative snapshot requires the service stopped (brief downtime, weekly window).
+# For a zero-downtime alternative, rsync /var/lib/microshift-backups instead.
+ExecStart=/bin/bash -c '\
+  systemctl stop microshift && \
+  microshift backup {{ etcd_backup_dir }}/$(date +%%F_%%H%%M) ; \
+  systemctl start microshift'

@@ -1,0 +1,15 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: argocd-server
+  namespace: argocd
+spec:
+  host: argocd.apps.lab.home.arpa
+  to:
+    kind: Service
+    name: argocd-server
+  port:
+    targetPort: https
+  tls:
+    termination: passthrough           # argocd-server terminates its own TLS
+    insecureEdgeTerminationPolicy: Redirect

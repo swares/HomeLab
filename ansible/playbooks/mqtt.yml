@@ -1,0 +1,19 @@
+---
+# Mosquitto MQTT broker on an always-on lab Zero 2W (relocated off dad's laptop).
+# Point the M5Stack framework's broker address here; keep the laptop as a dev target if useful.
+- name: Mosquitto MQTT broker
+  hosts: mqtt
+  become: true
+  vars:
+    mqtt_allow_anonymous: true   # LAN-only default; switch to passwords/TLS if ever exposed
+  tasks:
+    - name: Install Mosquitto
+      ansible.builtin.apt: { name: [mosquitto, mosquitto-clients], update_cache: true, state: present }
+    - name: Broker config
+      ansible.builtin.template: { src: ../templates/mosquitto.conf.j2, dest: /etc/mosquitto/conf.d/lab.conf, mode: "0644" }
+      notify: restart mosquitto
+    - name: Enable + start
+      ansible.builtin.systemd: { name: mosquitto, enabled: true, state: started }
+  handlers:
+    - name: restart mosquitto
+      ansible.builtin.systemd: { name: mosquitto, state: restarted }

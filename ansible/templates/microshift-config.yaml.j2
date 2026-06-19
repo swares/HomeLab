@@ -1,0 +1,15 @@
+# /etc/microshift/config.yaml  (rendered by Ansible)
+dns:
+  baseDomain: {{ lab_domain }}        # Routes -> <app>.apps.{{ lab_domain }}
+network:
+  clusterNetwork:
+    - {{ pod_cidr }}
+  serviceNetwork:
+    - {{ service_cidr }}
+node:
+  hostnameOverride: {{ inventory_hostname }}.{{ lab_domain }}
+  nodeIP: {{ node_ip }}
+apiServer:
+  subjectAltNames:
+    - api.{{ lab_domain }}
+    - {{ node_ip }}

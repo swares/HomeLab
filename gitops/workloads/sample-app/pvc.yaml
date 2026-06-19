@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sample-data
+  namespace: sample-app
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 2Gi
+  # LVMS provisions this from the NVMe VG. Confirm the exact class name on your
+  # release with `oc get storageclass` -- MicroShift's default is commonly
+  # "topolvm-provisioner". Leave unset to use whatever is marked default.
+  storageClassName: topolvm-provisioner

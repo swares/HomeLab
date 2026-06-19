@@ -1,0 +1,36 @@
+---
+# Vault (secrets / PKI) on the RPi 5. Installs + configures + starts the server.
+# `vault operator init` and unseal are intentionally MANUAL (one-time, security-critical):
+# init once, store the unseal keys + root token OFFLINE, then unseal. Consider KMS auto-unseal later.
+- name: Vault server
+  hosts: vault
+  become: true
+  tasks:
+    - name: HashiCorp APT key
+      ansible.builtin.get_url:
+        url: https://apt.releases.hashicorp.com/gpg
+        dest: /usr/share/keyrings/hashicorp.asc
+        mode: "0644"
+    - name: HashiCorp APT repo
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/usr/share/keyrings/hashicorp.asc] https://apt.releases.hashicorp.com {{ ansible_distribution_release }} main"
+        filename: hashicorp
+        state: present
+    - name: Install Vault
+      ansible.builtin.apt: { name: vault, update_cache: true, state: present }
+    - name: Data dir for raft storage
+      ansible.builtin.file: { path: /opt/vault/data, state: directory, owner: vault, group: vault, mode: "0750" }
+    - name: Vault config
+      ansible.builtin.template:
+        src: ../templates/vault.hcl.j2
+        dest: /etc/vault.d/vault.hcl
+        mode: "0640"
+      notify: restart vault
+    - name: Enable + start Vault
+      ansible.builtin.systemd: { name: vault, enabled: true, state: started }
+    - name: One-time manual steps
+      ansible.builtin.debug:
+        msg: "Run ONCE on {{ inventory_hostname }}: `vault operator init` (store keys OFFLINE), unseal x3, then enable KV + PKI engines."
+  handlers:
+    - name: restart vault
+      ansible.builtin.systemd: { name: vault, state: restarted }
