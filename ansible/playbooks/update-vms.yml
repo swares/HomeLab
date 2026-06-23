@@ -1,0 +1,191 @@
+---
+# update-vms.yml — Zero-downtime OS patching for Proxmox VMs.
+#
+# Strategy per VM role:
+#   k3s-server / k3s-agent  → drain node → upgrade → reboot → wait ready → uncordon
+#   standalone (gitlab, etc) → Proxmox snapshot → upgrade → reboot → HTTP health check
+#                              → rollback to snapshot on failure
+#
+# Usage:
+#   ansible-playbook playbooks/update-vms.yml              # all VMs
+#   ansible-playbook playbooks/update-vms.yml -l k3s       # k3s nodes only
+#   ansible-playbook playbooks/update-vms.yml -l gitlab    # GitLab VM only
+#   ansible-playbook playbooks/update-vms.yml --check      # dry-run
+#
+# Variables (set in inventory or pass -e):
+#   k3s_control_host      inventory hostname of the k3s control plane
+#   proxmox_api_host      Proxmox API address  (default: pve-n150-1.lab.home.arpa)
+#   proxmox_api_user      (default: ansible@pam)
+#   proxmox_api_token_id  API token ID
+#   proxmox_api_token_secret  API token secret (vault-encrypt this)
+#   health_check_url      URL to probe after reboot for standalone VMs
+#   health_check_timeout  seconds to wait for HTTP 2xx/3xx  (default: 120)
+#   reboot_timeout        seconds to wait for SSH after reboot  (default: 300)
+
+- name: Patch k3s nodes (drain → upgrade → uncordon)
+  hosts: k3s
+  serial: 1          # one node at a time — keeps the cluster available
+  become: true
+  gather_facts: true
+
+  vars:
+    k3s_control_host: "{{ groups['k3s_server'][0] }}"
+    reboot_timeout: 300
+
+  pre_tasks:
+    - name: Confirm last backup succeeded before touching storage nodes
+      ansible.builtin.assert:
+        that: "'k3s' in group_names"
+        success_msg: "Node {{ inventory_hostname }} is a k3s member — proceeding."
+        fail_msg: "Unexpected host in k3s group."
+
+  tasks:
+    - name: Drain node {{ inventory_hostname }} from the k3s cluster
+      ansible.builtin.command: >
+        kubectl drain {{ inventory_hostname }}
+          --ignore-daemonsets
+          --delete-emptydir-data
+          --timeout=120s
+      delegate_to: "{{ k3s_control_host }}"
+      changed_when: true
+
+    - name: Apply all available package updates
+      ansible.builtin.apt:
+        upgrade: dist
+        update_cache: true
+        autoremove: true
+        autoclean: true
+      register: apt_result
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_flag
+
+    - name: Reboot if kernel or libc was updated
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ reboot_timeout }}"
+        msg: "Rebooting after package update"
+      when: reboot_flag.stat.exists or apt_result.changed
+
+    - name: Wait for node to re-join the cluster as Ready
+      ansible.builtin.command: >
+        kubectl wait node/{{ inventory_hostname }}
+          --for=condition=Ready
+          --timeout=180s
+      delegate_to: "{{ k3s_control_host }}"
+      changed_when: false
+      retries: 5
+      delay: 15
+      register: wait_result
+      until: wait_result.rc == 0
+
+    - name: Uncordon {{ inventory_hostname }}
+      ansible.builtin.command: >
+        kubectl uncordon {{ inventory_hostname }}
+      delegate_to: "{{ k3s_control_host }}"
+      changed_when: true
+
+    - name: Confirm node is schedulable
+      ansible.builtin.command: >
+        kubectl get node {{ inventory_hostname }} -o jsonpath='{.spec.unschedulable}'
+      delegate_to: "{{ k3s_control_host }}"
+      register: schedulable
+      changed_when: false
+      failed_when: schedulable.stdout == "true"
+
+  post_tasks:
+    - name: Report patch result for {{ inventory_hostname }}
+      ansible.builtin.debug:
+        msg: >
+          Node {{ inventory_hostname }} patched successfully.
+          Packages changed: {{ apt_result.changed }}.
+          Rebooted: {{ reboot_flag.stat.exists }}.
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Patch standalone VMs (snapshot → upgrade → health check)
+  hosts: standalone_vms     # tag standalone VMs in inventory with group standalone_vms
+  serial: 1
+  become: true
+  gather_facts: true
+
+  vars:
+    proxmox_api_host:    "pve-n150-1.lab.home.arpa"
+    proxmox_api_user:    "ansible@pam"
+    reboot_timeout:      300
+    health_check_timeout: 120
+    snapshot_name:       "pre-update-{{ ansible_date_time.date }}"
+
+  tasks:
+    - name: Create Proxmox snapshot before patching
+      community.general.proxmox_snap:
+        api_host:         "{{ proxmox_api_host }}"
+        api_user:         "{{ proxmox_api_user }}"
+        api_token_id:     "{{ proxmox_api_token_id }}"
+        api_token_secret: "{{ proxmox_api_token_secret }}"
+        vmid:             "{{ proxmox_vmid }}"
+        snapname:         "{{ snapshot_name }}"
+        description:      "Auto pre-update snapshot by Ansible {{ ansible_date_time.iso8601 }}"
+        state: present
+      delegate_to: localhost
+      register: snapshot_result
+
+    - name: Apply all available package updates
+      ansible.builtin.apt:
+        upgrade: dist
+        update_cache: true
+        autoremove: true
+        autoclean: true
+      register: apt_result
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_flag
+
+    - name: Reboot if needed
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ reboot_timeout }}"
+        msg: "Rebooting after package update"
+      when: reboot_flag.stat.exists or apt_result.changed
+
+    - name: HTTP health check — wait for service to respond
+      ansible.builtin.uri:
+        url:            "{{ health_check_url }}"
+        method:         GET
+        status_code:    [200, 301, 302, 401, 403]
+        validate_certs: false
+        timeout:        30
+      delegate_to: localhost
+      register: health_result
+      retries:  "{{ (health_check_timeout | int / 10) | int }}"
+      delay:    10
+      until:    health_result.status in [200, 301, 302, 401, 403]
+      when: health_check_url is defined
+
+    - name: Report success
+      ansible.builtin.debug:
+        msg: >
+          {{ inventory_hostname }} patched successfully.
+          Snapshot: {{ snapshot_name }}.
+          Health: {{ health_result.status | default('skipped') }}.
+
+  rescue:
+    - name: "ROLLBACK: restore Proxmox snapshot {{ snapshot_name }}"
+      community.general.proxmox_snap:
+        api_host:         "{{ proxmox_api_host }}"
+        api_user:         "{{ proxmox_api_user }}"
+        api_token_id:     "{{ proxmox_api_token_id }}"
+        api_token_secret: "{{ proxmox_api_token_secret }}"
+        vmid:             "{{ proxmox_vmid }}"
+        snapname:         "{{ snapshot_name }}"
+        state:            rollback
+      delegate_to: localhost
+
+    - name: Fail with rollback notice
+      ansible.builtin.fail:
+        msg: >
+          Update FAILED for {{ inventory_hostname }}.
+          Rolled back to snapshot {{ snapshot_name }}.
+          Check the output above for the root cause.

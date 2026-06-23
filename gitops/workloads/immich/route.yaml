@@ -1,0 +1,7 @@
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata: { name: immich, namespace: immich }
+spec:
+  to: { kind: Service, name: immich-server }
+  port: { targetPort: 2283 }
+  tls: { termination: edge }

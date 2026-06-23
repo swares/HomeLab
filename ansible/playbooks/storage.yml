@@ -3,8 +3,8 @@
 #
 #   eMMC 256 GB        -> host OS (frees the NVMe entirely)
 #   NVMe 4 TB          -> HOT: etcd, k8s PVs, live NAS data (lv_nas). NOT mirrored (single disk).
-#   8 TB RAID 1 (md0)  -> COLD primary: bulk NAS shares + restic repo + etcd snapshots.
-#   6 TB RAID 1 (md1)  -> COLD secondary: restic copy + archive.
+#   8 TB RAID 1 (md1)  -> COLD primary: restic repo + etcd snapshots + the Immich library.
+#   ~5.45 TB RAID 1    -> COLD secondary: restic copy (critical set) + archive (rebuilt 2x6TB).
 #
 # Both cold tiers are mdadm RAID 1 mirrors, so each survives a single-disk failure in place
 # (rebuild, no restore). The NVMe hot tier is the remaining single point of failure for LIVE
@@ -13,7 +13,7 @@
 # NOTE: this playbook MOUNTS pre-existing arrays and never reformats a populated device. It does
 # NOT create the RAID (mdadm --create is destructive and the arrays already exist). The 8 TB
 # mirror may be DEGRADED until the UDMA-CRC/link issue is resolved — see RUNBOOK "UDMA CRC".
-# cold_primary_device=/dev/md0 (8 TB), cold_secondary_device=/dev/md1 (6 TB).
+# cold_primary_device=/dev/md1 (8 TB), cold_secondary_device=/dev/md0 (~5.45 TB, post-rebuild).
 - name: Configure storage tiers on the H4 core
   hosts: microshift
   become: true
@@ -43,15 +43,15 @@
         create: true
       notify: restart mdmonitor
 
-    # ---- Cold tiers: two mdadm RAID 1 mirrors (8 TB md0 primary, 6 TB md1 secondary) ----
+    # ---- Cold tiers: two mdadm RAID 1 mirrors (8 TB md1 primary, ~5.45 TB md0 secondary) ----
     - name: Filesystem on the cold mirrors (never reformats a populated array)
       community.general.filesystem:
         fstype: xfs
         dev: "{{ item }}"
         force: false
       loop:
-        - "{{ cold_primary_device }}"     # /dev/md0 — 8 TB mirror
-        - "{{ cold_secondary_device }}"   # /dev/md1 — 6 TB mirror
+        - "{{ cold_primary_device }}"     # /dev/md1 — 8 TB mirror (primary)
+        - "{{ cold_secondary_device }}"   # /dev/md0 — ~5.45 TB mirror (rebuilt secondary)
 
     - name: Mount the cold mirrors
       ansible.posix.mount:

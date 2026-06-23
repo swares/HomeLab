@@ -1,0 +1,27 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: immich-server, namespace: immich }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: immich-server } }
+  template:
+    metadata: { labels: { app: immich-server } }
+    spec:
+      containers:
+        - name: server
+          image: ghcr.io/immich-app/immich-server:release   # PIN to a vX.Y.Z for reproducible GitOps
+          envFrom: [{ configMapRef: { name: immich-env } }]
+          env:
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: immich-secrets, key: DB_PASSWORD } }
+          ports: [{ containerPort: 2283 }]
+          volumeMounts: [{ name: library, mountPath: /usr/src/app/upload }]
+      volumes:
+        - { name: library, persistentVolumeClaim: { claimName: immich-library } }
+---
+apiVersion: v1
+kind: Service
+metadata: { name: immich-server, namespace: immich }
+spec:
+  selector: { app: immich-server }
+  ports: [{ port: 2283, targetPort: 2283 }]
