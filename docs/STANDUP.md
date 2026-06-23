@@ -28,7 +28,7 @@ to build on** (don't build the NAS on a faulted disk link).
      port → BIOS, per [RUNBOOK → UDMA CRC triage](RUNBOOK.md#disaster-recovery). Confirm both
      mirrors are clean before Phase 2:
      ```bash
-     cat /proc/mdstat                       # both md0 (8T) and md1 (6T) [UU], no [_U]
+     cat /proc/mdstat                       # md1 (8T primary) [UU]; secondary mirror [UU]
      smartctl -a /dev/sdX | grep -E "UDMA_CRC|Reallocated|Pending|Uncorrectable"
      ```
 3. 🔧 **Network & addressing.** Give every infra node a **static / DHCP-reserved IP** (Pi-hole
@@ -76,7 +76,7 @@ Goal: name resolution, storage, identity, and secrets — the things everything 
    ```bash
    make storage
    ```
-   Mounts the two mirrors (`md0` 8 TB, `md1` 6 TB), carves the NVMe LVM hot tier, and installs
+   Mounts the two mirrors (`md1` 8 TB → `/mnt/cold-8t`, secondary ~5.45 TB → `/mnt/cold-sec`), carves the NVMe LVM hot tier, and installs
    **smartd + mdadm monitoring**. Verify mounts, array health, and that the monitors are active.
    See [storage-tiers.svg](diagrams/storage-tiers.svg).
 3. 🟢 **Identity & secrets.** `make vault` (RPi 5) then `make ldap` (RPi 4B). Vault install/config
@@ -99,7 +99,7 @@ Goal: the main Kubernetes platform and the GitOps loop that drives all in-cluste
    ```
 2. 🟢 **Backups** (get the backup spine up before real data lands):
    ```bash
-   make backup        # restic timers (md0 primary, restic copy -> md1) + etcd snapshots
+   make backup        # restic timers (md1 primary, restic copy -> secondary) + etcd snapshots
    ```
    Verify the timers exist and a first run succeeds (`systemctl list-timers | grep backup`).
 3. 🟢 **Argo CD + app-of-apps** — the GitOps controller; in-cluster workloads sync from Git:
@@ -164,7 +164,7 @@ Goal: the VM/devops sandbox. This is a **parallel track** — it doesn't block P
    - Storage: `cat /proc/mdstat` clean; smartd/mdadm monitoring armed.
    - Platform: `kubectl get nodes,pods -A` healthy; Argo all Synced.
    - AI: gateway lists models and answers a prompt.
-   - Backups: a restic snapshot exists on `md0`, copied to `md1`.
+   - Backups: a restic snapshot exists on md1 (`/mnt/cold-8t`), copied to the secondary.
 2. **Close the gaps** (from [SERVICES.md](SERVICES.md), priority order):
    - ✅ **Offsite backup** — wired: `backup-offsite.timer` does a nightly `restic copy` to an
      offsite repo. Set `offsite_restic_repo` + `/etc/restic/offsite.env` (creds from Vault).

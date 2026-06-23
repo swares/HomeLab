@@ -12,7 +12,7 @@ layout on the core. Real addressing is `10.136.151.0/24`.
 
 | Device | CPU | RAM | Storage | Wired IP | Observed services | Role |
 |--------|-----|-----|---------|----------|-------------------|------|
-| **Odroid-H4 Ultra** | i3-N305 8C/8T x86 | 64 GB¹ | NVMe 4 TB · eMMC 256 GB · 6 TB RAID 1 · 8 TB RAID 1 | `.64` (2.5 Gbps) | Ansible✓, Docker✓, OpenNebula✓, OneAI | **Core: NAS + MicroShift** |
+| **Odroid-H4 Ultra** | i3-N305 8C/8T x86 | 64 GB¹ | NVMe 4 TB · eMMC 256 GB · 8 TB RAID1 (md1) · ~5.45 TB RAID1 | `.64` (2.5 Gbps) | Ansible✓, Docker✓, OpenNebula✓, OneAI | **Core: NAS + MicroShift** |
 | **N150 mini PC ×2 (lab)** ³ | Intel N150 4C/4T x86 | 16 GB DDR4 | 512 GB M.2 | `.71` / `.72` (TBD) | — | **Proxmox cluster nodes** / OpenVINO iGPU inference |
 | **N150 #3 (living-room)** ³ | Intel N150 4C/4T x86 | 16 GB DDR4 | 512 GB M.2 | TBD | — | **Proxmox node** running the TV/browse VM (cores/disk/iGPU passthrough) |
 | **Orange Pi 5 Pro #1** | RK3588S 8C ARM | 16 GB | SD 64 · eMMC 256 · NVMe 30 GB | `.83` | Apps/Containers/VMs, AI GPU+NPU | k3s **server** / heavy ARM |
@@ -25,6 +25,7 @@ layout on the core. Real addressing is `10.136.151.0/24`.
 | RPi Zero W ×3 (standalone) | 1C @ 1 GHz, **32-bit ARMv6** | 512 MB | SD | WiFi, own IP (TBD) | — | ultra-light single tasks only (1 DOA; 32-bit limits images) |
 | **Orange Pi Zero 2W ×4** (standalone) | Allwinner H618, A53 4C 64-bit @1.5GHz | **4 GB** LPDDR4 | microSD + 16 MB SPI (no eMMC/M.2) | WiFi5, own IP (TBD) | — | viable **k3s agents** / service nodes (Mali-G31, no NPU; SD-only → keep stateless) |
 | M5Stack LLM | ESP32-S3 2C | — | USB | — | AI NPU | edge AI inference |
+| HostMon | ESP32-S3 (Waveshare 4.3" LCD) | 8 MB PSRAM | 8 MB flash | LAN | edge | black-box host prober + status panel |
 
 ¹ H4 officially specs 48 GB DDR5; 64 GB is over spec and generally works.
 ³ **Three** N150 mini PCs total (none in the Hardware2 map): two dedicated lab boxes plus the
@@ -69,17 +70,11 @@ route all of it is in [AI-INFERENCE.md](AI-INFERENCE.md).
 |------|-------|----------|---------|
 | Boot | eMMC | 256 GB | Host OS (frees the NVMe entirely) |
 | Hot | NVMe (US75) | 4 TB | etcd, k8s PVs, live NAS data |
-| Cold — primary | **8 TB RAID 1** (md0) | 8 TB usable | restic repo + etcd snapshots + bulk shares |
-| Cold — secondary | **6 TB RAID 1** (md1) | 6 TB usable | `restic copy` + archive |
+| Cold — primary | **8 TB RAID 1** (`md1`, 2×8 TB) | 8 TB usable | restic repo + etcd snapshots + **Immich library** |
+| Cold — secondary | **~5.45 TB RAID 1** (2×6 TB) | ~5.45 TB usable | `restic copy` (critical set) + archive; rebuilt from ex-Synology disks |
 | Off-box | Git | — | cluster + host **config** |
 
-Cold storage is **two mdadm RAID 1 mirrors**: an **8 TB mirror** (`md0`, primary restic repo +
-etcd snapshots + bulk shares) and a **6 TB mirror** (`md1`, `restic copy` + archive). Each tier
-survives a single-disk failure in place — rebuild, no restore. The **NVMe hot tier is a single
-disk** (not mirrored), so it stays the one point of failure for *live* data, which is why it is
-backed up onto the (mirrored) cold tiers and ideally offsite. ⚠ The **8 TB mirror's disks are
-currently faulted with UDMA CRC errors from the factory** — a link/controller/power issue, not
-the media; see [RUNBOOK → UDMA CRC triage](RUNBOOK.md#disaster-recovery). Putting the OS on the
+Cold storage is **two mdadm RAID 1 mirrors**: the **8 TB mirror** (`md1`, 2×8 TB — primary restic repo + etcd snapshots + the **Immich library** at `/mnt/cold-8t`) and a **~5.45 TB mirror** (2×6 TB, `/mnt/cold-sec` — `restic copy` of the critical set + archive). The secondary is being **rebuilt clean from the disks inherited off an old Synology** (was an ext4 LVM concat over two mirrors). Each tier survives a single-disk failure in place. The **NVMe hot tier is a single disk** (not mirrored), so it stays the one point of failure for *live* data — backed up onto the mirrors and offsite. The 8 TB mirror **passed re-attach burn-in** (SMART 199 flat under a full scrub), so it's trusted as primary. Because the secondary (~5.45 TB) can't locally hold the whole multi-TB photo library, the **bulk library's offsite restic copy is its redundant copy**, while the secondary holds the critical-but-small set (DB dumps, configs, irreplaceable originals). Putting the OS on the
 **256 GB eMMC** lets the whole NVMe go
 to etcd + PVs + live NAS.
 

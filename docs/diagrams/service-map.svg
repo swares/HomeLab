@@ -40,7 +40,7 @@
 <rect x="0" y="0" width="5" height="48" rx="2" fill="#ff6b6b"/>
 <text class="hn" x="14" y="19">Odroid-H4</text>
 <text class="ip" x="343" y="19" text-anchor="end">10.136.151.64</text>
-<text class="sv" x="14" y="37">restic backups (8TB→6TB)</text></g>
+<text class="sv" x="14" y="37">restic (md1 → secondary + offsite)</text></g>
 <g transform="translate(16,160)"><rect class="chip" x="0" y="0" width="357" height="48" rx="8"/>
 <rect x="0" y="0" width="5" height="48" rx="2" fill="#ff6b6b"/>
 <text class="hn" x="14" y="19">Odroid-H4</text>
@@ -183,6 +183,30 @@
 </g>
 <g transform="translate(850,792)">
 <rect class="panel" x="0" y="0" width="389" height="330" rx="12"/>
+<text class="gh" x="16" y="30">Applications</text>
+<g transform="translate(16,48)"><rect class="chip" x="0" y="0" width="357" height="48" rx="8"/>
+<rect x="0" y="0" width="5" height="48" rx="2" fill="#ff6b6b"/>
+<text class="hn" x="14" y="19">Immich server</text>
+<text class="ip" x="343" y="19" text-anchor="end">H4 / k8s</text>
+<text class="sv" x="14" y="37">self-hosted photos (library → md0)</text></g>
+<g transform="translate(16,104)"><rect class="chip" x="0" y="0" width="357" height="48" rx="8"/>
+<rect x="0" y="0" width="5" height="48" rx="2" fill="#ff6b6b"/>
+<text class="hn" x="14" y="19">Immich ML</text>
+<text class="ip" x="343" y="19" text-anchor="end">H4 CPU</text>
+<text class="sv" x="14" y="37">Smart Search + face (accel optional)</text></g>
+<g transform="translate(16,160)"><rect class="chip" x="0" y="0" width="357" height="48" rx="8"/>
+<rect x="0" y="0" width="5" height="48" rx="2" fill="#f59e0b"/>
+<text class="hn" x="14" y="19">Immich Postgres</text>
+<text class="ip" x="343" y="19" text-anchor="end">NVMe</text>
+<text class="sv" x="14" y="37">vectorchord (vector ext)</text></g>
+<g transform="translate(16,216)"><rect class="chip" x="0" y="0" width="357" height="48" rx="8"/>
+<rect x="0" y="0" width="5" height="48" rx="2" fill="#f59e0b"/>
+<text class="hn" x="14" y="19">Immich Redis</text>
+<text class="ip" x="343" y="19" text-anchor="end">H4</text>
+<text class="sv" x="14" y="37">cache</text></g>
+</g>
+<g transform="translate(40,1138)">
+<rect class="panel" x="0" y="0" width="389" height="330" rx="12"/>
 <text class="gh" x="16" y="30">Observability</text>
 <g transform="translate(16,48)"><rect class="chip" x="0" y="0" width="357" height="48" rx="8"/>
 <rect x="0" y="0" width="5" height="48" rx="2" fill="#34d399"/>
@@ -199,8 +223,13 @@
 <text class="hn" x="14" y="19">OPi Zero 2W</text>
 <text class="ip" x="343" y="19" text-anchor="end">TBD</text>
 <text class="sv" x="14" y="37">node / metric exporters</text></g>
+<g transform="translate(16,216)"><rect class="chip" x="0" y="0" width="357" height="48" rx="8"/>
+<rect x="0" y="0" width="5" height="48" rx="2" fill="#a78bfa"/>
+<text class="hn" x="14" y="19">HostMon</text>
+<text class="ip" x="343" y="19" text-anchor="end">ESP32-S3</text>
+<text class="sv" x="14" y="37">black-box probes + LCD panel</text></g>
 </g>
-<g transform="translate(40,1138)">
+<g transform="translate(445,1138)">
 <rect class="panel" x="0" y="0" width="389" height="330" rx="12"/>
 <text class="gh" x="16" y="30">Single-purpose &amp; Edge</text>
 <g transform="translate(16,48)"><rect class="chip" x="0" y="0" width="357" height="48" rx="8"/>

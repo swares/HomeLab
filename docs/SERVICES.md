@@ -17,12 +17,13 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | External Secrets Operator | ● | in-cluster | Vault → k8s |
 | NAS (NFS / SMB) | ● | H4 (.64) | |
 | MinIO (S3) | ● | H4 | models, datasets, registry, Glance images |
-| restic backups | ● | H4 (8TB md0 → 6TB md1) → offsite | + nightly `restic copy` offsite (B2/rclone) via `backup-offsite.timer`; creds in Vault |
+| restic backups | ● | H4 (md1 8TB → md0 ~5.45TB) → offsite | bulk library → offsite; critical set → local secondary; nightly `restic copy` via timers |
 | smartd (SMART alerts) | ● | H4 | watches SMART 199 (UDMA CRC) + media attrs; email on failure |
 | mdadm monitor | ● | H4 | alerts on a degraded / dropped RAID 1 mirror member |
 | OpenTelemetry | ✓ | OPi 5 Pro #2 | |
 | Grafana | ✓ | in-cluster | |
 | Prometheus | ● | in-cluster | |
+| HostMon (black-box prober) | ● | Waveshare ESP32-S3 (edge) | ping/DNS/port/HTTP/SSL-expiry/trace probes + LCD status panel; webhook alerts; behind proxy/VLAN |
 | Loki (logs) | ○ | in-cluster | |
 | Tempo (traces) | ○ | in-cluster | |
 | Alertmanager | ○ | in-cluster | |
@@ -102,6 +103,22 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | MQTT broker (Mosquitto) | ● | **lab Zero 2W** (`make mqtt`) | relocated off dad's laptop to an always-on broker; laptop kept as a dev target. Point the framework here |
 | Home Assistant | ○ | TBD | natural MQTT consumer; optional |
 
+> **HostMon vs. Prometheus.** HostMon is an *active prober* — it reaches out and asks "is this host/port/cert reachable from here, right now," from a fixed vantage point, and shows fleet health on its LCD. The in-cluster Prometheus/Grafana stack *pulls* rich internal metrics (CPU/RAM/disk/container health) over time. They're complementary: black-box reachability vs. white-box telemetry. HostMon complements, not replaces, the metrics stack — and its SSL-expiry check pairs well with the planned internal CA. Route its **webhook** at the lab's alert relay (MQTT/ntfy/Home Assistant), and front its HTTP-only dashboard with the **reverse proxy** (or keep it on a trusted/IoT VLAN).
+
+## Applications
+
+| Service | Status | Placement | Notes |
+|---------|:------:|-----------|-------|
+| Immich — server | ● | H4 MicroShift · library on md1 (`/mnt/cold-8t`) | self-hosted photos/video; Argo workload |
+| Immich — machine learning | ● | H4 **CPU default** (OpenVINO or OPi `rknn` optional) | Smart Search + face recog; accel is best-effort, see workload README |
+| Immich — Postgres (vectorchord) | ● | NVMe hot (topolvm) | vector extension **mandatory**; nightly dump → md1 library |
+| Immich — Redis | ● | H4 (ephemeral) | cache |
+
+Immich is the first real end-user app. Its ML (Smart Search + face recog) runs on **CPU by
+default**; acceleration is optional and best-effort — **OpenVINO** on the H4 iGPU (Immich warns
+integrated graphics may have issues) or, more robustly, the **`rknn` backend on an OPi 5 Pro NPU**
+via remote ML. So it's a *candidate* OpenVINO/NPU consumer, not a guaranteed one.
+
 ## Gaps worth a decision
 
 1. ~~**MQTT broker (Mosquitto)**~~ — **DONE.** Relocated to an always-on lab Zero 2W (`make mqtt`); dad's laptop kept as a dev target.
@@ -111,5 +128,5 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 5. ~~**Offsite backup (the "1" in 3-2-1)**~~ — **DONE.** Nightly `restic copy` to an offsite repo (B2/rclone) via `backup-offsite.timer`; set `offsite_restic_repo` + creds in `/etc/restic/offsite.env` (from Vault).
 6. **Shared database service** — CloudNativePG (Postgres) + Redis operators if apps need state beyond GitLab.
 7. **UPS + NUT** — *deferred by choice (future improvement).* The H4 is a single storage point; a UPS + Network UPS Tools is cheap insurance when you're ready.
-8. **Homepage / dashboard + Uptime Kuma** — a landing page and status monitor once 30+ services are running.
+8. **Homepage / dashboard** — a landing page once 30+ services are running. *(Black-box uptime is now partly covered by **HostMon** — the ESP32-S3 prober + LCD panel; a software status page is still nice-to-have.)*
 9. **k8s device plugins (rknpu / Intel-GPU)** — only if you run inference *in* k8s rather than bare-metal.

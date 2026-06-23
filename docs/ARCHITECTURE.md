@@ -82,7 +82,7 @@ flowchart TD
 ![Storage tiers](diagrams/storage-tiers.svg)
 
 A single fast NVMe holds everything latency-sensitive; two SATA disks hold cold copies;
-git holds desired state. (The SATA pair is mismatched — 8 TB + 6 TB — so it's two independent
+git holds desired state. (Cold storage is two mdadm RAID 1 mirrors — 8 TB primary + ~5.45 TB secondary; each survives a disk failure. Was two independent
 disks with a restic copy between them, not a RAID 1 mirror.) Because the NVMe is fast (high random IOPS), co-locating etcd with
 NAS I/O is fine — the classic "etcd hates shared storage" warning applies to slow spinning
 disks, not this. The real risks here are space contention (handled by LVM separation) and
@@ -94,8 +94,8 @@ flowchart LR
     subgraph HOT[Hot · NVMe 4TB]
       OS[OS/root]; ETCD[etcd]; NAS[live NAS]; PV[k8s PVs]
     end
-    subgraph COLD[Cold · 8TB + 6TB]
-      RES[8TB restic primary]; CP[6TB restic copy]; ARC[archive]
+    subgraph COLD[Cold · md1 8TB + md0 ~5.45TB]
+      RES[md1 restic primary + Immich library]; CP[md0 restic copy]; ARC[archive]
     end
     RES -->|copy| CP
     GIT[(Off-box: git)]

@@ -50,7 +50,7 @@ Match each box to what it's actually good at. `✓` = already running.
 
 | Node | Spec | Role in the design |
 |------|------|--------------------|
-| **Odroid-H4 Ultra** | x86 8C / **64 GB** / 4 TB NVMe + 8+6 TB SATA | **Dedicated NAS/MinIO** + NFS shared storage for the cluster + heavy AI (JupyterHub) + backups. **Not a hypervisor node** — kept off quorum/HA and VM-I/O contention. |
+| **Odroid-H4 Ultra** | x86 8C / **64 GB** / 4 TB NVMe + 8 TB RAID1 + ~5.45 TB RAID1 SATA | **Dedicated NAS/MinIO** + NFS shared storage for the cluster + heavy AI (JupyterHub) + backups. **Not a hypervisor node** — kept off quorum/HA and VM-I/O contention. |
 | **Orange Pi 5 Pro ×2** | ARM 8C / 16 GB / **6 TOPS NPU** | **Bare-metal AI** (RKLLama) + the **Claude Code orchestrator** + GitLab✓; the "brain" tier. |
 | **N150 ×3** | x86 4C / 16 GB each | **3-node Proxmox cluster** (homogeneous → clean live-migrate). Two lab boxes + the living-room box, which runs its **TV/browse VM** (iGPU passthrough) while still voting in quorum. Also OpenVINO iGPU inference. |
 | **RPi 5** | ARM 4C / 8 GB | **Vault**✓ (secrets) + k8s agent. |

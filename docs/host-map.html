@@ -71,9 +71,10 @@ const CLASSES = {
 // host -> everything it runs. qty = physical units the card represents.
 const HOSTS = [
  {name:"Odroid-H4", ip:"10.136.151.64", cls:"x86", qty:1,
-  specs:"i3-N305 · 8C/8T · 64 GB · 32 EU · 4TB NVMe + 8/6 TB SATA",
-  svc:["NAS (NFS / SMB)","MinIO — S3 object store","restic backups (8TB→6TB)",
-       "shared NFS → Proxmox VMs","OpenVINO — embeddings / STT / vision","OpenNebula (installed, optional)"]},
+  specs:"i3-N305 · 8C/8T · 64 GB · 32 EU · 4TB NVMe + 8TB md1 + 5.45TB md0",
+  svc:["NAS (NFS / SMB)","MinIO — S3 object store","restic (md1 → secondary + offsite)",
+       "shared NFS → Proxmox VMs","OpenVINO — embeddings / STT / vision",
+       "Immich (photos) — server · Postgres · ML (CPU; OpenVINO/rknn optional)","OpenNebula (installed, optional)"]},
  {name:"N150 #1", ip:"10.136.151.71", cls:"x86", qty:1,
   specs:"Intel N150 · 4C/4T · 16 GB · 24 EU",
   svc:["Proxmox VE node","OpenVINO iGPU inference (opt.)"]},
@@ -114,6 +115,9 @@ const HOSTS = [
  {name:"M5Stack", ip:"USB / edge", cls:"edge", qty:1,
   specs:"ESP32-S3 · AX630C ~6 TOPS",
   svc:["escalation router (front-end)","edge AI / voice"]},
+ {name:"HostMon", ip:"LAN (proxy/VLAN)", cls:"edge", qty:1,
+  specs:"Waveshare ESP32-S3-Touch-LCD-4.3 · 8 MB PSRAM",
+  svc:["black-box probes: ping/DNS/port/HTTP/SSL/trace","fleet health on 4.3\" LCD","webhook alerts → lab relay","HTTP-only — front with reverse proxy"]},
  {name:"in-cluster / logical", ip:"k3s", cls:"cluster", qty:0,
   specs:"pods — float across cluster nodes",
   svc:["Argo CD (GitOps)","LiteLLM gateway + m5stack-adapter","Prometheus · Grafana · Loki · Tempo",

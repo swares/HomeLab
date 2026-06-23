@@ -74,7 +74,7 @@ const GROUPS = [
    ["(planned)","—","SSO: Keycloak / Authentik","cluster"]]],
  ["Storage & Data",[
    ["Odroid-H4","10.136.151.64","NAS (NFS/SMB) · MinIO S3","x86"],
-   ["Odroid-H4","10.136.151.64","restic backups (8TB→6TB)","x86"],
+   ["Odroid-H4","10.136.151.64","restic (md1 → secondary + offsite)","x86"],
    ["Odroid-H4","10.136.151.64","shared NFS → Proxmox VMs","x86"],
    ["offsite","cloud","restic copy (B2/rclone, 3-2-1)","cluster"]]],
  ["DNS · Pi-hole",[
@@ -104,10 +104,16 @@ const GROUPS = [
    ["Ansible","CASC","host config (everything w/ an OS)","cluster"],
    ["PlatformIO / OTA","firmware","→ microcontrollers (ESPHome opt.)","edge"],
    ["netboot.xyz","optional","x86 PXE menu (if ever needed)","x86"]]],
+ ["Applications",[
+   ["Immich server","H4 / k8s","self-hosted photos (library → md1)","x86"],
+   ["Immich ML","H4 CPU","Smart Search + face (accel optional)","x86"],
+   ["Immich Postgres","NVMe","vectorchord (vector ext)","cluster"],
+   ["Immich Redis","H4","cache","cluster"]]],
  ["Observability",[
    ["OPi 5 Pro #2","10.136.151.97","OpenTelemetry collector","ai"],
    ["in-cluster","k3s","Prometheus · Grafana · Loki · Tempo","cluster"],
-   ["OPi Zero 2W","TBD","node / metric exporters","agent"]]],
+   ["OPi Zero 2W","TBD","node / metric exporters","agent"],
+   ["HostMon","ESP32-S3","black-box probes + LCD panel","edge"]]],
  ["Single-purpose & Edge",[
    ["Odroid-XU3 ⚠","10.136.151.51","build agent (flaky)","infra"],
    ["OPi Zero 2W","TBD","Mosquitto MQTT broker","agent"],

@@ -141,7 +141,7 @@
     <g transform="translate(490,38)"><rect class="card" x="0" y="0" width="180" height="146" rx="9"/>
       <text class="name" x="12" y="24">Storage / data</text><text class="spec" x="12" y="44">NAS: NFS + SMB</text>
       <text class="spec" x="12" y="62">MinIO (S3): models,</text><text class="spec" x="12" y="80">datasets, registry, Glance</text>
-      <text class="spec" x="12" y="98">restic 8TB→6TB backups</text>
+      <text class="spec" x="12" y="98">restic md1→secondary +offsite</text>
       <text class="node" x="12" y="138">Odroid-H4 (4TB NVMe + SATA)</text></g>
     <g transform="translate(678,38)"><rect class="card" x="0" y="0" width="276" height="146" rx="9"/>
       <text class="name" x="12" y="24">Observability</text>

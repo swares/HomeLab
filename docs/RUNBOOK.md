@@ -20,15 +20,15 @@ Put the **OS on the 256 GB eMMC** so the entire NVMe serves the cluster + NAS:
 | NVMe | `nvme0n1p1` | ~1.5 TB | `lv_nas` | live NAS data |
 | NVMe | `nvme0n1p4` | rest (~2.5 TB) | — | **Left free** for the LVMS VG (`microshift_pv_device`) |
 
-The two cold mirrors (8 TB `md0`, 6 TB `md1`) are mounted in the next step.
+The two cold mirrors (8 TB `md1` → `/mnt/cold-8t`, ~5.45 TB secondary → `/mnt/cold-sec`) are mounted next.
 
 ### 2. Cold tiers (two mdadm RAID 1 mirrors)
 
 Both cold tiers are mdadm RAID 1 mirrors (pre-created — the playbook never runs `mdadm --create`).
-`storage.yml` mounts the **8 TB mirror** (`md0`) at `/mnt/cold-8t` and the **6 TB mirror** (`md1`)
-at `/mnt/cold-6t` (XFS, formatted only if empty), installs **smartd + mdadm monitoring** so a
-climbing CRC count or a dropped member alerts you, and the backup timers keep a primary restic
-repo on `md0` and a `restic copy` on `md1`. Each mirror survives one disk failure in place.
+`storage.yml` mounts the **8 TB primary** (`md1`) at `/mnt/cold-8t` and the **~5.45 TB secondary**
+at `/mnt/cold-sec` (XFS, formatted only if empty), installs **smartd + mdadm monitoring** so a
+climbing CRC count or a dropped member alerts you, and the backup timers keep the primary restic
+repo on the 8 TB and a `restic copy` on the secondary. Each mirror survives one disk failure in place.
 Nothing destructive runs against a populated array. See
 [Cold tier options](#cold-tier-options) for alternatives.
 
@@ -86,7 +86,7 @@ Never `oc apply` a workload directly — it'll drift and Argo will fight you. Ch
 
 | Stream | When | What | Downtime |
 |--------|------|------|----------|
-| `backup-nas` | daily 01:30 | restic of `/srv/nas` → 8 TB, then `restic copy` → 6 TB | none |
+| `backup-nas` | daily 01:30 | restic of `/srv/nas` → `/mnt/cold-8t` (md1), then `restic copy` → `/mnt/cold-sec` + offsite | none |
 | `backup-etcd` | Sun 03:00 | `microshift backup` → 8 TB | brief (service stop/start) |
 
 Check: `restic snapshots` (set `RESTIC_REPOSITORY`/`RESTIC_PASSWORD_FILE`), and
@@ -114,11 +114,11 @@ the H4 across cables/ports, suspect the board's SATA controller (documented H4 f
 platter data is intact. After fixing the link:
 ```bash
 cat /proc/mdstat                      # see which member fell out
-mdadm --detail /dev/md0               # confirm state
-mdadm /dev/md0 --re-add /dev/sdX1     # re-add; it resyncs (watch /proc/mdstat)
+mdadm --detail /dev/md1               # confirm state (md1 = 8TB primary)
+mdadm /dev/md1 --re-add /dev/sdX1     # re-add; it resyncs (watch /proc/mdstat)
 ```
 Only if SMART 5/197/198 are non-zero (real media damage) do you replace the disk:
-`mdadm --manage /dev/md0 --fail /dev/sdX1 --remove /dev/sdX1`, fit the new disk, partition to
+`mdadm --manage /dev/md1 --fail /dev/sdX1 --remove /dev/sdX1`, fit the new disk, partition to
 match, `--add`, let it rebuild.
 
 **Burn-in a re-attached / replaced cold mirror (do this before trusting it as primary).** A
@@ -128,19 +128,19 @@ generate hours of I/O and watch the counter, don't just glance at SMART once.
 
 1. **Baseline 199 on both members** (write the numbers down):
    ```bash
-   cat /proc/mdstat                       # identify md0's members, e.g. sda sdb
+   cat /proc/mdstat                       # identify the array's members (md1 = sdb sdd)
    for d in sda sdb; do smartctl -a /dev/$d |      grep -E "UDMA_CRC|Reallocated_Sector|Current_Pending|Offline_Uncorrectable"; done
    ```
-2. **Confirm it assembled clean / resync finished:** `mdadm --detail /dev/md0` → State clean,
-   both *active sync*, Failed Devices 0. If degraded, `mdadm /dev/md0 --re-add /dev/sdX` and wait.
+2. **Confirm it assembled clean / resync finished:** `mdadm --detail /dev/md1` → State clean,
+   both *active sync*, Failed Devices 0. If degraded, `mdadm /dev/md1 --re-add /dev/sdX` and wait.
 3. **Decisive test — full read scrub while watching the link** (reads every block on both disks;
    ~hours for 8 TB):
    ```bash
    journalctl -k -f | grep -i 'ata\|sata\|hard resetting\|SError\|failed command'   # terminal 1
-   echo check > /sys/block/md0/md/sync_action                                          # terminal 2
+   echo check > /sys/block/md1/md/sync_action                                          # terminal 2
    watch -n5 cat /proc/mdstat
    # when done:
-   cat /sys/block/md0/md/mismatch_cnt                       # want 0
+   cat /sys/block/md1/md/mismatch_cnt                       # want 0
    for d in sda sdb; do smartctl -a /dev/$d | grep UDMA_CRC; done   # compare to baseline
    ```
 4. **Optional write stress** (scrub is read-only; non-destructive to existing files):
@@ -154,16 +154,16 @@ generate hours of I/O and watch the counter, don't just glance at SMART once.
 `SError` lines during the run · `mismatch_cnt = 0`. Then it's safe to promote back to the restic
 **primary**. If 199 climbs under load it's still marginal (try another port/power rail; if it
 climbs *only on the H4* across every cable/port, that's the board). If `mismatch_cnt > 0`, run
-`echo repair > /sys/block/md0/md/sync_action` then re-`check` — but start with `check` (read-only)
+`echo repair > /sys/block/md1/md/sync_action` then re-`check` — but start with `check` (read-only)
 so you *see* a mismatch before mdadm overwrites one copy with the other. **Until it passes all
-three, keep backups landing on md1 (6 TB), not md0 — don't promote on faith.**
+three, keep backups landing on the secondary, not the array under test — don't promote on faith.**
 
 **Lost a disk in a cold mirror.** The mirror stays online degraded — no data loss, no restore.
 Fix per the mdadm re-add/rebuild steps above. (The old "independent disks + restic copy" recovery
 below applies only if you ever run the tiers un-mirrored.) Replace the failed
 disk, recreate the XFS filesystem on it (`make storage`), then re-seed it from the survivor:
 ```bash
-restic -r /mnt/cold-8t/restic copy --repo2 /mnt/cold-6t/restic   # (or reverse, toward the new disk)
+restic -r /mnt/cold-8t/restic copy --repo2 /mnt/cold-sec/restic   # (or reverse, toward the new disk)
 ```
 
 **Lost the NVMe (whole hot tier).** This is recoverable because state + config are
@@ -178,20 +178,37 @@ off-tier:
 **Lost the whole box.** You need the offsite copy (see below). Without it, cluster config
 survives in git but NAS *data* does not.
 
-## Cold tier options
+## Cold tiers (current model)
 
-The 8 TB + 6 TB pair is mismatched, so pick the model that fits how you use cold storage:
+Two real mdadm RAID 1 mirrors — no more guessing about mismatched disks:
 
-1. **Two independent disks + `restic copy` (this repo's default).** 8 TB is the primary repo;
-   the 6 TB holds a copy. Full capacity used, two-disk redundancy for backup data, no RAID
-   matched-size constraint. Best for a backup/snapshot tier.
-2. **SnapRAID (+ mergerfs).** Use the 8 TB as parity for the 6 TB of data. Single-disk fault
-   tolerance with mismatched sizes; parity is point-in-time (synced on a schedule), which is
-   fine for cold/archive/media that changes slowly. Reach for this if you add bulk data disks.
-3. **Partition-and-mirror.** Split the 8 TB into 6 TB + 2 TB and `mdadm` RAID 1 the two 6 TB
-   regions for real-time redundancy, leaving 2 TB as scratch. Wastes the 2 TB and the size
-   flexibility; only worth it if you specifically want a live mirror on the cold tier.
+- **Primary — 8 TB (`md1`, 2×8 TB) → `/mnt/cold-8t`.** restic repo + etcd snapshots + the Immich
+  library. Passed re-attach burn-in. This is the trusted tier.
+- **Secondary — ~5.45 TB (2×6 TB) → `/mnt/cold-sec`.** `restic copy` of the *critical-but-small*
+  set (DB dumps, configs, irreplaceable originals) + archive.
 
+Because the ~5.45 TB secondary can't locally hold the whole multi-TB library, the **bulk library's
+redundant copy is the offsite restic** (3-2-1, below) + md1's own mirror; the secondary covers the
+small critical set. This is the deliberate split for an asymmetric pair.
+
+### Migrate the ex-Synology secondary to a clean mirror
+The secondary disks came off an old Synology (ext4 LVM `vg1000` concatenating two mirrors). To
+move to a clean layout once the photos are safely on md1:
+```bash
+# 1. reclaim the disposable space (old Windows backups), then copy photos to the primary:
+rsync -aHAX --info=progress2 /mnt/cold-sec-old/<photos>/ /mnt/cold-8t/immich/library/
+# 2. import + VERIFY in Immich before deleting the only copy.
+# 3. unmount + wipe the old vg1000 stack, then build one clean RAID 1 across the two 6 TB disks:
+umount /mnt/cold-sec-old; vgremove vg1000; mdadm --stop /dev/md2 /dev/md3
+wipefs -a /dev/sda /dev/sdc
+mdadm --create /dev/md0 --level=1 --raid-devices=2 /dev/sda /dev/sdc
+mkfs.xfs /dev/md0 && mdadm --detail --scan >> /etc/mdadm/mdadm.conf
+# 4. mount at /mnt/cold-sec; `make storage` then manages it (cold_secondary_device=/dev/md0).
+```
+(Harmless leftover: clear the Synology `old PV header` warnings with `vgck --updatemetadata vg1000`
+*before* you remove it, or just ignore them — they vanish with the wipe.)
+
+## Roadmap: offsite (3-2-1)
 ## Roadmap: offsite (3-2-1)
 
 Two on-box copies protect against a disk failure, not a box/room failure. The next durability step is
