@@ -3,7 +3,7 @@ kind: PersistentVolumeClaim
 metadata: { name: immich-pgdata, namespace: immich }
 spec:
   accessModes: ["ReadWriteOnce"]
-  storageClassName: topolvm-provisioner       # NVMe hot tier (low-latency fsync for the DB)
+  storageClassName: local-path                # k3s built-in provisioner
   resources: { requests: { storage: 20Gi } }
 ---
 apiVersion: apps/v1

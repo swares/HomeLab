@@ -8,7 +8,4 @@ spec:
   resources:
     requests:
       storage: 2Gi
-  # LVMS provisions this from the NVMe VG. Confirm the exact class name on your
-  # release with `oc get storageclass` -- MicroShift's default is commonly
-  # "topolvm-provisioner". Leave unset to use whatever is marked default.
-  storageClassName: topolvm-provisioner
+  storageClassName: local-path                # k3s built-in provisioner

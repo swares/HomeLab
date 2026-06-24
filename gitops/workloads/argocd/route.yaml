@@ -1,15 +1,21 @@
-apiVersion: route.openshift.io/v1
-kind: Route
+apiVersion: networking.k8s.io/v1
+kind: Ingress
 metadata:
   name: argocd-server
   namespace: argocd
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
 spec:
-  host: argocd.apps.lab.home.arpa
-  to:
-    kind: Service
-    name: argocd-server
-  port:
-    targetPort: https
-  tls:
-    termination: passthrough           # argocd-server terminates its own TLS
-    insecureEdgeTerminationPolicy: Redirect
+  ingressClassName: traefik
+  rules:
+    - host: argocd.apps.lab.home.arpa
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 80    # argocd-server runs --insecure; Traefik terminates TLS
