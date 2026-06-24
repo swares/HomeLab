@@ -8,7 +8,7 @@ MicroShift node so it sits next to its storage.
 |-----------|-------|----------------|
 | `immich-server` | `immich-server:release` | library on the **8 TB mirror** (md1, `/mnt/cold-8t`) |
 | `immich-ml` | `immich-machine-learning:release` (**CPU default**) | accel optional — see below |
-| `immich-postgres` | `postgres:…-vectorchord…` (vector ext **mandatory**) | **NVMe hot tier** (`topolvm-provisioner`) |
+| `immich-postgres` | `postgres:…-vectorchord…` (vector ext **mandatory**) | **NVMe hot tier** (`local-path`) |
 | `immich-redis` | `redis:6.2-alpine` | ephemeral cache |
 
 - **DB + model cache → NVMe** (low-latency); **photo library → 8 TB mirror** (`/mnt/cold-8t/immich`,
@@ -18,7 +18,7 @@ MicroShift node so it sits next to its storage.
 ## Before first sync
 1. **Create the DB secret** (kept out of git so `selfHeal` can't clobber it; or use External Secrets):
    ```bash
-   oc -n immich create secret generic immich-secrets --from-literal=DB_PASSWORD='<strong-pass>'
+   kubectl create secret generic immich-secrets --from-literal=DB_PASSWORD="$(openssl rand -base64 32)" -n immich
    ```
 2. **Make the library dir** on the H4: `mkdir -p /mnt/cold-8t/immich/backups`.
 3. **Pin images** — replace `:release` with a specific `vX.Y.Z`, and confirm the **postgres

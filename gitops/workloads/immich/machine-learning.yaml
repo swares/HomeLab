@@ -17,7 +17,7 @@ kind: PersistentVolumeClaim
 metadata: { name: immich-model-cache, namespace: immich }
 spec:
   accessModes: ["ReadWriteOnce"]
-  storageClassName: topolvm-provisioner       # keep model downloads on NVMe so they persist
+  storageClassName: local-path                # k3s built-in; keep model downloads on NVMe so they persist
   resources: { requests: { storage: 10Gi } }
 ---
 apiVersion: apps/v1
