@@ -4,7 +4,7 @@ metadata: { name: ai-gateway, namespace: argocd }
 spec:
   project: default
   source:
-    repoURL: https://github.com/YOURUSER/homelab.git   # <-- set me
+    repoURL: git@github.com:swares/HomeLab.git
     targetRevision: main
     path: gitops/workloads/ai-gateway
   destination: { server: https://kubernetes.default.svc, namespace: ai-gateway }
@@ -18,7 +18,7 @@ metadata: { name: ai-backends, namespace: argocd }
 spec:
   project: default
   source:
-    repoURL: https://github.com/YOURUSER/homelab.git   # <-- set me
+    repoURL: git@github.com:swares/HomeLab.git
     targetRevision: main
     path: gitops/workloads/ai-backends
   destination: { server: https://kubernetes.default.svc, namespace: ai-gateway }

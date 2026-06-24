@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/YOURUSER/homelab.git   # <-- set me
+    repoURL: git@github.com:swares/HomeLab.git
     targetRevision: main
     path: gitops/workloads/argocd
   destination:
