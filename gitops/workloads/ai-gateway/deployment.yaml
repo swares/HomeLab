@@ -7,7 +7,11 @@ spec:
   template:
     metadata: { labels: { app: litellm } }
     spec:
-      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000      # litellm image uses non-numeric "root" — explicit UID satisfies runAsNonRoot
+        runAsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: litellm
           image: ghcr.io/berriai/litellm:main-latest   # pin a tag in production
