@@ -8,7 +8,8 @@ Environment=RESTIC_REPOSITORY={{ restic_repo }}
 Environment=RESTIC_PASSWORD_FILE={{ restic_password_file }}
 # Initialize the primary repo once if needed, then back up.
 ExecStartPre=-/usr/bin/restic init
-ExecStart=/usr/bin/restic backup {{ nas_mount }} --tag nas --host {{ inventory_hostname }}
+ExecStart=/usr/bin/restic backup {{ nas_mount }} {{ cold_primary_mount }}/VMs \
+  --tag nas --host {{ inventory_hostname }}
 # Retention is policy-driven and lives HERE only — never run forget/prune by hand.
 ExecStartPost=/usr/bin/restic forget --prune \
   --keep-daily 7 --keep-weekly 4 --keep-monthly 6
