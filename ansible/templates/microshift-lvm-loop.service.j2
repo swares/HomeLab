@@ -1,0 +1,16 @@
+# Ansible-managed — attach the sparse LVM image as a loop device before LVM starts.
+[Unit]
+Description=Attach MicroShift LVM sparse image ({{ microshift_loop_dev }})
+Documentation=file:///home/swares/lab/homelab/homelab/docs/ARCHITECTURE.md
+After=mnt-nvme0n1p2.mount
+Requires=mnt-nvme0n1p2.mount
+Before=lvm2-monitor.service microshift.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/losetup {{ microshift_loop_dev }} {{ microshift_lvm_file }}
+ExecStop=/usr/sbin/losetup -d {{ microshift_loop_dev }}
+
+[Install]
+WantedBy=multi-user.target

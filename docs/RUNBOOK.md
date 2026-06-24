@@ -38,12 +38,12 @@ On your chosen DNS host, add these records (wildcard via dnsmasq):
 
 | Record | Type | Value |
 |--------|------|-------|
-| `api.lab.home.arpa` | A | `10.136.151.64` |
-| `*.apps.lab.home.arpa` | A | `10.136.151.64` |
+| `api.lab.home.arpa` | A | `192.168.1.160` |
+| `*.apps.lab.home.arpa` | A | `192.168.1.160` |
 
 The updated map leaves **DNS unassigned** (the old Pi-hole Zero now runs Grafana). Pick a
 stable always-on host — a Zero 2 W, an Orange Pi 5 Pro, or `dnsmasq` on the H4 — and add the
-records there (dnsmasq wildcard: `address=/apps.lab.home.arpa/10.136.151.64`). Missing or
+records there (dnsmasq wildcard: `address=/apps.lab.home.arpa/192.168.1.160`). Missing or
 wrong DNS is the most common reason MicroShift "installs but nothing works."
 
 ### 4. Secrets

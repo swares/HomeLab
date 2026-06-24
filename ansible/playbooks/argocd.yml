@@ -1,35 +1,42 @@
 ---
-# Bootstrap Argo CD (upstream, non-HA -- right-sized for one node) and the app-of-apps.
-# MicroShift ships no OLM, so we install Argo directly rather than via an operator.
+# Bootstrap Argo CD (upstream, non-HA — right-sized for one node) and the app-of-apps.
+# Targets the k3s cluster on the H4; uses kubectl (not oc).
 - name: Bootstrap Argo CD
   hosts: microshift
-  become: false                 # runs oc as the kubeconfig owner
+  become: false
   environment:
     KUBECONFIG: "/home/{{ ansible_user }}/.kube/config"
   vars:
-    argo_version: stable        # pin to a release tag in production, e.g. v2.13.3
-    repo_url: "https://github.com/YOURUSER/homelab.git"
+    argo_version: stable        # pin to a release tag, e.g. v2.13.3
+    repo_url: "https://github.com/swares/HomeLab.git"
   tasks:
     - name: Create argocd namespace
-      ansible.builtin.command: oc create namespace argocd
+      ansible.builtin.command: kubectl create namespace argocd
       register: ns
       changed_when: "'created' in ns.stdout"
       failed_when: ns.rc != 0 and 'AlreadyExists' not in ns.stderr
 
-    - name: Install Argo CD
+    - name: Install Argo CD (server-side apply avoids CRD annotation size limit)
       ansible.builtin.command: >
-        oc apply -n argocd -f
+        kubectl apply --server-side --force-conflicts -n argocd -f
         https://raw.githubusercontent.com/argoproj/argo-cd/{{ argo_version }}/manifests/install.yaml
       register: argo_install
       changed_when: "'created' in argo_install.stdout or 'configured' in argo_install.stdout"
 
+    - name: Patch argocd-server to run insecure (Traefik terminates TLS at the edge)
+      ansible.builtin.command: >
+        kubectl patch deployment argocd-server -n argocd
+          --type=json
+          -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--insecure"}]'
+      changed_when: true
+
     - name: Wait for the Argo CD server to be available
       ansible.builtin.command: >
-        oc rollout status deploy/argocd-server -n argocd --timeout=300s
+        kubectl rollout status deploy/argocd-server -n argocd --timeout=300s
       changed_when: false
 
     - name: Apply the app-of-apps root Application
-      ansible.builtin.command: oc apply -f -
+      ansible.builtin.command: kubectl apply -f -
       args:
         stdin: "{{ lookup('file', '../../gitops/bootstrap/root-app.yaml') }}"
       changed_when: true

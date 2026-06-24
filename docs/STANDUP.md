@@ -68,7 +68,7 @@ Goal: name resolution, storage, identity, and secrets — the things everything 
    Then point DHCP at **both** resolvers (primary `.59` wired, Zero 2W secondary). Install Pi-hole
    on top for the UI/blocking if you want it (the playbook pre-seeds `pihole.toml`). Verify:
    ```bash
-   dig @10.136.151.59 h4-core.lab.home.arpa +short          # -> 10.136.151.64
+   dig @10.136.151.59 h4-core.lab.home.arpa +short          # -> 192.168.1.160
    dig @10.136.151.59 anything.apps.lab.home.arpa +short    # -> 10.136.151.40 (ingress VIP)
    ```
    *Depends on:* Phase 1. *Unblocks:* the cluster API + all `*.apps` ingress names.

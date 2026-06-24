@@ -34,17 +34,17 @@
 <g transform="translate(16,48)"><rect class="chip" x="0" y="0" width="357" height="48" rx="8"/>
 <rect x="0" y="0" width="5" height="48" rx="2" fill="#ff6b6b"/>
 <text class="hn" x="14" y="19">Odroid-H4</text>
-<text class="ip" x="343" y="19" text-anchor="end">10.136.151.64</text>
+<text class="ip" x="343" y="19" text-anchor="end">192.168.1.160</text>
 <text class="sv" x="14" y="37">NAS (NFS/SMB) · MinIO S3</text></g>
 <g transform="translate(16,104)"><rect class="chip" x="0" y="0" width="357" height="48" rx="8"/>
 <rect x="0" y="0" width="5" height="48" rx="2" fill="#ff6b6b"/>
 <text class="hn" x="14" y="19">Odroid-H4</text>
-<text class="ip" x="343" y="19" text-anchor="end">10.136.151.64</text>
+<text class="ip" x="343" y="19" text-anchor="end">192.168.1.160</text>
 <text class="sv" x="14" y="37">restic (md1 → secondary + offsite)</text></g>
 <g transform="translate(16,160)"><rect class="chip" x="0" y="0" width="357" height="48" rx="8"/>
 <rect x="0" y="0" width="5" height="48" rx="2" fill="#ff6b6b"/>
 <text class="hn" x="14" y="19">Odroid-H4</text>
-<text class="ip" x="343" y="19" text-anchor="end">10.136.151.64</text>
+<text class="ip" x="343" y="19" text-anchor="end">192.168.1.160</text>
 <text class="sv" x="14" y="37">shared NFS → Proxmox VMs</text></g>
 <g transform="translate(16,216)"><rect class="chip" x="0" y="0" width="357" height="48" rx="8"/>
 <rect x="0" y="0" width="5" height="48" rx="2" fill="#f59e0b"/>

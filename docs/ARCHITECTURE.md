@@ -30,7 +30,7 @@ objects), and the **LVMS** CSI driver for dynamic persistent volumes — but dro
 parts of full OpenShift (OLM, the monitoring stack, the web console by default). That's
 exactly the footprint trade that lets it share an 8-core box with a NAS.
 
-The node sits on the H4's 2.5GbE NIC (Intel I226-V) at `10.136.151.64`. The OS can live on
+The node sits on the H4's 2.5GbE NIC (Intel I226-V) at `192.168.1.160`. The OS can live on
 the 256 GB eMMC, leaving the whole NVMe for etcd + PVs + live NAS. The base domain is
 `lab.home.arpa` (the RFC 8375 reserved domain for home networks), so a `Route` named `web`
 becomes `web.apps.lab.home.arpa`.
@@ -114,7 +114,7 @@ flowchart LR
 
 The lab is a flat `10.136.151.0/24`; the H4 is wired at 2.5 Gbps (Intel I226-V). **DNS is the
 linchpin of the install** — MicroShift needs an `api.lab.home.arpa` record and a wildcard
-`*.apps.lab.home.arpa`, both pointing at the node IP (`10.136.151.64`). The updated map leaves
+`*.apps.lab.home.arpa`, both pointing at the node IP (`192.168.1.160`). The updated map leaves
 DNS **unassigned** (the old Pi-hole Zero now runs Grafana), so giving DNS a stable home is a
 first task. Missing DNS is the number-one cause of failed installs. The exact records are
 in [RUNBOOK.md](RUNBOOK.md#dns-records).

@@ -75,8 +75,42 @@
         - "{{ cold_secondary_mount }}/restic"             # second copy (restic copy)
         - "{{ cold_secondary_mount }}/archive"            # cold/bulk shares
 
-    # ---- Hot tier: NVMe LVM for live NAS data + k8s PVs ----
-    - name: Create the LVMS volume group on the reserved NVMe partition
+    # ---- Hot tier: NVMe LVM via sparse file + loop device ----
+    # NVMe has no free partition (p2 = old OS install). We use a sparse file on p2
+    # as the LVM PV, attached as /dev/loop100. A systemd unit re-attaches it on boot
+    # before lvm2-monitor.service so LVM and MicroShift start cleanly.
+    - name: Install lvm2
+      ansible.builtin.package:
+        name: lvm2
+        state: present
+
+    - name: Create sparse file for LVM PV ({{ microshift_lvm_size }}, allocates on write)
+      ansible.builtin.command: >
+        truncate -s {{ microshift_lvm_size }} {{ microshift_lvm_file }}
+      args:
+        creates: "{{ microshift_lvm_file }}"
+
+    - name: Install loop-device systemd unit
+      ansible.builtin.template:
+        src: ../templates/microshift-lvm-loop.service.j2
+        dest: /etc/systemd/system/microshift-lvm-loop.service
+        mode: "0644"
+      notify: reload systemd
+
+    - name: Enable and start loop-device service
+      ansible.builtin.systemd:
+        name: microshift-lvm-loop.service
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Verify loop device is attached
+      ansible.builtin.command: losetup {{ microshift_loop_dev }}
+      register: loop_check
+      changed_when: false
+      failed_when: loop_check.rc != 0
+
+    - name: Create the LVMS volume group on the loop device
       community.general.lvg:
         vg: "{{ microshift_vg }}"
         pvs: "{{ microshift_pv_device }}"
@@ -103,10 +137,15 @@
         state: mounted
 
   handlers:
+    - name: reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
     - name: restart smartd
       ansible.builtin.service:
         name: smartd
         state: restarted
+
     - name: restart mdmonitor
       ansible.builtin.service:
         name: mdmonitor

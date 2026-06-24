@@ -70,7 +70,7 @@ const CLASSES = {
 
 // host -> everything it runs. qty = physical units the card represents.
 const HOSTS = [
- {name:"Odroid-H4", ip:"10.136.151.64", cls:"x86", qty:1,
+ {name:"Odroid-H4", ip:"192.168.1.160", cls:"x86", qty:1,
   specs:"i3-N305 · 8C/8T · 64 GB · 32 EU · 4TB NVMe + 8TB md1 + 5.45TB md0",
   svc:["NAS (NFS / SMB)","MinIO — S3 object store","restic (md1 → secondary + offsite)",
        "shared NFS → Proxmox VMs","OpenVINO — embeddings / STT / vision",

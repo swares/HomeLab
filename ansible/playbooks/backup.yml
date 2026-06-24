@@ -15,7 +15,7 @@
     restic_offsite_repo: "{{ offsite_restic_repo | default('') }}"   # e.g. b2:bucket:lab — set via host/group vars or Vault; creds in /etc/restic/offsite.env
   tasks:
     - name: Install restic
-      ansible.builtin.dnf:
+      ansible.builtin.package:
         name: restic
         state: present
 

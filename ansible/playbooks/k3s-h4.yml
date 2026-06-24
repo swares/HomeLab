@@ -1,0 +1,102 @@
+---
+# k3s-h4.yml — Install k3s server on the H4 core (Ubuntu, single-node).
+#
+# Installs k3s with:
+#   - embedded etcd (--cluster-init) so agents and future HA nodes can join
+#   - Traefik ingress (k3s default) — Routes replaced by standard Ingress objects
+#   - local-path-provisioner (k3s default) — replaces LVMS/topolvm
+#   - node-ip pinned to the wired NIC
+#
+# Run:  make k3s-h4
+# Undo: make k3s-h4-uninstall  (runs /usr/local/bin/k3s-uninstall.sh)
+- name: Install k3s server on H4
+  hosts: microshift          # h4-core lives here; rename the group later if desired
+  become: true
+  vars:
+    k3s_version: "{{ hostvars[inventory_hostname]['k3s_version'] | default('stable') }}"
+    k3s_node_ip: "{{ node_ip }}"
+    k3s_config_dir: /etc/rancher/k3s
+    kubeconfig_dest: "/home/{{ ansible_user }}/.kube/config"
+
+  tasks:
+    - name: Ensure k3s config directory exists
+      ansible.builtin.file:
+        path: "{{ k3s_config_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write k3s server config
+      ansible.builtin.copy:
+        dest: "{{ k3s_config_dir }}/config.yaml"
+        mode: "0644"
+        content: |
+          # Ansible-managed — k3s server config for H4
+          cluster-init: true          # embedded etcd; allows agents and future HA
+          node-ip: "{{ k3s_node_ip }}"
+          tls-san:
+            - "{{ k3s_node_ip }}"
+            - api.lab.home.arpa
+          # Keep Traefik (ingress) and local-path-provisioner (storage) enabled
+          disable:
+            - servicelb              # we don't need MetalLB on a single-NIC box
+          # Write kubeconfig world-readable so the ansible user can read it
+          write-kubeconfig-mode: "0644"
+
+    - name: Check if k3s is already installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s
+      register: k3s_bin
+
+    - name: Install k3s (downloads and runs the official installer)
+      ansible.builtin.shell: |
+        curl -sfL https://get.k3s.io | \
+          INSTALL_K3S_VERSION="{{ k3s_version }}" \
+          sh -s - server
+      args:
+        executable: /bin/bash
+      when: not k3s_bin.stat.exists
+      changed_when: true
+
+    - name: Wait for k3s to be ready
+      ansible.builtin.command: >
+        k3s kubectl wait node/{{ ansible_hostname }}
+          --for=condition=Ready
+          --timeout=120s
+      changed_when: false
+      retries: 6
+      delay: 15
+      register: node_ready
+      until: node_ready.rc == 0
+
+    - name: Create .kube dir for ansible user
+      ansible.builtin.file:
+        path: "/home/{{ ansible_user }}/.kube"
+        state: directory
+        owner: "{{ ansible_user }}"
+        mode: "0700"
+
+    - name: Copy kubeconfig for ansible user
+      ansible.builtin.copy:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: "{{ kubeconfig_dest }}"
+        owner: "{{ ansible_user }}"
+        mode: "0600"
+        remote_src: true
+
+    - name: Set KUBECONFIG in .bashrc
+      ansible.builtin.lineinfile:
+        path: "/home/{{ ansible_user }}/.bashrc"
+        line: 'export KUBECONFIG=~/.kube/config'
+        regexp: '^export KUBECONFIG='
+
+    - name: Confirm node is Ready
+      ansible.builtin.command: kubectl get nodes
+      become: false
+      environment:
+        KUBECONFIG: "{{ kubeconfig_dest }}"
+      register: nodes_out
+      changed_when: false
+
+    - name: Show node status
+      ansible.builtin.debug:
+        msg: "{{ nodes_out.stdout_lines }}"
