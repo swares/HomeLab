@@ -1,12 +1,17 @@
 [Unit]
-Description=MicroShift data/etcd snapshot to cold tier (8TB)
+Description=k3s etcd snapshot to cold tier (8TB)
 RequiresMountsFor={{ cold_primary_mount }}
 
 [Service]
 Type=oneshot
-# Authoritative snapshot requires the service stopped (brief downtime, weekly window).
-# For a zero-downtime alternative, rsync /var/lib/microshift-backups instead.
+# k3s built-in snapshot — no downtime, etcd stays running.
+# Snapshot lands in /var/lib/rancher/k3s/server/db/snapshots/ then gets
+# copied to cold storage and pruned to the last 7 copies.
 ExecStart=/bin/bash -c '\
-  systemctl stop microshift && \
-  microshift backup {{ etcd_backup_dir }}/$(date +%%F_%%H%%M) ; \
-  systemctl start microshift'
+  SNAP_DIR=/var/lib/rancher/k3s/server/db/snapshots && \
+  DEST={{ cold_primary_mount }}/k3s-etcd-snapshots && \
+  k3s etcd-snapshot save --name "etcd-$(date +%%F_%%H%%M)" && \
+  mkdir -p "$DEST" && \
+  LATEST=$(ls -1t "$SNAP_DIR" | head -1) && \
+  cp "$SNAP_DIR/$LATEST" "$DEST/" && \
+  ls -1t "$DEST" | tail -n +8 | xargs -I{} rm -f "$DEST/{}"'

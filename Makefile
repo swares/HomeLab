@@ -1,6 +1,6 @@
 # Convenience targets. All Ansible runs target the host(s) in inventory/hosts.yml.
 .PHONY: help check storage microshift backup argocd all dns ai-nodes vault ldap mqtt k3s-vms \
-        update-containers update-vms bake-image validate-rollout ansible-deps
+        update-containers update-vms bake-image validate-rollout ansible-deps bootstrap
 
 # Use the venv if present, fall back to whatever is on PATH.
 VENV          ?= /opt/ansible
@@ -12,6 +12,9 @@ help:        ## Show this help
 
 ansible-deps: ## Install required Ansible Galaxy collections (run once after clone)
 	$(ANSIBLE_GALAXY) collection install -r ansible/requirements.yml -p /opt/ansible/collections
+
+bootstrap:   ## Push SSH key + grant passwordless sudo (run once per new host; needs -k/-K)
+	cd ansible && $(ANSIBLE) playbooks/bootstrap.yml -k -K $(if $(LIMIT),-e target_hosts=$(LIMIT),)
 
 check:       ## Dry-run every playbook (no changes)
 	cd ansible && $(ANSIBLE) playbooks/site.yml --check

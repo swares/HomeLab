@@ -1,0 +1,17 @@
+[Unit]
+Description=Vault auto-unseal on boot
+After=vault.service
+Requires=vault.service
+# Retry if Vault hasn't finished initializing yet
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/vault-unseal.sh
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

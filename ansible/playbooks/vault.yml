@@ -1,21 +1,32 @@
 ---
 # Vault (secrets / PKI) on the RPi 5. Installs + configures + starts the server.
 # `vault operator init` and unseal are intentionally MANUAL (one-time, security-critical):
-# init once, store the unseal keys + root token OFFLINE, then unseal. Consider KMS auto-unseal later.
+# init once, store the unseal keys + root token OFFLINE, then unseal.
+#
+# Auto-unseal on boot: deploys vault-unseal.service which reads keys from
+# vault_unseal_keys_file (default /etc/vault.d/unseal-keys, root:root 0400).
+# Populate that file manually AFTER `vault operator init` — never commit keys to git.
 - name: Vault server
   hosts: vault
   become: true
   tasks:
-    - name: HashiCorp APT key
-      ansible.builtin.get_url:
-        url: https://apt.releases.hashicorp.com/gpg
-        dest: /usr/share/keyrings/hashicorp.asc
-        mode: "0644"
+    - name: Remove stale hashicorp.asc keyring if present
+      ansible.builtin.file:
+        path: /usr/share/keyrings/hashicorp.asc
+        state: absent
+
+    - name: HashiCorp APT key (dearmored gpg format)
+      ansible.builtin.shell:
+        cmd: >
+          curl -fsSL https://apt.releases.hashicorp.com/gpg |
+          gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+        creates: /usr/share/keyrings/hashicorp-archive-keyring.gpg
+
     - name: HashiCorp APT repo
-      ansible.builtin.apt_repository:
-        repo: "deb [signed-by=/usr/share/keyrings/hashicorp.asc] https://apt.releases.hashicorp.com {{ ansible_distribution_release }} main"
-        filename: hashicorp
-        state: present
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/hashicorp.list
+        content: "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com {{ ansible_distribution_release }} main\n"
+        mode: "0644"
     - name: Install Vault
       ansible.builtin.apt: { name: vault, update_cache: true, state: present }
     - name: Data dir for raft storage
@@ -28,9 +39,52 @@
       notify: restart vault
     - name: Enable + start Vault
       ansible.builtin.systemd: { name: vault, enabled: true, state: started }
+
+    # ---- Auto-unseal on boot ----
+    - name: Deploy vault-unseal script
+      ansible.builtin.template:
+        src: ../templates/vault-unseal.sh.j2
+        dest: /usr/local/bin/vault-unseal.sh
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Deploy vault-unseal systemd service
+      ansible.builtin.template:
+        src: ../templates/vault-unseal.service.j2
+        dest: /etc/systemd/system/vault-unseal.service
+        owner: root
+        group: root
+        mode: "0644"
+      notify: reload systemd
+
+    - name: Enable vault-unseal service
+      ansible.builtin.systemd:
+        name: vault-unseal
+        enabled: true
+        daemon_reload: true
+
+    - name: Ensure unseal-keys file exists with correct permissions (populate manually)
+      ansible.builtin.file:
+        path: "{{ vault_unseal_keys_file | default('/etc/vault.d/unseal-keys') }}"
+        state: touch
+        owner: root
+        group: root
+        mode: "0400"
+        modification_time: preserve
+        access_time: preserve
+
     - name: One-time manual steps
       ansible.builtin.debug:
-        msg: "Run ONCE on {{ inventory_hostname }}: `vault operator init` (store keys OFFLINE), unseal x3, then enable KV + PKI engines."
+        msg:
+          - "1. Run on {{ inventory_hostname }}: vault operator init (store root token + all 5 keys OFFLINE)"
+          - "2. Add 3 unseal keys (one per line) to {{ vault_unseal_keys_file | default('/etc/vault.d/unseal-keys') }}"
+          - "3. sudo systemctl start vault-unseal  # test it"
+          - "4. On reboot, Vault will unseal automatically"
+
   handlers:
     - name: restart vault
       ansible.builtin.systemd: { name: vault, state: restarted }
+
+    - name: reload systemd
+      ansible.builtin.systemd: { daemon_reload: true }
