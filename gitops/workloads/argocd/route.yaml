@@ -4,10 +4,15 @@ metadata:
   name: argocd-server
   namespace: argocd
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
+    cert-manager.io/cluster-issuer: lab-ca
 spec:
   ingressClassName: traefik
+  tls:
+    - hosts:
+        - argocd.apps.lab.home.arpa
+      secretName: argocd-tls
   rules:
     - host: argocd.apps.lab.home.arpa
       http:

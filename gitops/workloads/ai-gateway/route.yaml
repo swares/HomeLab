@@ -4,11 +4,15 @@ metadata:
   name: ai
   namespace: ai-gateway
   annotations:
-    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
-    traefik.ingress.kubernetes.io/router.middlewares: ai-gateway-redirect-https@kubernetescrd
+    cert-manager.io/cluster-issuer: lab-ca
 spec:
   ingressClassName: traefik
+  tls:
+    - hosts:
+        - ai.apps.lab.home.arpa
+      secretName: ai-tls
   rules:
     - host: ai.apps.lab.home.arpa
       http:
