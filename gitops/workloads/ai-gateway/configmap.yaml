@@ -6,15 +6,21 @@ data:
     # Map friendly model names -> backends. Confirm each backend's API path/port against
     # its docs (RKLLama API shape and OVMS OpenAI endpoint vary by version).
     model_list:
-      # Two Orange Pi 5 Pro NPUs via RKLLama (Ollama-style). LiteLLM load-balances same name.
+      # Ollama on opi5pro-1 — in-cluster pod, nodeSelector role=inference (RK3588S, 8C/16GB).
+      # Pull models first: kubectl exec -n ai-gateway deploy/ollama -- ollama pull qwen2.5:3b
       - model_name: chat
         litellm_params:
           model: ollama/qwen2.5:3b
-          api_base: http://rkllama-opi1:8080
-      - model_name: chat
-        litellm_params:
-          model: ollama/llama3.2:3b
-          api_base: http://rkllama-opi2:8080
+          api_base: http://ollama:11434
+      # RKLLama backends — placeholder until opi5pro-2 is online.
+      # - model_name: chat
+      #   litellm_params:
+      #     model: ollama/qwen2.5:3b
+      #     api_base: http://rkllama-opi1:8080
+      # - model_name: chat
+      #   litellm_params:
+      #     model: ollama/llama3.2:3b
+      #     api_base: http://rkllama-opi2:8080
       # Intel iGPU embeddings/vision via OpenVINO Model Server (OpenAI-compatible).
       - model_name: embeddings
         litellm_params:
@@ -34,8 +40,7 @@ data:
       # - model_name: big
       #   litellm_params: { model: anthropic/claude-sonnet-4-6, api_key: os.environ/ANTHROPIC_API_KEY }
     router_settings:
-      routing_strategy: simple-shuffle   # spread "chat" across both OPi NPUs
+      routing_strategy: simple-shuffle   # ready for multiple backends when opi5pro-2 joins
       num_retries: 2
-      fallbacks: [{ chat: ["embeddings"] }]   # example; tune to taste
     # NOTE: the M5Stack speaks the framework's /api/llm protocol, not OpenAI — front it with a
     # tiny adapter (or call it directly / via MQTT from Home Assistant). See AI-INFERENCE.md.
