@@ -31,7 +31,7 @@ declare -A INGRESSES=(
 declare -A HOSTS=(
   [h4-core]=192.168.1.160
   [octopi/dns-1]=192.168.1.148
-  [rpi5/vault]=192.168.1.124
+  [rpi5/vault]=192.168.1.128
   [opi-zero2w-1/dns-2]=192.168.1.184
   [opi-zero2w-2]=192.168.1.188
   [opi-zero2w-4]=192.168.1.99
@@ -246,17 +246,17 @@ fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "Vault"
-VAULT_ADDR_REMOTE="http://192.168.1.124:8200"
+VAULT_ADDR_REMOTE="http://192.168.1.128:8200"
 vault_status=$(curl -sk --max-time 5 "${VAULT_ADDR_REMOTE}/v1/sys/health" 2>/dev/null)
 if [[ -z "$vault_status" ]]; then
-  fail "Vault (192.168.1.124) — unreachable"
+  fail "Vault (192.168.1.128) — unreachable"
 else
   initialized=$(echo "$vault_status" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('initialized','?'))" 2>/dev/null)
   sealed=$(echo "$vault_status" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('sealed','?'))" 2>/dev/null)
   if [[ "$sealed" == "False" ]]; then
     ok "Vault initialized=$initialized sealed=$sealed"
   elif [[ "$sealed" == "True" ]]; then
-    fail "Vault is SEALED — run: ssh swares@192.168.1.124 vault operator unseal"
+    fail "Vault is SEALED — run: ssh swares@192.168.1.128 vault operator unseal"
   else
     warn "Vault status unknown: $vault_status"
   fi
