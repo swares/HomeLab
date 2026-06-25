@@ -15,7 +15,7 @@ section() { echo -e "\n${BLU}▶ $*${RST}"; }
 ERRORS=0; WARNINGS=0
 
 # ── DNS servers ───────────────────────────────────────────────────────────────
-DNS_PRIMARY=192.168.1.152
+DNS_PRIMARY=192.168.1.148
 DNS_SECONDARY=192.168.1.184
 INGRESS_VIP=192.168.1.160
 LAB_DOMAIN=lab.home.arpa
@@ -30,11 +30,15 @@ declare -A INGRESSES=(
 # ── Hosts to ping ─────────────────────────────────────────────────────────────
 declare -A HOSTS=(
   [h4-core]=192.168.1.160
-  [octopi/dns-1]=192.168.1.152
+  [octopi/dns-1]=192.168.1.148
   [rpi5/vault]=192.168.1.124
   [opi-zero2w-1/dns-2]=192.168.1.184
   [opi-zero2w-2]=192.168.1.188
   [opi-zero2w-4]=192.168.1.99
+  [opi5pro-1/inference]=192.168.1.168
+  [n150-1]=192.168.1.10
+  [n150-2]=192.168.1.171
+  [xu3-1]=192.168.1.64
 )
 
 echo -e "${BLU}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RST}"
@@ -75,13 +79,17 @@ done
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "k3s cluster"
-node_status=$(kubectl get node odroid-nas -o jsonpath='{.status.conditions[-1].type}={.status.conditions[-1].status}' 2>/dev/null)
-if [[ "$node_status" == "Ready=True" ]]; then
-  k3s_ver=$(kubectl get node odroid-nas -o jsonpath='{.status.nodeInfo.kubeletVersion}' 2>/dev/null)
-  ok "Node Ready ($k3s_ver)"
-else
-  fail "Node not Ready ($node_status)"
-fi
+while IFS= read -r line; do
+  node=$(echo "$line" | awk '{print $1}')
+  status=$(echo "$line" | awk '{print $2}')
+  role=$(echo "$line" | awk '{print $3}')
+  ver=$(echo "$line" | awk '{print $5}')
+  if [[ "$status" == "Ready" ]]; then
+    ok "$node ($role) — $ver"
+  else
+    fail "$node — $status"
+  fi
+done < <(kubectl get nodes --no-headers 2>/dev/null)
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "ArgoCD applications"
@@ -251,6 +259,26 @@ else
     fail "Vault is SEALED — run: ssh swares@192.168.1.124 vault operator unseal"
   else
     warn "Vault status unknown: $vault_status"
+  fi
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+section "Ollama inference (opi5pro-1)"
+ollama_svc=$(kubectl get svc ollama -n ai-gateway -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
+if [[ -z "$ollama_svc" ]]; then
+  fail "Ollama service not found in ai-gateway"
+else
+  ollama_resp=$(curl -s --max-time 5 "http://${ollama_svc}:11434/api/tags" 2>/dev/null)
+  if [[ -z "$ollama_resp" ]]; then
+    fail "Ollama — no response from ${ollama_svc}:11434"
+  else
+    models=$(echo "$ollama_resp" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+names = [m['name'] for m in d.get('models', [])]
+print(', '.join(names) if names else 'no models loaded')
+" 2>/dev/null || echo "parse error")
+    ok "Ollama reachable — models: $models"
   fi
 fi
 
