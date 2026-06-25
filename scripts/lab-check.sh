@@ -169,7 +169,7 @@ section "Ingress HTTP/S endpoints"
 for name in "${!INGRESSES[@]}"; do
   url="${INGRESSES[$name]}"
   code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 5 "$url" 2>/dev/null || echo "000")
-  if [[ "$code" =~ ^(200|301|302|401)$ ]]; then
+  if [[ "$code" =~ ^(200|301|302|307|401)$ ]]; then
     ok "$name → $url ($code)"
   elif [[ "$code" == "000" ]]; then
     fail "$name → $url — no response (timeout/connection refused)"
