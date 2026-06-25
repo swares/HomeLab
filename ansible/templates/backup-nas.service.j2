@@ -14,4 +14,5 @@ ExecStart=/usr/bin/restic backup {{ nas_mount }} {{ cold_primary_mount }}/VMs \
 ExecStartPost=/usr/bin/restic forget --prune \
   --keep-daily 7 --keep-weekly 4 --keep-monthly 6
 # Redundancy: replicate the primary repo to the 6TB disk (two-disk safety, no RAID needed).
-ExecStartPost=-/usr/bin/restic copy --repo2 {{ restic_copy_repo }}
+# restic copy treats --repo2 as fully independent, so it needs its own password source.
+ExecStartPost=-/usr/bin/restic copy --repo2 {{ restic_copy_repo }} --password-file2 {{ restic_password_file }}
