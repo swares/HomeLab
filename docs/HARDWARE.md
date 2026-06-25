@@ -13,7 +13,7 @@ Last verified: 2026-06-25.
 |--------|-----|-----|----------|---------|------|
 | **Odroid-H4 Ultra** | i3-N305 8C/8T x86 | 64 GB DDR5 | `192.168.1.160` | — | **Core: k3s server + NAS** |
 | **Orange Pi 5 Pro #1** | RK3588S 8C ARM | 16 GB | `192.168.1.168` | — | k3s agent · Ollama inference |
-| **Orange Pi 5 Pro #2** | RK3588S 8C ARM | 16 GB | TBD | — | k3s agent (pending bootstrap) |
+| **Orange Pi 5 Pro #2** | RK3588S 8C ARM | 16 GB | `192.168.1.172` | — | k3s agent (pending bootstrap) |
 | **N150 mini PC #1** | Intel N150 4C x86 | 16 GB | `192.168.1.10` | — | Pending (offline — network rewire needed) |
 | **N150 mini PC #2** | Intel N150 4C x86 | 16 GB | `192.168.1.171` | — | Pending (offline — network rewire needed) |
 | **N150 mini PC #3 (HTPC)** | Intel N150 4C x86 | 16 GB | — | `192.168.1.176` | Living-room HTPC |
