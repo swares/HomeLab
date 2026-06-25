@@ -6,14 +6,57 @@
   become: true
   vars:
     mqtt_allow_anonymous: true   # LAN-only default; switch to passwords/TLS if ever exposed
+    ansible_python_interpreter: /usr/bin/python3   # Arch upgrade may change minor version; use symlink
   tasks:
-    - name: Install Mosquitto
-      ansible.builtin.apt: { name: [mosquitto, mosquitto-clients], update_cache: true, state: present }
+    - name: Install Mosquitto (apt)
+      ansible.builtin.apt:
+        name: [mosquitto, mosquitto-clients]
+        update_cache: true
+        state: present
+      when: ansible_os_family == 'Debian'
+
+    # linux-firmware was split into sub-packages; these dirs exist on disk but are now
+    # owned by linux-firmware-nvidia. pacman --overwrite doesn't apply to directories,
+    # so we remove them first and let the new package recreate them.
+    - name: Remove orphaned nvidia firmware dirs (pre-package-split, no GPU on this board)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /usr/lib/firmware/nvidia/ad103
+        - /usr/lib/firmware/nvidia/ad104
+        - /usr/lib/firmware/nvidia/ad106
+        - /usr/lib/firmware/nvidia/ad107
+      when: ansible_os_family == 'Archlinux'
+
+    - name: Full system upgrade before install (skip broken libcamera)
+      ansible.builtin.shell:
+        cmd: "pacman -Syu --noconfirm --ignore libcamera,libcamera-ipa"
+      register: pacman_upgrade
+      changed_when: "'there is nothing to do' not in pacman_upgrade.stdout"
+      when: ansible_os_family == 'Archlinux'
+
+    - name: Install Mosquitto (pacman)
+      community.general.pacman:
+        name: [mosquitto]
+        state: present
+      when: ansible_os_family == 'Archlinux'
+
     - name: Broker config
-      ansible.builtin.template: { src: ../templates/mosquitto.conf.j2, dest: /etc/mosquitto/conf.d/lab.conf, mode: "0644" }
+      ansible.builtin.template:
+        src: ../templates/mosquitto.conf.j2
+        dest: /etc/mosquitto/mosquitto.conf
+        mode: "0644"
       notify: restart mosquitto
+
     - name: Enable + start
-      ansible.builtin.systemd: { name: mosquitto, enabled: true, state: started }
+      ansible.builtin.systemd:
+        name: mosquitto
+        enabled: true
+        state: started
+
   handlers:
     - name: restart mosquitto
-      ansible.builtin.systemd: { name: mosquitto, state: restarted }
+      ansible.builtin.systemd:
+        name: mosquitto
+        state: restarted
