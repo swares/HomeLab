@@ -6,21 +6,18 @@ data:
     # Map friendly model names -> backends. Confirm each backend's API path/port against
     # its docs (RKLLama API shape and OVMS OpenAI endpoint vary by version).
     model_list:
-      # Ollama on opi5pro-1 — in-cluster pod, nodeSelector role=inference (RK3588S, 8C/16GB).
-      # Pull models first: kubectl exec -n ai-gateway deploy/ollama -- ollama pull qwen2.5:3b
+      # Ollama on opi5pro-1 — pinned via nodeSelector kubernetes.io/hostname=opi5pro-1
+      # Pull models: kubectl exec -n ai-gateway deploy/ollama -- ollama pull qwen2.5:3b
       - model_name: chat
         litellm_params:
           model: ollama/qwen2.5:3b
           api_base: http://ollama:11434
-      # RKLLama backends — placeholder until opi5pro-2 is online.
-      # - model_name: chat
-      #   litellm_params:
-      #     model: ollama/qwen2.5:3b
-      #     api_base: http://rkllama-opi1:8080
-      # - model_name: chat
-      #   litellm_params:
-      #     model: ollama/llama3.2:3b
-      #     api_base: http://rkllama-opi2:8080
+      # Ollama on opi5pro-2 — pinned via nodeSelector kubernetes.io/hostname=opi5pro-2
+      # Pull models: kubectl exec -n ai-gateway deploy/ollama-2 -- ollama pull qwen2.5:3b
+      - model_name: chat
+        litellm_params:
+          model: ollama/qwen2.5:3b
+          api_base: http://ollama-2:11434
       # Intel iGPU embeddings/vision via OpenVINO Model Server (OpenAI-compatible).
       - model_name: embeddings
         litellm_params:
