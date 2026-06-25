@@ -1,0 +1,44 @@
+---
+# Bootstrap Windows lab nodes (n150-1, n150-2).
+# Prereq: run scripts/enable-winrm.ps1 on each host first.
+#
+# Usage:
+#   ansible-playbook -i ansible/inventory/hosts.yml ansible/playbooks/windows-bootstrap.yml
+#   ansible-playbook -i ansible/inventory/hosts.yml ansible/playbooks/windows-bootstrap.yml -l n150-1
+- name: Bootstrap Windows lab nodes
+  hosts: x86_nodes
+  gather_facts: true
+
+  tasks:
+
+    # ── Power: never sleep, never hibernate ──────────────────────────────────
+    - name: Set power plan to High Performance
+      ansible.windows.win_shell: |
+        powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c
+      changed_when: false   # powercfg has no meaningful exit-code diff
+
+    - name: Disable sleep timeouts (AC + DC)
+      ansible.windows.win_shell: |
+        powercfg /change standby-timeout-ac 0
+        powercfg /change standby-timeout-dc 0
+      changed_when: false
+
+    - name: Disable monitor/display timeout (AC + DC)
+      ansible.windows.win_shell: |
+        powercfg /change monitor-timeout-ac 0
+        powercfg /change monitor-timeout-dc 0
+      changed_when: false
+
+    - name: Disable hibernate
+      ansible.windows.win_shell: powercfg /h off
+      changed_when: false
+
+    # ── Verify ───────────────────────────────────────────────────────────────
+    - name: Show active power scheme
+      ansible.windows.win_shell: powercfg /getactivescheme
+      register: power_scheme
+      changed_when: false
+
+    - name: Print active power scheme
+      ansible.builtin.debug:
+        msg: "{{ power_scheme.stdout | trim }}"
