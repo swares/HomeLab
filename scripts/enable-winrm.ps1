@@ -17,10 +17,10 @@ Enable-PSRemoting -Force -SkipNetworkProfileCheck
 Write-Host "==> Setting WinRM service to auto-start..."
 Set-Service -Name WinRM -StartupType Automatic
 
-Write-Host "==> Allowing Basic + NTLM auth..."
-Set-Item -Path WSMan:\localhost\Service\Auth\Basic    -Value $true
-Set-Item -Path WSMan:\localhost\Service\Auth\NTLM     -Value $true
-Set-Item -Path WSMan:\localhost\Service\AllowUnencrypted -Value $true
+Write-Host "==> Ensuring Negotiate (NTLM/Kerberos) auth is enabled..."
+# Negotiate covers NTLM — no separate NTLM path exists in WSMan.
+# Enable-PSRemoting already enables Negotiate; this is belt-and-suspenders.
+Set-Item -Path WSMan:\localhost\Service\Auth\Negotiate -Value $true
 
 Write-Host "==> Opening firewall for WinRM (port 5985, LAN subnet only)..."
 $rule = Get-NetFirewallRule -DisplayName "WinRM-Lab" -ErrorAction SilentlyContinue
