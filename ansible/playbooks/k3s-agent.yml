@@ -37,17 +37,23 @@
         state: present
         update_cache: true
 
-    - name: Install k3s agent
-      ansible.builtin.shell:
-        cmd: >
-          curl -sfL https://get.k3s.io |
-          INSTALL_K3S_VERSION="{{ k3s_version }}"
-          K3S_URL="{{ k3s_server_url }}"
-          K3S_TOKEN="{{ k3s_token }}"
-          sh -s - agent
-          --node-label role=inference
-        creates: /usr/local/bin/k3s
+    - name: Write k3s agent install script
+      ansible.builtin.copy:
+        dest: /tmp/k3s-agent-install.sh
+        mode: "0700"
+        content: |
+          #!/bin/bash
+          set -e
+          export INSTALL_K3S_VERSION="{{ k3s_version }}"
+          export K3S_URL="{{ k3s_server_url }}"
+          export K3S_TOKEN="{{ k3s_token }}"
+          curl -sfL https://get.k3s.io | sh -s - agent --node-label role=inference
       no_log: true
+
+    - name: Install k3s agent (runs script, up to 5 min)
+      ansible.builtin.shell:
+        cmd: /tmp/k3s-agent-install.sh
+        creates: /usr/local/bin/k3s
       async: 300
       poll: 15
 
