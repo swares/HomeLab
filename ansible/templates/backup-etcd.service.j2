@@ -1,17 +1,16 @@
 [Unit]
-Description=k3s etcd snapshot to cold tier (8TB)
+Description=k3s state backup to cold tier (8TB)
 RequiresMountsFor={{ cold_primary_mount }}
 
 [Service]
 Type=oneshot
-# k3s built-in snapshot — no downtime, etcd stays running.
-# Snapshot lands in /var/lib/rancher/k3s/server/db/snapshots/ then gets
-# copied to cold storage and pruned to the last 7 copies.
+# k3s single-node uses SQLite (state.db) — no embedded etcd.
+# sqlite3 .backup does an online hot-copy (safe while k3s is running).
+# Keeps the last 7 copies; prunes older ones.
 ExecStart=/bin/bash -c '\
-  SNAP_DIR=/var/lib/rancher/k3s/server/db/snapshots && \
+  DB=/var/lib/rancher/k3s/server/db/state.db && \
   DEST={{ cold_primary_mount }}/k3s-etcd-snapshots && \
-  k3s etcd-snapshot save --name "etcd-$(date +%%F_%%H%%M)" && \
+  SNAP="$DEST/state-$(date +%%F_%%H%%M).db" && \
   mkdir -p "$DEST" && \
-  LATEST=$(ls -1t "$SNAP_DIR" | head -1) && \
-  cp "$SNAP_DIR/$LATEST" "$DEST/" && \
-  ls -1t "$DEST" | tail -n +8 | xargs -I{} rm -f "$DEST/{}"'
+  sqlite3 "$DB" ".backup $SNAP" && \
+  ls -1t "$DEST"/state-*.db | tail -n +8 | xargs -r rm -f'
