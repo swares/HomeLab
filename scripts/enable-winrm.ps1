@@ -22,6 +22,23 @@ Write-Host "==> Ensuring Negotiate (NTLM/Kerberos) auth is enabled..."
 # Enable-PSRemoting already enables Negotiate; this is belt-and-suspenders.
 Set-Item -Path WSMan:\localhost\Service\Auth\Negotiate -Value $true
 
+Write-Host "==> Enabling Basic auth (needed for Ansible NTLM fallback on local accounts)..."
+Set-Item -Path WSMan:\localhost\Service\Auth\Basic -Value $true
+
+Write-Host "==> Allowing local admin accounts over the network (UAC token filter)..."
+New-ItemProperty -Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" `
+    -Name "LocalAccountTokenFilterPolicy" -Value 1 -PropertyType DWORD -Force | Out-Null
+
+Write-Host "==> Creating local 'ansible' service account..."
+if (-not (Get-LocalUser -Name "ansible" -ErrorAction SilentlyContinue)) {
+    $pw = Read-Host "Password for ansible account" -AsSecureString
+    New-LocalUser -Name "ansible" -Password $pw -PasswordNeverExpires
+    Add-LocalGroupMember -Group "Administrators" -Member "ansible"
+    Write-Host "    Created."
+} else {
+    Write-Host "    Already exists, skipping."
+}
+
 Write-Host "==> Opening firewall for WinRM (port 5985, LAN subnet only)..."
 $rule = Get-NetFirewallRule -DisplayName "WinRM-Lab" -ErrorAction SilentlyContinue
 if (-not $rule) {
