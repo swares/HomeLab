@@ -30,6 +30,11 @@
 
   "packageRules": [
     {
+      "description": "Skip private local registry — Renovate cannot reach registry.lab.home.arpa",
+      "matchPackagePatterns": ["^registry\\.lab\\.home\\.arpa/"],
+      "enabled": false
+    },
+    {
       "description": "Group all Immich components — they must move together to stay compatible",
       "matchPackagePatterns": ["^ghcr\\.io/immich-app/"],
       "groupName": "Immich stack",
