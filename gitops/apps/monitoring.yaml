@@ -29,7 +29,7 @@ spec:
             storageClassName: local-path
             size: 5Gi
           nodeSelector:
-            kubernetes.io/hostname: h4-core
+            kubernetes.io/hostname: odroid-nas
           ingress:
             enabled: true
             ingressClassName: traefik
@@ -60,7 +60,7 @@ spec:
                     requests:
                       storage: 50Gi
             nodeSelector:
-              kubernetes.io/hostname: h4-core
+              kubernetes.io/hostname: odroid-nas
             # Scrape all namespaces
             podMonitorNamespaceSelector: {}
             serviceMonitorNamespaceSelector: {}
@@ -70,7 +70,7 @@ spec:
         alertmanager:
           alertmanagerSpec:
             nodeSelector:
-              kubernetes.io/hostname: h4-core
+              kubernetes.io/hostname: odroid-nas
             storage:
               volumeClaimTemplate:
                 spec:
@@ -88,7 +88,7 @@ spec:
         # ---- kube-state-metrics ----
         kube-state-metrics:
           nodeSelector:
-            kubernetes.io/hostname: h4-core
+            kubernetes.io/hostname: odroid-nas
 
         # ---- k3s doesn't expose kube-controller-manager / scheduler on standard ports ----
         kubeControllerManager:
