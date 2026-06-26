@@ -1,0 +1,79 @@
+# Runs after every merge to main.
+# Waits for ArgoCD to sync and probes ingress endpoints.
+# On failure: automatically reverts HEAD and pushes so ArgoCD selfHeal restores the previous state.
+#
+# Required repository secrets:
+#   KUBECONFIG_B64      base64-encoded kubeconfig
+#   ARGOCD_AUTH_TOKEN   ArgoCD API token
+#   ARGOCD_SERVER       e.g. argocd.apps.lab.home.arpa
+#   GIT_PUSH_TOKEN      GitHub PAT with repo write scope (for rollback push)
+
+name: Sync & health check
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  sync-check:
+    name: ArgoCD sync + health probe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+          token: ${{ secrets.GIT_PUSH_TOKEN }}
+
+      - name: Set up kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Install kubectl + argocd CLI
+        run: |
+          # kubectl
+          curl -sLO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
+          # argocd
+          curl -sSL -o /usr/local/bin/argocd \
+            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+          chmod +x /usr/local/bin/argocd
+
+      - name: Wait for all ArgoCD apps Synced + Healthy
+        env:
+          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
+          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
+        run: ./scripts/validate-rollout.sh
+
+      - name: Probe ingress endpoints
+        run: |
+          DOMAIN="apps.lab.home.arpa"
+          ENDPOINTS=(
+            "http://grafana.$DOMAIN"
+            "http://argocd.$DOMAIN"
+            "http://immich.$DOMAIN"
+          )
+          FAILED=0
+          for url in "${ENDPOINTS[@]}"; do
+            code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 10 "$url" || echo "000")
+            if [[ "$code" =~ ^(2|3|401|403) ]]; then
+              echo "OK $code  $url"
+            else
+              echo "FAIL $code  $url"
+              FAILED=1
+            fi
+          done
+          [ "$FAILED" -eq 0 ] || exit 1
+
+      - name: Rollback on failure
+        if: failure()
+        env:
+          GIT_PUSH_TOKEN: ${{ secrets.GIT_PUSH_TOKEN }}
+        run: |
+          git config user.email "ci@lab.home.arpa"
+          git config user.name  "HomeLab CI"
+          git remote set-url origin \
+            "https://swares:${GIT_PUSH_TOKEN}@github.com/swares/HomeLab.git"
+          ./scripts/rollback-app.sh
+          echo "Rolled back — ArgoCD will reconcile within ~60s."

@@ -1,0 +1,61 @@
+# Runs on every PR and push to main.
+# Lints YAML and dry-runs kubectl apply against the live cluster.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   KUBECONFIG_B64      base64-encoded kubeconfig:  base64 < ~/.kube/config
+#   ARGOCD_AUTH_TOKEN   ArgoCD API token (admin → User Info → Generate Token)
+#   ARGOCD_SERVER       e.g. argocd.apps.lab.home.arpa
+
+name: Validate
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  yaml-lint:
+    name: YAML lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install yq
+        run: |
+          wget -qO /usr/local/bin/yq \
+            https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64
+          chmod +x /usr/local/bin/yq
+
+      - name: Lint all YAML under gitops/
+        run: |
+          FAILED=0
+          find gitops/ -name '*.yaml' -o -name '*.yml' | while read f; do
+            yq e 'true' "$f" > /dev/null || { echo "FAIL: $f"; FAILED=1; }
+          done
+          [ "$FAILED" -eq 0 ] || exit 1
+          echo "All YAML valid."
+
+  dry-run-apply:
+    name: kubectl dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Dry-run apply all workload manifests
+        run: |
+          FAILED=0
+          find gitops/workloads -name '*.yaml' | while read f; do
+            echo "  checking $f"
+            kubectl apply --dry-run=server -f "$f" || FAILED=1
+          done
+          [ "$FAILED" -eq 0 ] || { echo "Dry-run failed."; exit 1; }

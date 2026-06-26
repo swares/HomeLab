@@ -1,0 +1,75 @@
+# Scheduled maintenance jobs — runs weekly.
+# Each job is independent; failures don't block others.
+#
+# Required repository secrets:
+#   KUBECONFIG_B64      base64-encoded kubeconfig
+#   ANSIBLE_VAULT_PASS  contents of ansible/.vault_pass
+#
+# Optional: set repository variable SKIP_VM_UPDATES=true to skip the apt upgrade job.
+
+name: Scheduled updates
+
+on:
+  schedule:
+    # Every Sunday at 03:00 Central (09:00 UTC)
+    - cron: '0 9 * * 0'
+  workflow_dispatch:    # allow manual trigger from Actions tab
+
+jobs:
+  check-vault:
+    name: Vault seal check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Write Ansible vault password
+        run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
+
+      - name: Install Ansible
+        run: pip install ansible --break-system-packages 2>/dev/null || pip install ansible
+
+      - name: Check Vault seal status
+        run: |
+          ansible -i ansible/inventory/hosts.yml rpi5 \
+            -m command -a "vault status" \
+            --vault-password-file ansible/.vault_pass \
+            -e "VAULT_ADDR=http://192.168.1.128:8200"
+
+  update-pihole:
+    name: Update Pi-hole
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write Ansible vault password
+        run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
+
+      - name: Install Ansible
+        run: pip install ansible --break-system-packages 2>/dev/null || pip install ansible
+
+      - name: Run Pi-hole update (secondary first, then primary)
+        run: |
+          ansible-playbook -i ansible/inventory/hosts.yml \
+            ansible/playbooks/update-pihole.yml \
+            --vault-password-file ansible/.vault_pass
+
+  lab-health-check:
+    name: Lab health check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Run lab-check.sh
+        run: bash scripts/lab-check.sh || true   # informational — don't fail the workflow
