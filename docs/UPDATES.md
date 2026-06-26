@@ -191,9 +191,12 @@ make check-vault
   4. If unsealed → confirm + print version
 ```
 
-**Vault is never auto-unsealed** — unseal keys must stay human-controlled.
-After an upgrade that triggers a restart, run `make check-vault` before assuming
+Vault auto-unseals on boot via `vault-unseal.service` on rpi5 (reads keys from an
+on-disk file, `root:root 0400`). After an upgrade that triggers a restart, the
+service fires automatically — but run `make check-vault` to confirm before assuming
 dependent services (External Secrets, anything pulling from Vault) are healthy.
+If the keys file is missing or corrupt, Vault will start sealed; unseal manually with
+`vault operator unseal`.
 
 ---
 
