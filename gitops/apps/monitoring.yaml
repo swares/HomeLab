@@ -1,0 +1,112 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    # renovate: datasource=helm registryUrl=https://prometheus-community.github.io/helm-charts depName=kube-prometheus-stack
+    targetRevision: 72.6.2
+    helm:
+      valuesObject:
+        # ---- Global ----
+        fullnameOverride: kps
+
+        # ---- Grafana ----
+        grafana:
+          enabled: true
+          adminUser: admin
+          # Password injected from Vault via ExternalSecret (grafana-admin-secret)
+          admin:
+            existingSecret: grafana-admin-secret
+            userKey: admin-user
+            passwordKey: admin-password
+          persistence:
+            enabled: true
+            storageClassName: local-path
+            size: 5Gi
+          nodeSelector:
+            kubernetes.io/hostname: h4-core
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            hosts:
+              - grafana.apps.lab.home.arpa
+            paths:
+              - /
+          sidecar:
+            dashboards:
+              enabled: true          # auto-import dashboards from ConfigMaps
+            datasources:
+              enabled: true
+          grafana.ini:
+            server:
+              root_url: "http://grafana.apps.lab.home.arpa"
+
+        # ---- Prometheus ----
+        prometheus:
+          prometheusSpec:
+            retention: 30d
+            retentionSize: "40GB"
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: local-path
+                  accessModes: [ReadWriteOnce]
+                  resources:
+                    requests:
+                      storage: 50Gi
+            nodeSelector:
+              kubernetes.io/hostname: h4-core
+            # Scrape all namespaces
+            podMonitorNamespaceSelector: {}
+            serviceMonitorNamespaceSelector: {}
+            ruleNamespaceSelector: {}
+
+        # ---- Alertmanager ----
+        alertmanager:
+          alertmanagerSpec:
+            nodeSelector:
+              kubernetes.io/hostname: h4-core
+            storage:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: local-path
+                  accessModes: [ReadWriteOnce]
+                  resources:
+                    requests:
+                      storage: 2Gi
+
+        # ---- Node exporter — runs on all nodes ----
+        prometheus-node-exporter:
+          tolerations:
+            - operator: Exists   # scrape inference nodes too
+
+        # ---- kube-state-metrics ----
+        kube-state-metrics:
+          nodeSelector:
+            kubernetes.io/hostname: h4-core
+
+        # ---- k3s doesn't expose kube-controller-manager / scheduler on standard ports ----
+        kubeControllerManager:
+          enabled: false
+        kubeScheduler:
+          enabled: false
+        kubeEtcd:
+          enabled: false
+        kubeProxy:
+          enabled: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true   # required for large CRDs
