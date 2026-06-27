@@ -21,8 +21,8 @@
 #    This preserves DNS availability throughout: if the update breaks something
 #    on dns-2, dns-1 is still serving.
 # ──────────────────────────────────────────────────────────────────────────────
-- name: Update Pi-hole — secondary first
-  hosts: "{{ groups['dns'] | selectattr('dns_role', 'equalto', 'secondary') | list }}"
+- name: Update Pi-hole — secondary first (dns-2 / opi-zero2w-1)
+  hosts: dns-2
   become: true
   tags: [pihole]
   tasks:
@@ -41,8 +41,8 @@
       ansible.builtin.debug:
         msg: "{{ pihole_up.stdout_lines }}"
 
-- name: Update Pi-hole — primary
-  hosts: "{{ groups['dns'] | selectattr('dns_role', 'equalto', 'primary') | list }}"
+- name: Update Pi-hole — primary (dns-1 / octopi)
+  hosts: dns-1
   become: true
   tags: [pihole]
   tasks:

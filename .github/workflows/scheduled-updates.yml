@@ -35,9 +35,9 @@ jobs:
       - name: Check Vault seal status
         run: |
           ansible -i ansible/inventory/hosts.yml rpi5 \
-            -m command -a "vault status" \
-            --vault-password-file ansible/.vault_pass \
-            -e "VAULT_ADDR=http://192.168.1.128:8200"
+            -m shell \
+            -a "VAULT_ADDR=http://127.0.0.1:8200 vault status" \
+            --vault-password-file ansible/.vault_pass
 
       - name: Clean up vault pass
         if: always()
