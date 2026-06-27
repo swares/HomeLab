@@ -2,9 +2,9 @@
 # update-non-apt.yml — Update applications that live outside the OS package manager.
 #
 # Covers:
-#   1. Pi-hole   (dns group)   — pihole -up, secondary first to preserve DNS
-#   2. k3s       (k3s_server + k3s_agents) — reinstall-in-place to pinned k3s_version
-#   3. Vault     (vault group) — apt-managed but needs seal-status check after restart
+#   1. Pi-hole   — pihole -up, secondary first to preserve DNS
+#   2. k3s       — reinstall-in-place to pinned k3s_version
+#   3. Vault     — apt-managed but needs seal-status check after restart
 #
 # Usage:
 #   ansible-playbook playbooks/update-non-apt.yml              # all
@@ -12,16 +12,11 @@
 #   ansible-playbook playbooks/update-non-apt.yml -t k3s       # k3s only
 #   ansible-playbook playbooks/update-non-apt.yml -t vault     # Vault only
 #   ansible-playbook playbooks/update-non-apt.yml --check      # dry-run
-#
-# The k3s_version variable lives in inventory/group_vars/all/k3s.yml and is
-# bumped automatically by Renovate when a new release is tagged in rancher/k3s.
 
-# ──────────────────────────────────────────────────────────────────────────────
-# 1. Pi-hole — update secondary DNS first, then primary
-#    This preserves DNS availability throughout: if the update breaks something
-#    on dns-2, dns-1 is still serving.
-# ──────────────────────────────────────────────────────────────────────────────
-- name: Update Pi-hole — secondary first (dns-2 / opi-zero2w-1)
+# ------------------------------------------------------------------------------
+# 1. Pi-hole — secondary first, then primary
+# ------------------------------------------------------------------------------
+- name: Update Pi-hole - secondary (dns-2 / opi-zero2w-1)
   hosts: dns-2
   become: true
   tags: [pihole]
@@ -31,17 +26,17 @@
       register: pihole_up
       changed_when: "'Everything is up to date' not in pihole_up.stdout"
 
-    - name: Confirm pihole is responding after update (secondary)
+    - name: Confirm pihole responding (secondary)
       ansible.builtin.command: pihole status
       register: pihole_status
       changed_when: false
       failed_when: "'Active' not in pihole_status.stdout"
 
-    - name: Show Pi-hole update output
+    - name: Show output
       ansible.builtin.debug:
         msg: "{{ pihole_up.stdout_lines }}"
 
-- name: Update Pi-hole — primary (dns-1 / octopi)
+- name: Update Pi-hole - primary (dns-1 / octopi)
   hosts: dns-1
   become: true
   tags: [pihole]
@@ -51,37 +46,26 @@
       register: pihole_up
       changed_when: "'Everything is up to date' not in pihole_up.stdout"
 
-    - name: Confirm pihole is responding after update (primary)
+    - name: Confirm pihole responding (primary)
       ansible.builtin.command: pihole status
       register: pihole_status
       changed_when: false
       failed_when: "'Active' not in pihole_status.stdout"
 
-    - name: Show Pi-hole update output
+    - name: Show output
       ansible.builtin.debug:
         msg: "{{ pihole_up.stdout_lines }}"
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 2. k3s — upgrade bare-metal ARM nodes to k3s_version (from group_vars/all/k3s.yml)
-#
-#    The k3s installer is idempotent: if the node is already at k3s_version it
-#    does nothing.  Servers must run before agents — the two plays enforce that.
-#    For Proxmox k3s VMs, OS patching (update-vms.yml) handles the drain cycle;
-#    the k3s binary there is also upgraded here if the VM hosts are in k3s_server
-#    or k3s_agents groups.
-# ──────────────────────────────────────────────────────────────────────────────
-- name: Upgrade k3s — servers
+# ------------------------------------------------------------------------------
+# 2. k3s upgrade
+# ------------------------------------------------------------------------------
+- name: Upgrade k3s - servers
   hosts: k3s_server
-  serial: 1          # one server at a time
+  serial: 1
   become: true
   tags: [k3s]
 
   pre_tasks:
-    - name: Show target version
-      ansible.builtin.debug:
-        msg: "Upgrading k3s on {{ inventory_hostname }} to {{ k3s_version }}"
-
     - name: Record current k3s version
       ansible.builtin.command: k3s --version
       register: k3s_current
@@ -93,16 +77,15 @@
       ansible.builtin.meta: end_host
       when: k3s_version in (k3s_current.stdout | default(''))
 
-    - name: Drain server node before upgrade
+    - name: Drain server node
       ansible.builtin.command: >
         kubectl drain {{ inventory_hostname }}
           --ignore-daemonsets
           --delete-emptydir-data
           --timeout=120s
       changed_when: true
-      # k3s server can drain itself (kubectl is available locally)
 
-    - name: Run k3s installer — server
+    - name: Run k3s installer - server
       ansible.builtin.shell: |
         curl -sfL https://get.k3s.io | \
           INSTALL_K3S_VERSION="{{ k3s_version }}" \
@@ -110,10 +93,9 @@
           sh -
       args:
         executable: /bin/bash
-      register: k3s_install
       changed_when: true
 
-    - name: Wait for k3s to be ready
+    - name: Wait for node Ready
       ansible.builtin.command: >
         kubectl wait node/{{ inventory_hostname }}
           --for=condition=Ready
@@ -124,24 +106,24 @@
       until: node_ready.rc == 0
       changed_when: false
 
-    - name: Uncordon server node
+    - name: Uncordon server
       ansible.builtin.command: kubectl uncordon {{ inventory_hostname }}
       changed_when: true
 
   post_tasks:
-    - name: Confirm upgraded version
+    - name: Confirm version
       ansible.builtin.command: k3s --version
       register: k3s_new
       changed_when: false
 
     - name: Show result
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: {{ k3s_current.stdout | default('unknown') }} → {{ k3s_new.stdout }}"
+        msg: "{{ inventory_hostname }}: {{ k3s_current.stdout | default('unknown') }} -> {{ k3s_new.stdout }}"
 
 
-- name: Upgrade k3s — agents
+- name: Upgrade k3s - agents
   hosts: k3s_agents
-  serial: 1          # one agent at a time
+  serial: 1
   become: true
   tags: [k3s]
 
@@ -157,7 +139,7 @@
       ansible.builtin.meta: end_host
       when: k3s_version in (k3s_current.stdout | default(''))
 
-    - name: Drain agent from the server
+    - name: Drain agent
       ansible.builtin.command: >
         kubectl drain {{ inventory_hostname }}
           --ignore-daemonsets
@@ -166,7 +148,7 @@
       delegate_to: "{{ groups['k3s_server'][0] }}"
       changed_when: true
 
-    - name: Run k3s installer — agent
+    - name: Run k3s installer - agent
       ansible.builtin.shell: |
         curl -sfL https://get.k3s.io | \
           INSTALL_K3S_VERSION="{{ k3s_version }}" \
@@ -175,10 +157,9 @@
           sh -
       args:
         executable: /bin/bash
-      # k3s_agent_token must be in Ansible vault or pulled from Vault at play time
       changed_when: true
 
-    - name: Wait for agent to re-join as Ready
+    - name: Wait for agent Ready
       ansible.builtin.command: >
         kubectl wait node/{{ inventory_hostname }}
           --for=condition=Ready
@@ -195,31 +176,24 @@
       delegate_to: "{{ groups['k3s_server'][0] }}"
       changed_when: true
 
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 3. Vault — apt-managed (HashiCorp repo), but needs a seal-status check.
-#
-#    Vault's binary is upgraded by the OS update playbook (update-vms.yml).
-#    This play only checks the seal state after a restart — it does NOT
-#    auto-unseal.  Vault's unseal keys must stay human-controlled.
-#    If Vault is sealed, a prominent warning is printed so you can unseal manually.
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
+# 3. Vault seal check (binary upgraded by OS update play)
+# ------------------------------------------------------------------------------
 - name: Check Vault seal status post-upgrade
   hosts: vault
   become: true
   tags: [vault]
 
   vars:
-    vault_addr: "https://127.0.0.1:8200"
+    vault_addr: "http://127.0.0.1:8200"
 
   tasks:
-    - name: Check if Vault binary was upgraded by the OS update
+    - name: Check Vault version
       ansible.builtin.command: vault version
       register: vault_version
       changed_when: false
       environment:
         VAULT_ADDR: "{{ vault_addr }}"
-        VAULT_SKIP_VERIFY: "true"
 
     - name: Check Vault service status
       ansible.builtin.systemd:
@@ -245,16 +219,15 @@
       delay: 10
       until: seal_status.status == 200
 
-    - name: WARN — Vault is SEALED (manual unseal required)
+    - name: WARN - Vault is SEALED
       ansible.builtin.debug:
         msg: |
-          ⚠  VAULT IS SEALED on {{ inventory_hostname }}.
-          Vault must be manually unsealed before services that depend on it will work.
-          Run: vault operator unseal   (with your unseal key shares)
-          Vault address: {{ vault_addr }}
+          WARNING: VAULT IS SEALED on {{ inventory_hostname }}.
+          Run: vault operator unseal (3 key shares required)
+          Address: {{ vault_addr }}
       when: seal_status.json.sealed | bool
 
-    - name: Vault is unsealed — confirm
+    - name: Vault is unsealed
       ansible.builtin.debug:
-        msg: "✓ Vault on {{ inventory_hostname }} is unsealed. Version: {{ vault_version.stdout }}"
+        msg: "Vault on {{ inventory_hostname }} is unsealed. Version: {{ vault_version.stdout }}"
       when: not (seal_status.json.sealed | bool)
