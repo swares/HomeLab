@@ -91,6 +91,7 @@
     - name: Apply all package updates
       ansible.builtin.shell: |
         export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        pacman -Rdd --noconfirm geocode-glib-common 2>/dev/null || true
         pacman -Syu --noconfirm --noprogressbar --ignore libcamera,libcamera-ipa 2>&1
       register: apt_result
       changed_when: "'there is nothing to do' not in (apt_result.stdout | lower)"
@@ -157,6 +158,7 @@
     - name: Apply all package updates (Arch Linux ARM)
       ansible.builtin.shell: |
         export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        pacman -Rdd --noconfirm geocode-glib-common 2>/dev/null || true
         pacman -Syu --noconfirm --noprogressbar --ignore libcamera,libcamera-ipa 2>&1
       register: pacman_result
       changed_when: "'there is nothing to do' not in (pacman_result.stdout | lower)"
