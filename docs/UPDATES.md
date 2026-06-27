@@ -1,257 +1,300 @@
-# Update Workflows
+# Update & Patching Coverage
 
-Zero-downtime patching for containers and VMs.  Two independent pipelines — one
-per layer — each with its own validation gate and fast rollback.
+Current state of automated and manual update paths across every layer of the lab.
+Last updated: 2026-06-27.
 
 ---
 
-## Container updates (GitLab CI + Renovate + ArgoCD)
+## Coverage at a glance
+
+| Layer | Automation | Cadence | Human gate |
+|-------|-----------|---------|------------|
+| In-cluster images & Helm charts | Renovate → GitHub PR → ArgoCD | Nightly scan; patches auto-merge | Minor/major PRs only |
+| k3s binary | Renovate opens PR; Ansible runs drain cycle | On new upstream release | Yes — review release notes, then run drain cycle |
+| Linux OS packages (apt) | Ansible `update-hosts.yml` in GitHub Actions | Weekly (Sunday 03:00 Central)¹ | H4 reboot if flagged |
+| Pi-hole application | Ansible `update-non-apt.yml -t pihole` in GitHub Actions | Weekly (Sunday 03:00 Central)¹ | No |
+| HashiCorp Vault binary | apt (HashiCorp repo) — included in OS play; seal-check play runs after | Weekly¹ | Yes — unseal manually if sealed after restart |
+| Windows OS (n150-1/2/3) | None — Windows Update runs uncontrolled | Uncontrolled | Manual if policy required |
+
+¹ GitHub Actions schedule. **LAN access caveat:** GitHub-hosted runners cannot reach
+`192.168.1.x`. Until a self-hosted runner is on H4, run these manually. See
+[Running manually](#running-manually).
+
+---
+
+## 1. In-cluster apps — Renovate + ArgoCD
+
+Renovate (hosted at [developer.mend.io](https://developer.mend.io/github/swares/HomeLab))
+scans nightly and opens GitHub PRs when upstream Helm chart versions or image tags change.
+ArgoCD reconciles automatically after merge.
 
 ```
-Renovate bot
-   └─ detects new image tag in upstream registry
-   └─ opens MR in GitLab with bumped tag in gitops/workloads/
+Renovate (nightly 2–6 AM Central)
+  └─ detects new chart or image version in gitops/workloads/
+  └─ opens PR against main
 
-GitLab CI (on MR)
-   ├─ yaml-lint       — validates all YAML under gitops/
-   └─ dry-run-apply   — oc apply --dry-run=server against the cluster
+GitHub Actions — validate.yml (on every PR and push to main)
+  ├─ yamllint
+  └─ kubectl --dry-run=server
 
-Human reviews + merges MR
-   └─ ArgoCD selfHeal picks up the change within ~30s
-   └─ Kubernetes rolling update (maxSurge=1 / maxUnavailable=0)
-
-GitLab CI (post-merge, on main)
-   └─ argocd-sync-wait
-        ├─ waits for every ArgoCD Application: Synced + Healthy
-        ├─ confirms all pods Running/Succeeded
-        └─ HTTP-probes every Route (2xx/3xx = pass; 401/403 = auth-gated, pass)
-
-        ┌─ PASS ──→ done
-        └─ FAIL ──→ auto-rollback job
-                       git revert HEAD && git push origin main
-                       ArgoCD selfHeal reconciles back within ~60s
+Human reviews + merges (or auto-merge fires for patches)
+  └─ ArgoCD selfHeal picks up change within ~30s
+  └─ Kubernetes rolling update (maxSurge=1, maxUnavailable=0)
 ```
 
-### Renovate behaviour
+### Renovate policy
 
 | Update type | Action |
 |-------------|--------|
-| Digest pin (`:release` → `:vX.Y.Z@sha256:…`) | Auto-merged immediately |
-| Patch (`v1.2.3` → `v1.2.4`) | Auto-merged |
-| Minor (`v1.2` → `v1.3`) | MR opened, human review required |
-| Major (`v1` → `v2`) | MR opened, `major-update` label, human review |
-| Immich stack (all components) | Grouped into one MR, Monday 2–4 AM window |
+| Digest pin | Auto-merge immediately |
+| Patch | Auto-merge (except Immich and k3s) |
+| Minor | PR opened, human review required |
+| Major | PR opened, `major-update` label, human review |
+| Immich stack | Grouped into one PR, Monday 2–4 AM window, no auto-merge |
+| k3s | PR opened, never auto-merge (drain cycle required) |
+| `registry.lab.home.arpa` | Disabled — Renovate cannot reach private registry |
 
-Renovate runs nightly 2–6 AM Central.  Configure in `renovate.json`.
+Config lives in `renovate.json`.
 
-### Prerequisites
+### Rollback
 
-1. Install Renovate as a GitLab CI job or self-hosted bot (`make renovate` — not yet wired; see [Renovate self-hosted docs](https://docs.renovatebot.com/self-hosted-configuration/)).
-2. **Pin image tags** — `gitops/workloads/immich/server.yaml` uses `:release` (floating). Renovate's first MR will pin it to a digest; merge that MR first.
-3. Set CI/CD variables in GitLab (Settings → CI/CD → Variables):
-
-| Variable | Description |
-|----------|-------------|
-| `ARGOCD_SERVER` | `argocd.apps.lab.home.arpa` |
-| `ARGOCD_AUTH_TOKEN` | ArgoCD API token (Protected + Masked) |
-| `KUBECONFIG_B64` | `base64 < ~/.kube/config` |
-| `GIT_PUSH_TOKEN` | GitLab project token, `write_repository` scope |
-
-4. Build or pull the CI runner image (`registry.lab.home.arpa/tools/homelab-ci`) with `oc`, `argocd`, `kubectl`, `yq`, `curl`.  Until that's ready, swap the `image:` line in `.gitlab-ci.yml` to `quay.io/openshift/origin-cli:4.15`.
+```bash
+git revert HEAD && git push origin main
+# ArgoCD selfHeal restores previous state within ~60s
+```
 
 ---
 
-## VM updates (Ansible rolling drain)
+## 2. k3s binary — Renovate PR + manual drain cycle
 
-### k3s cluster nodes
+Renovate watches `rancher/k3s` releases and bumps `k3s_version` in
+`ansible/inventory/group_vars/all/k3s.yml`. Upgrades are never auto-merged because
+they require a sequential drain/upgrade/uncordon across every node.
+
+### Process
 
 ```
-make update-vms  (or: ansible-playbook playbooks/update-vms.yml -l k3s)
+Renovate opens PR bumping k3s_version in group_vars/all/k3s.yml
 
-For each node (serial: 1 — one at a time):
+Review release notes → merge PR on GitHub
+
+On H4, run the Ansible play (handles server then agents, serial: 1):
+
+  cd ~/lab/homelab/homelab/ansible
+  ansible-playbook -i inventory/hosts.yml playbooks/update-non-apt.yml \
+    --tags k3s --vault-password-file .vault_pass
+
+  For each node (k3s_server first, then k3s_agents, one at a time):
+    1. Skip if already at target version
+    2. kubectl drain <node> --ignore-daemonsets --delete-emptydir-data --timeout=120s
+    3. curl https://get.k3s.io | INSTALL_K3S_VERSION=... K3S_URL=... K3S_TOKEN=... sh -
+    4. kubectl wait node/<node> --for=condition=Ready --timeout=180s
+    5. kubectl uncordon <node>
+```
+
+**Important — agent nodes require K3S_URL and K3S_TOKEN.** If the play fails with
+`Error: --server is required`, the installer ran without the required env vars.
+See `docs/TROUBLESHOOTING.md` → *k3s Agent Upgrade Fails*.
+
+### Rollback
+
+Re-run the play with the previous `k3s_version` value (revert the Renovate PR commit).
+
+---
+
+## 3. Linux OS packages — Ansible `update-hosts.yml`
+
+Covers all bare-metal Linux hosts. Three tiers with different reboot strategies:
+
+```
+ansible-playbook playbooks/update-hosts.yml --vault-password-file .vault_pass
+```
+
+### Tier A — H4 (odroid-nas) — no auto-reboot
+
+H4 co-locates the k3s server and NAS (smbd/nfs). A reboot briefly drops NAS services,
+so reboots are not automatic. The play runs `apt dist-upgrade` and flags if a reboot
+is needed. When flagged, schedule a maintenance window manually:
+
+```bash
+kubectl drain odroid-nas --ignore-daemonsets --delete-emptydir-data
+sudo reboot
+# wait for SSH to come back
+kubectl uncordon odroid-nas
+```
+
+### Tier B — opi5pro-1, opi5pro-2 — drain → upgrade → uncordon
+
+```
+For each agent (serial: 1 — one at a time):
   1. kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
-  2. apt-get dist-upgrade
-  3. reboot (if kernel/libc changed)
+  2. apt dist-upgrade + autoremove
+  3. reboot if /var/run/reboot-required exists
   4. kubectl wait node/<node> --for=condition=Ready --timeout=180s
   5. kubectl uncordon <node>
-  6. Verify node is schedulable
 ```
 
-Rolling serial ensures the cluster always has N-1 nodes available.  Never
-touches the H4/MicroShift node — that's a separate host-layer concern managed
-by `ansible/playbooks/microshift.yml`.
+Running `serial: 1` keeps one agent schedulable throughout.
 
-### Standalone VMs (GitLab, etc.)
+### Tier C — standalone Linux hosts — upgrade + reboot
+
+Covers: rpi5 (Vault), octopi (Pi-hole OS), opi-zero2w-2 (MQTT), xu3-1 (build agent).
 
 ```
-make update-vms  (or: -l standalone_vms)
-
-For each VM:
-  1. Proxmox snapshot → pre-update-YYYY-MM-DD
-  2. apt-get dist-upgrade
-  3. reboot (if needed)
-  4. HTTP health check (retries for health_check_timeout seconds)
-  5. PASS → done
-  6. FAIL → proxmox_snap rollback to snapshot (rescue block)
+For each host (serial: 1):
+  1. apt dist-upgrade + autoremove
+  2. reboot if /var/run/reboot-required exists
+  3. wait for SSH
 ```
 
-Rollback is instantaneous (Proxmox snapshot restore).  The snapshot is kept
-until the next update cycle — `update-vms.yml` does **not** auto-delete old
-snapshots; prune manually or add a separate cleanup play.
+No drain cycle — these hosts are not cluster nodes.
 
-### Inventory requirements
+### Tags
 
-Add these groups and variables to `ansible/inventory/hosts.yml`:
+```bash
+# All hosts
+ansible-playbook playbooks/update-hosts.yml --vault-password-file .vault_pass
 
-```yaml
-k3s:
-  children:
-    k3s_server:
-      hosts:
-        k3s-server-1:
-          ansible_host: 10.136.151.x
-    k3s_agent:
-      hosts:
-        k3s-agent-1:
-          ansible_host: 10.136.151.x
-        k3s-agent-2:
-          ansible_host: 10.136.151.x
+# Specific tier
+ansible-playbook playbooks/update-hosts.yml --tags standalone --vault-password-file .vault_pass
+ansible-playbook playbooks/update-hosts.yml --tags k3s_agents --vault-password-file .vault_pass
+ansible-playbook playbooks/update-hosts.yml --tags k3s_server --vault-password-file .vault_pass
 
-standalone_vms:
-  hosts:
-    gitlab:
-      ansible_host: 10.136.151.x
-      proxmox_vmid: 101          # match the VMID in Proxmox
-      health_check_url: https://gitlab.lab.home.arpa
+# Dry-run
+ansible-playbook playbooks/update-hosts.yml --check --vault-password-file .vault_pass
 ```
-
-Also set `proxmox_api_token_id` and `proxmox_api_token_secret` in Vault and
-pull them via the existing External Secrets Operator or an Ansible vault file.
 
 ---
 
-## Non-apt application updates (Pi-hole, k3s, Vault)
+## 4. Pi-hole application — `update-non-apt.yml -t pihole`
 
-Some services install outside the OS package manager and need their own update paths.
-
-### Pi-hole (`make update-pihole`)
-
-Pi-hole ships its own `pihole -up` updater.  The play updates the **secondary DNS
-node first**, then the primary — so DNS remains available throughout.  If the
-secondary breaks, the primary is still serving and you can intervene before
-touching it.
+Pi-hole ships its own `pihole -up` updater and is not managed by apt.
+The play updates the **secondary DNS node first** to preserve DNS availability;
+if the secondary breaks, the primary is still serving.
 
 ```
-make update-pihole
-  1. pihole -up on dns-2 (secondary)
-  2. pihole status check — fail here if broken, primary untouched
-  3. pihole -up on dns-1 (primary)
-  4. pihole status check
+1. pihole -up on dns-2 (opi-zero2w-1, secondary)
+2. pihole status — fail here if broken, primary untouched
+3. pihole -up on dns-1 (octopi, primary)
+4. pihole status
 ```
 
-### k3s (`make update-k3s`)
-
-k3s is installed via its own installer script, not apt.  The target version is
-pinned in `ansible/inventory/group_vars/all/k3s.yml` with a Renovate comment
-marker — Renovate watches `rancher/k3s` GitHub releases and opens a PR bumping
-that value when a new version is tagged.  Because k3s upgrades require a drain
-cycle, the Renovate rule **never** auto-merges — it always requires human review.
-
+```bash
+ansible-playbook -i inventory/hosts.yml playbooks/update-non-apt.yml \
+  --tags pihole --vault-password-file .vault_pass
 ```
-Renovate detects new rancher/k3s release
-   └─ opens PR bumping k3s_version in group_vars/all/k3s.yml
-
-Human reviews release notes + merges PR
-
-make update-k3s
-  For each k3s_server (serial: 1):
-    1. Skip if already at target version
-    2. kubectl drain
-    3. curl get.k3s.io | INSTALL_K3S_VERSION=... sh -
-    4. kubectl wait node/... --for=condition=Ready
-    5. kubectl uncordon
-
-  For each k3s_agent (serial: 1, after all servers done):
-    Same drain → install → ready → uncordon cycle
-```
-
-Rollback: re-run with the previous `k3s_version` value (git revert the Renovate PR).
-
-### Vault seal check (`make check-vault`)
-
-Vault is installed from the HashiCorp apt repo, so `update-vms.yml` upgrades the
-binary.  After a service restart the Vault process may start **sealed** — secrets
-backends will fail silently until unsealed.  This play checks and alerts:
-
-```
-make check-vault
-  1. Confirm vault service is running
-  2. GET /v1/sys/seal-status
-  3. If sealed → print prominent warning with unseal instructions
-  4. If unsealed → confirm + print version
-```
-
-Vault auto-unseals on boot via `vault-unseal.service` on rpi5 (reads keys from an
-on-disk file, `root:root 0400`). After an upgrade that triggers a restart, the
-service fires automatically — but run `make check-vault` to confirm before assuming
-dependent services (External Secrets, anything pulling from Vault) are healthy.
-If the keys file is missing or corrupt, Vault will start sealed; unseal manually with
-`vault operator unseal`.
 
 ---
 
-## VM base image refresh (Packer)
+## 5. HashiCorp Vault binary
 
-Baking a fresh template ensures **new** VMs start from a patched baseline —
-complementary to the Ansible patching of running VMs.
+Vault is installed from the HashiCorp apt repo (`apt.releases.hashicorp.com`), so
+the OS update play (Tier C above) upgrades its binary automatically when a new package
+is published. After any restart Vault may start **sealed** — secrets backends silently
+fail until it is unsealed.
 
-```
-make bake-image
-  1. Clone Proxmox template VMID 9000 (existing Noble cloud image)
-  2. apt-get dist-upgrade inside the VM
-  3. Harden SSH, enable unattended-upgrades, install qemu-guest-agent
-  4. Clean machine IDs, SSH host keys, cloud-init state (template hygiene)
-  5. Convert to Proxmox template named ubuntu-noble-YYYYMMDD
-  6. Output: packer/packer-manifest.json with new template VMID
-  7. Update terraform/terraform.tfvars: ubuntu_image_url or clone_vm_id
+The Ansible play checks seal status but does **not** auto-unseal:
+
+```bash
+ansible-playbook -i inventory/hosts.yml playbooks/update-non-apt.yml \
+  --tags vault --vault-password-file .vault_pass
 ```
 
-### Setup
+If sealed, unseal manually on rpi5:
 
-1. Create a Proxmox API token for Packer: `packer@pam` with VM.Clone, VM.Config.*, Datastore.AllocateSpace.
-2. Copy and fill in credentials:
-   ```
-   cp packer/proxmox.pkrvars.hcl.example packer/proxmox.pkrvars.hcl
-   # edit proxmox.pkrvars.hcl — DO NOT COMMIT (already in .gitignore)
-   ```
-3. Run `make bake-image`.
-4. After the build, note the new template VMID from `packer/packer-manifest.json`
-   and update `terraform/terraform.tfvars` so new VMs use the fresh image.
+```bash
+export VAULT_ADDR=http://192.168.1.128:8200
+vault operator unseal   # enter unseal key shares
+```
+
+Vault is configured to auto-unseal via a systemd service (`vault-unseal.service`) on
+rpi5 that reads keys from an on-disk file (`root:root 0400`). If that file is present
+and intact, the service fires automatically after a restart. Run the seal-check play
+to confirm before assuming External Secrets and dependent workloads are healthy.
+
+---
+
+## 6. Windows OS (n150-1, n150-2, n150-3)
+
+**Not currently automated.** Windows Update runs on its own schedule (or not, depending
+on local policy). The Ansible `windows-bootstrap.yml` playbook handles initial setup but
+does not run Windows Update.
+
+To run Windows Update via Ansible:
+
+```bash
+# One-off — check mode first
+ansible -i inventory/hosts.yml x86_nodes \
+  -m ansible.windows.win_updates \
+  -a "category_names=SecurityUpdates,CriticalUpdates state=searched" \
+  --vault-password-file .vault_pass
+
+# Apply
+ansible-playbook -i inventory/hosts.yml playbooks/windows-updates.yml \
+  --vault-password-file .vault_pass
+```
+
+`ansible/playbooks/windows-updates.yml` does not yet exist — create it when this
+becomes a priority. The `ansible.windows.win_updates` module handles reboot sequencing.
+
+---
+
+## Running manually
+
+The GitHub Actions schedule runs from hosted runners that cannot reach `192.168.1.x`.
+Until a self-hosted runner is registered on H4, run the weekly jobs from H4 directly:
+
+```bash
+cd ~/lab/homelab/homelab/ansible
+
+# Full OS update pass (all bare-metal Linux)
+ansible-playbook -i inventory/hosts.yml playbooks/update-hosts.yml \
+  --vault-password-file .vault_pass
+
+# Pi-hole + k3s + Vault (non-apt apps)
+ansible-playbook -i inventory/hosts.yml playbooks/update-non-apt.yml \
+  --vault-password-file .vault_pass
+
+# k3s only (after merging Renovate PR)
+ansible-playbook -i inventory/hosts.yml playbooks/update-non-apt.yml \
+  --tags k3s --vault-password-file .vault_pass
+```
+
+---
+
+## GitHub Actions schedule
+
+Defined in `.github/workflows/scheduled-updates.yml`. Runs every Sunday at 03:00
+Central (09:00 UTC). All jobs are independent; a failure in one does not block others.
+
+| Job | What it does |
+|-----|-------------|
+| `check-vault` | Checks Vault seal status via Ansible |
+| `update-pihole` | Runs `pihole -up` secondary-first via Ansible |
+| `apt-upgrade` | Runs `update-hosts.yml` against all bare-metal Linux |
+| `lab-health-check` | Runs `scripts/lab-check.sh` — pings all hosts |
+
+Manual trigger: GitHub → Actions → "Scheduled updates" → Run workflow.
 
 ---
 
 ## Rollback summary
 
-| Layer | How | Speed |
-|-------|-----|-------|
-| Container (GitOps) | `git revert HEAD && git push` → ArgoCD selfHeal | ~60s |
-| k3s binary | Re-run play with previous `k3s_version` (revert Renovate PR) | ~5 min |
-| k3s node OS | Re-drain → restore OS from backup (manual) | minutes |
-| Pi-hole | Re-run `pihole -up` (Pi-hole supports rollback via its own mechanism) | ~2 min |
+| Layer | How | Time |
+|-------|-----|------|
+| Container image / Helm chart | `git revert HEAD && git push` → ArgoCD selfHeal | ~60s |
+| k3s binary | Re-run upgrade play with previous `k3s_version` | ~5 min/node |
+| Linux OS packages | Restore from restic backup (manual) | Varies |
+| Pi-hole | `pihole -up` again (Pi-hole supports in-place rollback) | ~2 min |
 | Vault | Restart service + manual unseal | ~1 min |
-| Standalone VM | Proxmox snapshot restore (automatic in rescue block) | ~30s |
-| Base image (Packer) | Keep previous template VMID; revert `terraform.tfvars` | next `tofu apply` |
 
 ---
 
-## Suggested schedule
+## Gaps and next steps
 
-| Task | Frequency | How |
-|------|-----------|-----|
-| Container image scan | Nightly | Renovate (automatic) |
-| VM OS patches (apt) | Weekly | `make update-vms` in GitLab scheduled pipeline |
-| Pi-hole update | Weekly | `make update-pihole` in GitLab scheduled pipeline |
-| k3s binary upgrade | On Renovate PR merge | `make update-k3s` (manual trigger after PR review) |
-| Vault seal check | After any VM OS patch | `make check-vault` |
-| Base image bake | Monthly | `make bake-image` in GitLab scheduled pipeline |
-| MicroShift host patches | Monthly, maintenance window | `ansible-playbook microshift.yml` (manual) |
+| Gap | Priority | Notes |
+|-----|----------|-------|
+| Self-hosted GitHub Actions runner on H4 | High | Unlocks LAN access for all scheduled Ansible jobs |
+| Windows Update automation (`windows-updates.yml`) | Medium | `ansible.windows.win_updates` module is ready; playbook not yet written |
+| Vault TLS | Medium | Currently plain HTTP; add before exposing beyond LAN |
+| octopi OS upgrade (Raspbian Buster → Bookworm) | Medium | Prerequisite for Pi-hole v6 |
