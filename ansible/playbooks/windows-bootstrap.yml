@@ -33,6 +33,17 @@
       ansible.windows.win_shell: powercfg /h off
       changed_when: false
 
+    # ── Network: allow ICMP ping from LAN ───────────────────────────────────
+    - name: Allow ICMPv4 ping from LAN
+      ansible.windows.win_shell: |
+        $rule = Get-NetFirewallRule -DisplayName "Allow ICMPv4 ping (lab)" -ErrorAction SilentlyContinue
+        if (-not $rule) {
+          New-NetFirewallRule -DisplayName "Allow ICMPv4 ping (lab)" `
+            -Direction Inbound -Protocol ICMPv4 -IcmpType 8 `
+            -RemoteAddress 192.168.1.0/24 -Action Allow -Profile Any
+        }
+      changed_when: false
+
     # ── Verify ───────────────────────────────────────────────────────────────
     - name: Show active power scheme
       ansible.windows.win_shell: powercfg /getactivescheme
