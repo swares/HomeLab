@@ -25,7 +25,7 @@ on:
 jobs:
   check-vault:
     name: Vault seal check
-    runs-on: [self-hosted, lab]
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
 
@@ -45,7 +45,7 @@ jobs:
 
   update-pihole:
     name: Update Pi-hole
-    runs-on: [self-hosted, lab]
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
 
@@ -65,7 +65,7 @@ jobs:
 
   apt-upgrade:
     name: OS package updates (bare-metal Linux)
-    runs-on: [self-hosted, lab]
+    runs-on: [self-hosted, Linux, X64]
     if: vars.SKIP_VM_UPDATES != 'true'
     steps:
       - uses: actions/checkout@v4
@@ -100,7 +100,7 @@ jobs:
 
   lab-health-check:
     name: Lab health check
-    runs-on: [self-hosted, lab]
+    runs-on: [self-hosted, Linux, X64]
     steps:
       - uses: actions/checkout@v4
 

@@ -29,7 +29,7 @@
     runner_version: "2.325.0"   # check https://github.com/actions/runner/releases for latest
     runner_repo: "https://github.com/swares/HomeLab"
     runner_name: "h4-core"
-    runner_labels: "self-hosted,linux,x64,lab"
+    runner_labels: "self-hosted,Linux,X64"
 
   tasks:
 
