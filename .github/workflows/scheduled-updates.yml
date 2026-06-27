@@ -34,9 +34,10 @@ jobs:
 
       - name: Check Vault seal status
         run: |
+          # Use curl directly — avoids VAULT_ADDR env propagation issues with vault CLI
           ansible -i ansible/inventory/hosts.yml rpi5 \
             -m shell \
-            -a "VAULT_ADDR=http://127.0.0.1:8200 vault status" \
+            -a "curl -sf http://127.0.0.1:8200/v1/sys/seal-status" \
             --vault-password-file ansible/.vault_pass
 
       - name: Clean up vault pass
