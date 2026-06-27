@@ -89,12 +89,11 @@
       changed_when: true
 
     - name: Apply all package updates
-      ansible.builtin.apt:
-        upgrade: dist
-        update_cache: true
-        autoremove: true
-        autoclean: true
+      ansible.builtin.shell: |
+        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        apt-get update -qq && apt-get dist-upgrade -y && apt-get autoremove -y && apt-get autoclean -y
       register: apt_result
+      changed_when: "'0 upgraded' not in apt_result.stdout"
 
     - name: Check if reboot is required
       ansible.builtin.stat:
