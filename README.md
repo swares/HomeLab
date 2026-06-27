@@ -69,7 +69,9 @@ mirrors) keeps data safe.
 | Orange Pi 5 Pro #1 | opi5pro-1 | 192.168.1.168 | k3s agent, Ollama inference |
 | Orange Pi 5 Pro #2 | opi5pro-2 | 192.168.1.172 | k3s agent, Ollama-2 inference |
 | Raspberry Pi 5 | rpi5 | 192.168.1.128 | Vault |
-| N150 mini PC #3 | n150-3 | 192.168.1.176 | Windows HTPC (WinRM managed) |
+| N150 mini PC #1 | n150-1 | 192.168.1.9   | Windows (WinRM managed, sleep disabled) |
+| N150 mini PC #2 | n150-2 | 192.168.1.171 | Windows (WinRM managed, sleep disabled) |
+| N150 mini PC #3 | n150-3 | 192.168.1.176 | Windows HTPC (WinRM managed, sleep disabled) |
 | OPi Zero 2W #2 | opi-zero2w-2 | 192.168.1.188 | MQTT broker |
 | OctoPi (RPi 3B #2) | octopi | 192.168.1.148 | Pi-hole DNS (needs Bookworm upgrade) |
 | Odroid XU3 | xu3-1 | 192.168.1.64 | Build agent (flagged unstable) |
@@ -140,7 +142,6 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the full security model.
 - [ ] Move photo library (~1.3TB) into `/mnt/cold-8t/immich` so Immich can serve it
 
 ### Blocked on physical access
-- [ ] Cable n150-1 (192.168.1.10) and n150-2 (192.168.1.171), then run `enable-winrm.ps1` + `windows-bootstrap.yml`
 - [ ] Find rpi4b (or replacement) → bootstrap OpenLDAP
 
 ### Longer term
