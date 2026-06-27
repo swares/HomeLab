@@ -90,6 +90,13 @@ spec:
           nodeSelector:
             kubernetes.io/hostname: odroid-nas
 
+        # ---- Admission webhooks — disabled (homelab; TLS secret bootstrap unreliable on k3s) ----
+        prometheusOperator:
+          admissionWebhooks:
+            enabled: false
+          tls:
+            enabled: false
+
         # ---- k3s doesn't expose kube-controller-manager / scheduler on standard ports ----
         kubeControllerManager:
           enabled: false
