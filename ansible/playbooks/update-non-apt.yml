@@ -16,29 +16,7 @@
 # ------------------------------------------------------------------------------
 # 1. Pi-hole — secondary first, then primary
 # ------------------------------------------------------------------------------
-- name: Update Pi-hole - secondary (dns-2 / opi-zero2w-1)
-  hosts: dns-2
-  become: true
-  tags: [pihole]
-  tasks:
-    - name: Run pihole -up (secondary)
-      ansible.builtin.shell: |
-        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        pihole -up
-      register: pihole_up
-      changed_when: "'Everything is up to date' not in pihole_up.stdout"
-
-    - name: Confirm pihole responding (secondary)
-      ansible.builtin.shell: |
-        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        pihole status
-      register: pihole_status
-      changed_when: false
-      failed_when: "'Active' not in pihole_status.stdout"
-
-    - name: Show output
-      ansible.builtin.debug:
-        msg: "{{ pihole_up.stdout_lines }}"
+# dns-2 (opi-zero2w-1) runs dnsmasq, not pi-hole — no pihole update needed there
 
 - name: Update Pi-hole - primary (dns-1 / octopi)
   hosts: dns-1
