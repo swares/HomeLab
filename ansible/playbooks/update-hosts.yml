@@ -128,7 +128,7 @@
       ansible.builtin.debug:
         msg: >
           {{ inventory_hostname }}: packages changed={{ apt_result.changed }},
-          rebooted={{ reboot_flag.stat.exists }}.
+          rebooted={{ reboot_flag.stat.exists or apt_result.changed }}.
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -147,6 +147,11 @@
     reboot_timeout: 180
 
   tasks:
+    - name: Ensure python3-apt is installed (required on Armbian/minimal images)
+      ansible.builtin.raw: |
+        apt-get install -y python3-apt 2>/dev/null || true
+      changed_when: false
+
     - name: Apply all package updates
       ansible.builtin.apt:
         upgrade: dist
@@ -170,4 +175,4 @@
       ansible.builtin.debug:
         msg: >
           {{ inventory_hostname }}: packages changed={{ apt_result.changed }},
-          rebooted={{ reboot_flag.stat.exists }}.
+          rebooted={{ reboot_flag.stat.exists or apt_result.changed }}.
