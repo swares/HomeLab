@@ -313,23 +313,38 @@ ansible-playbook -i inventory/hosts.yml playbooks/update-non-apt.yml --vault-pas
 
 ---
 
-## external-secrets: `no kind is registered for version external-secrets.io/v1beta1`
+## external-secrets: resources OutOfSync / `v1` API not found
 
 **Symptom**  
-ExternalSecret or ClusterSecretStore resources show `unknown kind` errors after an ESO upgrade.
+ArgoCD shows immich or monitoring-config OutOfSync. Sync error:
+`The Kubernetes API could not find version "v1" of external-secrets.io/ExternalSecret`
 
 **Cause**  
-external-secrets operator v0.10+ removed the `v1beta1` API; all resources must use `v1`.
+ESO does not have a `v1` API. The stable served versions are `v1alpha1` and `v1beta1`.
+`v1beta1` is correct for ESO v0.5.x through the current release (v0.14.x+).
 
 **Fix**  
-Update `apiVersion` in all ESO manifests:
+Use `v1beta1` in all ESO manifests — not `v1`:
 ```yaml
-# Before
 apiVersion: external-secrets.io/v1beta1
-
-# After
-apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+```
+```yaml
+apiVersion: external-secrets.io/v1beta1
+kind: ClusterSecretStore
 ```
 
-Files to update: `gitops/workloads/immich/external-secret.yaml`,
+Files: `gitops/workloads/immich/external-secret.yaml`,
 `gitops/workloads/monitoring/external-secret.yaml`.
+
+**CRD not updating (installCRDs vs crds.create)**  
+ESO Helm chart v0.10+ renamed the CRD install key. Use `crds.create: true`, not
+`installCRDs: true`. If CRDs are stale, apply the bundle directly:
+```bash
+kubectl apply -f https://raw.githubusercontent.com/external-secrets/external-secrets/v0.14.4/deploy/crds/bundle.yaml
+```
+CRDs should show `v1alpha1 v1beta1` after this. Verify:
+```bash
+kubectl get crd externalsecrets.external-secrets.io \
+  -o jsonpath='{range .spec.versions[*]}{.name}{"\n"}{end}'
+```
