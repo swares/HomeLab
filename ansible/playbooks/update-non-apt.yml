@@ -22,12 +22,16 @@
   tags: [pihole]
   tasks:
     - name: Run pihole -up (secondary)
-      ansible.builtin.command: pihole -up
+      ansible.builtin.shell: |
+        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        pihole -up
       register: pihole_up
       changed_when: "'Everything is up to date' not in pihole_up.stdout"
 
     - name: Confirm pihole responding (secondary)
-      ansible.builtin.command: pihole status
+      ansible.builtin.shell: |
+        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        pihole status
       register: pihole_status
       changed_when: false
       failed_when: "'Active' not in pihole_status.stdout"
@@ -42,12 +46,16 @@
   tags: [pihole]
   tasks:
     - name: Run pihole -up (primary)
-      ansible.builtin.command: pihole -up
+      ansible.builtin.shell: |
+        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        pihole -up
       register: pihole_up
       changed_when: "'Everything is up to date' not in pihole_up.stdout"
 
     - name: Confirm pihole responding (primary)
-      ansible.builtin.command: pihole status
+      ansible.builtin.shell: |
+        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        pihole status
       register: pihole_status
       changed_when: false
       failed_when: "'Active' not in pihole_status.stdout"
