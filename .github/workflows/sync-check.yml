@@ -14,47 +14,17 @@ on:
   push:
     branches: [main]
 
+# NOTE: ArgoCD sync check requires LAN access — GitHub hosted runners cannot reach
+# argocd.apps.lab.home.arpa. ArgoCD's own selfHeal + health status is the source
+# of truth. Run validate-rollout.sh manually from H4 after significant changes:
+#   bash scripts/validate-rollout.sh
 jobs:
   sync-check:
-    name: ArgoCD sync + health probe
+    name: Post-merge notice
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 2
-          token: ${{ secrets.GIT_PUSH_TOKEN }}
-
-      - name: Set up kubeconfig
+      - name: Merged to main
         run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
-          chmod 600 ~/.kube/config
-
-      - name: Install kubectl + argocd CLI
-        run: |
-          # kubectl
-          curl -sLO "https://dl.k8s.io/release/$(curl -sL https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
-          chmod +x kubectl && sudo mv kubectl /usr/local/bin/
-          # argocd
-          curl -sSL -o /usr/local/bin/argocd \
-            https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
-          chmod +x /usr/local/bin/argocd
-
-      - name: Wait for all ArgoCD apps Synced + Healthy
-        env:
-          ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
-          ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
-        run: bash scripts/validate-rollout.sh
-
-      # Rollback disabled until sync-check is stable — re-enable once green
-      # - name: Rollback on failure
-      #   if: failure()
-      #   env:
-      #     GIT_PUSH_TOKEN: ${{ secrets.GIT_PUSH_TOKEN }}
-      #   run: |
-      #     git config user.email "ci@lab.home.arpa"
-      #     git config user.name  "HomeLab CI"
-      #     git remote set-url origin \
-      #       "https://swares:${GIT_PUSH_TOKEN}@github.com/swares/HomeLab.git"
-      #     ./scripts/rollback-app.sh
-      #     echo "Rolled back — ArgoCD will reconcile within ~60s."
+          echo "Merged to main — ArgoCD will reconcile within ~30s."
+          echo "Check health at https://argocd.apps.lab.home.arpa"
+          echo "Or run: bash scripts/validate-rollout.sh from H4"
