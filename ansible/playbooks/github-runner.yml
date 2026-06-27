@@ -1,0 +1,127 @@
+---
+# github-runner.yml — Register H4 as a self-hosted GitHub Actions runner.
+#
+# This gives GitHub Actions LAN access so the weekly scheduled jobs
+# (apt-upgrade, check-vault, update-pihole) can reach 192.168.1.x hosts.
+#
+# Prerequisites:
+#   1. Go to: https://github.com/swares/HomeLab/settings/actions/runners/new
+#   2. Select: Linux / x64
+#   3. Copy the registration token shown on that page (valid for 1 hour)
+#   4. Pass it as: -e runner_token=<token>
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/github-runner.yml \
+#     -e runner_token=<token-from-github> --vault-password-file .vault_pass
+#
+# After registration the runner appears in:
+#   https://github.com/swares/HomeLab/settings/actions/runners
+#
+# To use it in a workflow, add to any job:
+#   runs-on: self-hosted
+
+- name: Register H4 as GitHub Actions self-hosted runner
+  hosts: h4-core
+  become: true
+  vars:
+    runner_user: github-runner
+    runner_home: /opt/github-runner
+    runner_version: "2.325.0"   # check https://github.com/actions/runner/releases for latest
+    runner_repo: "https://github.com/swares/HomeLab"
+    runner_name: "h4-core"
+    runner_labels: "self-hosted,linux,x64,lab"
+
+  tasks:
+
+    - name: Create runner service account
+      ansible.builtin.user:
+        name: "{{ runner_user }}"
+        home: "{{ runner_home }}"
+        shell: /bin/bash
+        system: true
+        create_home: true
+
+    - name: Create runner directory
+      ansible.builtin.file:
+        path: "{{ runner_home }}"
+        state: directory
+        owner: "{{ runner_user }}"
+        group: "{{ runner_user }}"
+        mode: "0755"
+
+    - name: Download runner tarball
+      ansible.builtin.get_url:
+        url: "https://github.com/actions/runner/releases/download/v{{ runner_version }}/actions-runner-linux-x64-{{ runner_version }}.tar.gz"
+        dest: "/tmp/actions-runner.tar.gz"
+        mode: "0644"
+
+    - name: Extract runner
+      ansible.builtin.unarchive:
+        src: /tmp/actions-runner.tar.gz
+        dest: "{{ runner_home }}"
+        remote_src: true
+        owner: "{{ runner_user }}"
+        group: "{{ runner_user }}"
+
+    - name: Install runner dependencies
+      ansible.builtin.shell:
+        cmd: "{{ runner_home }}/bin/installdependencies.sh"
+        creates: /usr/lib/x86_64-linux-gnu/libssl.so.1.1
+      failed_when: false   # installdependencies.sh may error on already-installed deps
+
+    - name: Configure runner
+      ansible.builtin.shell:
+        cmd: >
+          sudo -u {{ runner_user }} {{ runner_home }}/config.sh
+          --url {{ runner_repo }}
+          --token {{ runner_token }}
+          --name {{ runner_name }}
+          --labels "{{ runner_labels }}"
+          --work _work
+          --unattended
+          --replace
+        chdir: "{{ runner_home }}"
+      no_log: true   # token must not appear in logs
+
+    - name: Install runner as systemd service
+      ansible.builtin.shell:
+        cmd: "{{ runner_home }}/svc.sh install {{ runner_user }}"
+        chdir: "{{ runner_home }}"
+      args:
+        creates: /etc/systemd/system/actions.runner.*.service
+
+    - name: Start runner service
+      ansible.builtin.shell:
+        cmd: "{{ runner_home }}/svc.sh start"
+        chdir: "{{ runner_home }}"
+
+    - name: Confirm runner service is active
+      ansible.builtin.shell:
+        cmd: "{{ runner_home }}/svc.sh status"
+        chdir: "{{ runner_home }}"
+      register: runner_status
+      changed_when: false
+
+    - name: Show runner status
+      ansible.builtin.debug:
+        msg: "{{ runner_status.stdout_lines }}"
+
+    - name: Add runner user to sudoers (needed for Ansible plays run from Actions)
+      ansible.builtin.copy:
+        dest: /etc/sudoers.d/github-runner
+        content: "{{ runner_user }} ALL=(ALL) NOPASSWD: ALL\n"
+        owner: root
+        group: root
+        mode: "0440"
+        validate: visudo -cf %s
+
+    - name: Done
+      ansible.builtin.debug:
+        msg:
+          - "Runner registered and running."
+          - "Check: https://github.com/swares/HomeLab/settings/actions/runners"
+          - ""
+          - "To use in a workflow job, set:"
+          - "  runs-on: self-hosted"
+          - "  # or more specific:"
+          - "  runs-on: [self-hosted, lab]"

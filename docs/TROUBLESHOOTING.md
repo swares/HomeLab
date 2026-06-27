@@ -348,3 +348,127 @@ CRDs should show `v1alpha1 v1beta1` after this. Verify:
 kubectl get crd externalsecrets.external-secrets.io \
   -o jsonpath='{range .spec.versions[*]}{.name}{"\n"}{end}'
 ```
+
+---
+
+## rpi5 SD Card Failure (Vault Host)
+
+**Symptoms**
+- `Bus error` when running vault CLI commands
+- `dmesg` shows sustained I/O errors on `mmcblk0`:
+  ```
+  I/O error, dev mmcblk0, sector XXXXXXXX op 0x0:(READ) ...
+  ```
+- SSH `Connection reset by peer` (SSH daemon files unreadable)
+- Vault sealed after reboot and won't stay up
+
+**Cause**  
+SD cards have limited write endurance and fail without warning. `mmcblk0` is the SD
+card on Raspberry Pi. I/O errors across many different sectors = card is dying.
+
+**Immediate response (while the card is still partially readable)**
+```bash
+# 1. Do NOT reboot rpi5 — it may not come back
+# 2. Back up Vault raft data
+ssh swares@192.168.1.128
+sudo tar czf /tmp/vault-backup-$(date +%Y%m%d).tar.gz /opt/vault/data
+
+# 3. Copy to cold storage on H4
+mkdir -p /mnt/cold-8t/backups
+scp swares@192.168.1.128:/tmp/vault-backup-*.tar.gz swares@192.168.1.160:/mnt/cold-8t/backups/
+
+# 4. Dump all secrets as JSON while Vault is still unsealed
+export VAULT_ADDR=http://127.0.0.1:8200
+export VAULT_TOKEN=<root-token>
+vault kv get -format=json secret/lab/immich > /tmp/vault-immich.json
+vault kv get -format=json secret/lab/grafana > /tmp/vault-grafana.json
+vault kv get -format=json secret/lab/argocd-deploy-key > /tmp/vault-argocd.json
+scp swares@192.168.1.128:/tmp/vault-*.json swares@192.168.1.160:/mnt/cold-8t/backups/
+
+# 5. Lock down the plaintext JSON files
+chmod 600 /mnt/cold-8t/backups/vault-*.json
+```
+
+**Recovery — flash new SD card**
+1. Flash Raspberry Pi OS Bookworm Lite 64-bit with Pi Imager
+   - Pre-configure: hostname `RPI-5--01`, user `swares`, SSH key, no WiFi
+2. Boot, confirm SSH: `ssh swares@192.168.1.128`
+3. Bootstrap then restore:
+   ```bash
+   cd ~/lab/homelab/homelab/ansible
+
+   ansible-playbook -i inventory/hosts.yml playbooks/bootstrap.yml \
+     --limit rpi5 -k -K --vault-password-file .vault_pass
+
+   ansible-playbook -i inventory/hosts.yml playbooks/vault-restore.yml \
+     --vault-password-file .vault_pass
+   ```
+4. Unseal Vault (3 key shares):
+   ```bash
+   ssh swares@192.168.1.128
+   export VAULT_ADDR=http://127.0.0.1:8200
+   vault operator unseal   # 1/3
+   vault operator unseal   # 2/3
+   vault operator unseal   # 3/3
+   ```
+5. Populate auto-unseal keys file:
+   ```bash
+   sudo nano /etc/vault.d/unseal-keys   # one key share per line, 3 lines
+   sudo chmod 400 /etc/vault.d/unseal-keys
+   sudo systemctl start vault-unseal
+   ```
+6. Delete plaintext backups from cold storage:
+   ```bash
+   rm /mnt/cold-8t/backups/vault-*.json
+   # Keep the tar — it's encrypted raft data, not plaintext
+   ```
+7. Verify ESO recovered on H4:
+   ```bash
+   kubectl get externalsecret -A
+   kubectl get applications -n argocd
+   ```
+
+**Prevention**  
+Consider moving Vault to a host with more durable storage (USB SSD, NVMe). SD cards
+are not suitable for write-heavy workloads like Vault's raft backend.
+
+---
+
+## Vault Sealed After Reboot
+
+**Symptom**  
+ExternalSecrets show `SecretSyncedError`. ClusterSecretStore reports:
+```
+invalid vault credentials: Code: 503. Errors: * Vault is sealed
+```
+
+**Cause**  
+Vault seals itself on every restart. The auto-unseal service (`vault-unseal.service`)
+reads key shares from `/etc/vault.d/unseal-keys` — if that file is missing, empty,
+or the service failed, Vault stays sealed.
+
+**Fix**
+```bash
+ssh swares@192.168.1.128
+export VAULT_ADDR=http://127.0.0.1:8200
+
+# Check if auto-unseal service ran
+sudo systemctl status vault-unseal
+
+# Unseal manually (need 3 of 5 key shares)
+vault operator unseal   # 1/3
+vault operator unseal   # 2/3
+vault operator unseal   # 3/3
+
+# Confirm
+vault status | grep Sealed
+# Sealed  false
+```
+
+After unsealing, ESO may take up to a minute to recover. If it doesn't:
+```bash
+kubectl rollout restart deployment external-secrets -n external-secrets
+```
+
+**Note:** `vault operator unseal` needs `VAULT_ADDR` set and must be run on rpi5,
+not H4. Running it on H4 gives `connection refused` on `127.0.0.1:8200`.

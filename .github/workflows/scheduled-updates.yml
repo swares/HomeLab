@@ -1,17 +1,18 @@
 # Scheduled maintenance jobs — runs weekly.
 # Each job is independent; failures don't block others.
 #
+# Runner strategy:
+#   - Ansible jobs (check-vault, update-pihole, apt-upgrade) run on the self-hosted
+#     runner on H4 so they have LAN access to reach 192.168.1.x hosts.
+#     Register H4: ansible-playbook playbooks/github-runner.yml -e runner_token=<token>
+#   - lab-health-check also runs on self-hosted (needs kubectl + LAN DNS)
+#
 # Required repository secrets:
-#   KUBECONFIG_B64      base64-encoded kubeconfig
 #   ANSIBLE_VAULT_PASS  contents of ansible/.vault_pass
+#   KUBECONFIG_B64      base64-encoded kubeconfig (used by lab-health-check)
 #
-# Optional: set repository variable SKIP_VM_UPDATES=true to skip the apt upgrade job.
-#
-# NOTE: Ansible jobs (apt-upgrade, check-vault, update-pihole) require LAN SSH access.
-# GitHub-hosted runners cannot reach 192.168.1.x — these jobs will fail unless run from
-# a self-hosted runner on H4. Manual alternative from H4:
-#   cd ~/lab/homelab/homelab/ansible
-#   ansible-playbook -i inventory/hosts.yml playbooks/update-hosts.yml --vault-password-file .vault_pass
+# Optional repository variable:
+#   SKIP_VM_UPDATES=true  skip the apt-upgrade job
 
 name: Scheduled updates
 
@@ -24,21 +25,12 @@ on:
 jobs:
   check-vault:
     name: Vault seal check
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, lab]
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up kubeconfig
-        run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
-          chmod 600 ~/.kube/config
-
       - name: Write Ansible vault password
         run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
-
-      - name: Install Ansible
-        run: pip install ansible --break-system-packages 2>/dev/null || pip install ansible
 
       - name: Check Vault seal status
         run: |
@@ -47,27 +39,33 @@ jobs:
             --vault-password-file ansible/.vault_pass \
             -e "VAULT_ADDR=http://192.168.1.128:8200"
 
+      - name: Clean up vault pass
+        if: always()
+        run: rm -f ansible/.vault_pass
+
   update-pihole:
     name: Update Pi-hole
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, lab]
     steps:
       - uses: actions/checkout@v4
 
       - name: Write Ansible vault password
         run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
 
-      - name: Install Ansible
-        run: pip install ansible --break-system-packages 2>/dev/null || pip install ansible
-
       - name: Run Pi-hole update (secondary first, then primary)
         run: |
           ansible-playbook -i ansible/inventory/hosts.yml \
-            ansible/playbooks/update-pihole.yml \
+            ansible/playbooks/update-non-apt.yml \
+            --tags pihole \
             --vault-password-file ansible/.vault_pass
+
+      - name: Clean up vault pass
+        if: always()
+        run: rm -f ansible/.vault_pass
 
   apt-upgrade:
     name: OS package updates (bare-metal Linux)
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, lab]
     if: vars.SKIP_VM_UPDATES != 'true'
     steps:
       - uses: actions/checkout@v4
@@ -75,36 +73,34 @@ jobs:
       - name: Write Ansible vault password
         run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
 
-      - name: Install Ansible + windows collections
-        run: pip install ansible --break-system-packages 2>/dev/null || pip install ansible
-
       - name: Patch standalone hosts (rpi5, octopi, zero2w, xu3)
         run: |
           ansible-playbook -i ansible/inventory/hosts.yml \
             ansible/playbooks/update-hosts.yml \
-            --vault-password-file ansible/.vault_pass \
             --tags standalone \
-            --timeout 60 || true   # informational — LAN unreachable from hosted runners
+            --vault-password-file ansible/.vault_pass
 
       - name: Patch k3s agents (opi5pro-1, opi5pro-2)
         run: |
           ansible-playbook -i ansible/inventory/hosts.yml \
             ansible/playbooks/update-hosts.yml \
-            --vault-password-file ansible/.vault_pass \
             --tags k3s_agents \
-            --timeout 60 || true
+            --vault-password-file ansible/.vault_pass
 
-      - name: Patch k3s server (H4 — no auto-reboot, flags if reboot needed)
+      - name: Patch k3s server (H4 — flags reboot if needed, no auto-reboot)
         run: |
           ansible-playbook -i ansible/inventory/hosts.yml \
             ansible/playbooks/update-hosts.yml \
-            --vault-password-file ansible/.vault_pass \
             --tags k3s_server \
-            --timeout 60 || true
+            --vault-password-file ansible/.vault_pass
+
+      - name: Clean up vault pass
+        if: always()
+        run: rm -f ansible/.vault_pass
 
   lab-health-check:
     name: Lab health check
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, lab]
     steps:
       - uses: actions/checkout@v4
 
@@ -116,3 +112,7 @@ jobs:
 
       - name: Run lab-check.sh
         run: bash scripts/lab-check.sh || true   # informational — don't fail the workflow
+
+      - name: Clean up kubeconfig
+        if: always()
+        run: rm -f ~/.kube/config

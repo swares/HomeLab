@@ -5,6 +5,7 @@ H4 (`ssh swares@192.168.1.160`) or any host with a valid kubeconfig.
 
 Jump to:
 - [Cluster health check](#cluster-health-check)
+- [Register self-hosted GitHub Actions runner](#register-self-hosted-github-actions-runner)
 - [k3s upgrade](#k3s-upgrade)
 - [OS package updates](#os-package-updates)
 - [Add a new workload](#add-a-new-workload)
@@ -515,6 +516,44 @@ Verify after:
 ```bash
 ansible -i inventory/hosts.yml dns -m command \
   -a "pihole version" --vault-password-file .vault_pass
+```
+
+---
+
+## Register self-hosted GitHub Actions runner
+
+Required so the weekly scheduled Ansible jobs (apt-upgrade, check-vault, update-pihole,
+lab-health-check) can reach LAN hosts at `192.168.1.x`.
+
+### 1. Get a registration token from GitHub
+
+Go to: `https://github.com/swares/HomeLab/settings/actions/runners/new`
+Select: Linux / x64. Copy the token shown (valid for 1 hour).
+
+### 2. Run the Ansible playbook
+
+```bash
+cd ~/lab/homelab/homelab/ansible
+ansible-playbook -i inventory/hosts.yml playbooks/github-runner.yml \
+  -e runner_token=<token-from-github> --vault-password-file .vault_pass
+```
+
+### 3. Verify
+
+Runner should appear at:
+`https://github.com/swares/HomeLab/settings/actions/runners`
+
+Status should be **Idle** (green). Trigger the scheduled workflow manually to confirm:
+`https://github.com/swares/HomeLab/actions/workflows/scheduled-updates.yml`
+→ Run workflow.
+
+### Re-register after H4 reboot
+
+The runner service starts automatically on boot (`svc.sh install` sets up systemd).
+If it shows Offline, check:
+```bash
+sudo systemctl status "actions.runner.*"
+sudo systemctl start "actions.runner.*"
 ```
 
 ---

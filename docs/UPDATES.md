@@ -16,9 +16,13 @@ Last updated: 2026-06-27.
 | HashiCorp Vault binary | apt (HashiCorp repo) — included in OS play; seal-check play runs after | Weekly¹ | Yes — unseal manually if sealed after restart |
 | Windows OS (n150-1/2/3) | None — Windows Update runs uncontrolled | Uncontrolled | Manual if policy required |
 
-¹ GitHub Actions schedule. **LAN access caveat:** GitHub-hosted runners cannot reach
-`192.168.1.x`. Until a self-hosted runner is on H4, run these manually. See
-[Running manually](#running-manually).
+¹ GitHub Actions schedule runs on the **self-hosted runner on H4** (`runs-on: [self-hosted, lab]`)
+which has direct LAN access. Register the runner:
+```bash
+ansible-playbook -i ansible/inventory/hosts.yml playbooks/github-runner.yml \
+  -e runner_token=<token-from-github> --vault-password-file ansible/.vault_pass
+```
+Get the token at: Settings → Actions → Runners → New self-hosted runner.
 
 ---
 
@@ -294,7 +298,6 @@ Manual trigger: GitHub → Actions → "Scheduled updates" → Run workflow.
 
 | Gap | Priority | Notes |
 |-----|----------|-------|
-| Self-hosted GitHub Actions runner on H4 | High | Unlocks LAN access for all scheduled Ansible jobs |
 | Windows Update automation (`windows-updates.yml`) | Medium | `ansible.windows.win_updates` module is ready; playbook not yet written |
 | Vault TLS | Medium | Currently plain HTTP; add before exposing beyond LAN |
 | octopi OS upgrade (Raspbian Buster → Bookworm) | Medium | Prerequisite for Pi-hole v6 |
