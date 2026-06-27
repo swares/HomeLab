@@ -6,6 +6,12 @@
 #   ANSIBLE_VAULT_PASS  contents of ansible/.vault_pass
 #
 # Optional: set repository variable SKIP_VM_UPDATES=true to skip the apt upgrade job.
+#
+# NOTE: Ansible jobs (apt-upgrade, check-vault, update-pihole) require LAN SSH access.
+# GitHub-hosted runners cannot reach 192.168.1.x — these jobs will fail unless run from
+# a self-hosted runner on H4. Manual alternative from H4:
+#   cd ~/lab/homelab/homelab/ansible
+#   ansible-playbook -i inventory/hosts.yml playbooks/update-hosts.yml --vault-password-file .vault_pass
 
 name: Scheduled updates
 
@@ -20,7 +26,7 @@ jobs:
     name: Vault seal check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
       - name: Set up kubeconfig
         run: |
@@ -45,7 +51,7 @@ jobs:
     name: Update Pi-hole
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
       - name: Write Ansible vault password
         run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
@@ -59,11 +65,48 @@ jobs:
             ansible/playbooks/update-pihole.yml \
             --vault-password-file ansible/.vault_pass
 
+  apt-upgrade:
+    name: OS package updates (bare-metal Linux)
+    runs-on: ubuntu-latest
+    if: vars.SKIP_VM_UPDATES != 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write Ansible vault password
+        run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
+
+      - name: Install Ansible + windows collections
+        run: pip install ansible --break-system-packages 2>/dev/null || pip install ansible
+
+      - name: Patch standalone hosts (rpi5, octopi, zero2w, xu3)
+        run: |
+          ansible-playbook -i ansible/inventory/hosts.yml \
+            ansible/playbooks/update-hosts.yml \
+            --vault-password-file ansible/.vault_pass \
+            --tags standalone \
+            --timeout 60 || true   # informational — LAN unreachable from hosted runners
+
+      - name: Patch k3s agents (opi5pro-1, opi5pro-2)
+        run: |
+          ansible-playbook -i ansible/inventory/hosts.yml \
+            ansible/playbooks/update-hosts.yml \
+            --vault-password-file ansible/.vault_pass \
+            --tags k3s_agents \
+            --timeout 60 || true
+
+      - name: Patch k3s server (H4 — no auto-reboot, flags if reboot needed)
+        run: |
+          ansible-playbook -i ansible/inventory/hosts.yml \
+            ansible/playbooks/update-hosts.yml \
+            --vault-password-file ansible/.vault_pass \
+            --tags k3s_server \
+            --timeout 60 || true
+
   lab-health-check:
     name: Lab health check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
       - name: Set up kubeconfig
         run: |

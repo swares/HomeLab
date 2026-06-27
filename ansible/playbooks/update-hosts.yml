@@ -1,0 +1,173 @@
+---
+# update-hosts.yml — OS package updates for bare-metal lab hosts.
+#
+# Strategy by role:
+#   k3s nodes (opi5pro-1/2)  → drain → apt upgrade → reboot if needed → uncordon
+#   k3s server (H4/odroid-nas) → apt upgrade, NO auto-reboot (NAS is co-located;
+#                                 flag reboot-required so you can schedule it manually)
+#   standalone Linux hosts    → apt upgrade → reboot if needed
+#
+# Usage:
+#   ansible-playbook playbooks/update-hosts.yml                  # all hosts
+#   ansible-playbook playbooks/update-hosts.yml -l k3s_agents    # opi5pro nodes only
+#   ansible-playbook playbooks/update-hosts.yml -l k3s_server    # H4 only (no reboot)
+#   ansible-playbook playbooks/update-hosts.yml -l standalone    # rpi5, octopi, etc.
+#   ansible-playbook playbooks/update-hosts.yml --check          # dry-run
+#
+# NOTE: this playbook requires LAN SSH access. Run from H4 or a self-hosted runner.
+#   On H4: ansible-playbook -i inventory/hosts.yml playbooks/update-hosts.yml \
+#             --vault-password-file .vault_pass
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 1. k3s SERVER (H4 / odroid-nas) — patch without auto-reboot.
+#    NAS services (smbd, nfs) are co-located here. Rebooting disrupts NAS.
+#    This play upgrades packages and flags if a reboot is needed; you schedule
+#    the reboot manually during a maintenance window.
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Patch k3s server — apt upgrade, no auto-reboot
+  hosts: h4-core
+  become: true
+  gather_facts: true
+  tags: [k3s_server, k3s]
+
+  tasks:
+    - name: Update apt cache and apply all upgrades
+      ansible.builtin.apt:
+        upgrade: dist
+        update_cache: true
+        autoremove: true
+        autoclean: true
+      register: apt_result
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_flag
+
+    - name: NOTICE — reboot required on {{ inventory_hostname }}
+      ansible.builtin.debug:
+        msg: >
+          ⚠  {{ inventory_hostname }} needs a reboot (kernel or libc updated).
+          Schedule a maintenance window and run:
+            kubectl drain {{ inventory_hostname }} --ignore-daemonsets --delete-emptydir-data
+            sudo reboot
+            kubectl uncordon {{ inventory_hostname }}
+          NAS services (smbd/nfs) will be briefly unavailable during reboot.
+      when: reboot_flag.stat.exists
+
+    - name: Report — {{ inventory_hostname }}
+      ansible.builtin.debug:
+        msg: >
+          {{ inventory_hostname }}: packages changed={{ apt_result.changed }},
+          reboot_required={{ reboot_flag.stat.exists }}.
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 2. k3s AGENTS (opi5pro-1, opi5pro-2) — drain → patch → reboot → uncordon.
+#    Serial=1 keeps at least one agent available throughout.
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Patch k3s agents — drain/upgrade/uncordon
+  hosts: opi5pro-1,opi5pro-2
+  serial: 1
+  become: true
+  gather_facts: true
+  tags: [k3s_agents, k3s]
+
+  vars:
+    k3s_control_host: "{{ groups['k3s_server'][0] }}"
+    reboot_timeout: 300
+
+  tasks:
+    - name: Drain {{ inventory_hostname }} from the cluster
+      ansible.builtin.command: >
+        kubectl drain {{ inventory_hostname }}
+          --ignore-daemonsets
+          --delete-emptydir-data
+          --timeout=120s
+      delegate_to: "{{ k3s_control_host }}"
+      changed_when: true
+
+    - name: Apply all package updates
+      ansible.builtin.apt:
+        upgrade: dist
+        update_cache: true
+        autoremove: true
+        autoclean: true
+      register: apt_result
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_flag
+
+    - name: Reboot if kernel or libc was updated
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ reboot_timeout }}"
+        msg: "Rebooting {{ inventory_hostname }} after package update"
+      when: reboot_flag.stat.exists or apt_result.changed
+
+    - name: Wait for node to rejoin as Ready
+      ansible.builtin.command: >
+        kubectl wait node/{{ inventory_hostname }}
+          --for=condition=Ready
+          --timeout=180s
+      delegate_to: "{{ k3s_control_host }}"
+      changed_when: false
+      retries: 5
+      delay: 15
+      register: wait_result
+      until: wait_result.rc == 0
+
+    - name: Uncordon {{ inventory_hostname }}
+      ansible.builtin.command: kubectl uncordon {{ inventory_hostname }}
+      delegate_to: "{{ k3s_control_host }}"
+      changed_when: true
+
+    - name: Report — {{ inventory_hostname }}
+      ansible.builtin.debug:
+        msg: >
+          {{ inventory_hostname }}: packages changed={{ apt_result.changed }},
+          rebooted={{ reboot_flag.stat.exists }}.
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 3. Standalone Linux hosts — apt upgrade + reboot if needed.
+#    Covers: rpi5 (Vault), octopi (Pi-hole), opi-zero2w-2 (MQTT), xu3-1 (build)
+#    Pi-hole is handled separately by update-non-apt.yml; this just patches the OS.
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Patch standalone Linux hosts
+  hosts: standalone
+  serial: 1
+  become: true
+  gather_facts: true
+  tags: [standalone]
+
+  vars:
+    reboot_timeout: 180
+
+  tasks:
+    - name: Apply all package updates
+      ansible.builtin.apt:
+        upgrade: dist
+        update_cache: true
+        autoremove: true
+        autoclean: true
+      register: apt_result
+
+    - name: Check if reboot is required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_flag
+
+    - name: Reboot if needed
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ reboot_timeout }}"
+        msg: "Rebooting {{ inventory_hostname }} after package update"
+      when: reboot_flag.stat.exists or apt_result.changed
+
+    - name: Report — {{ inventory_hostname }}
+      ansible.builtin.debug:
+        msg: >
+          {{ inventory_hostname }}: packages changed={{ apt_result.changed }},
+          rebooted={{ reboot_flag.stat.exists }}.

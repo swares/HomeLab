@@ -286,6 +286,33 @@ kubectl patch configmap argocd-cm -n argocd \
 
 ---
 
+## OS Updates: Ansible Jobs Fail from GitHub-Hosted Runners
+
+**Symptom**  
+`apt-upgrade`, `check-vault`, or `update-pihole` jobs in GitHub Actions time out or fail to connect.
+
+**Cause**  
+GitHub-hosted runners are on the public internet and cannot reach `192.168.1.x` LAN addresses.
+
+**Fix — run manually from H4:**
+```bash
+cd ~/lab/homelab/homelab/ansible
+
+# All bare-metal Linux hosts
+ansible-playbook -i inventory/hosts.yml playbooks/update-hosts.yml --vault-password-file .vault_pass
+
+# Specific group
+ansible-playbook -i inventory/hosts.yml playbooks/update-hosts.yml \
+  --vault-password-file .vault_pass --tags standalone
+
+# Pi-hole + k3s + Vault
+ansible-playbook -i inventory/hosts.yml playbooks/update-non-apt.yml --vault-password-file .vault_pass
+```
+
+**Long-term fix:** register H4 as a self-hosted GitHub Actions runner — then all Ansible jobs gain LAN access automatically.
+
+---
+
 ## external-secrets: `no kind is registered for version external-secrets.io/v1beta1`
 
 **Symptom**  
