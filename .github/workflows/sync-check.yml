@@ -46,14 +46,15 @@ jobs:
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
         run: ./scripts/validate-rollout.sh
 
-      - name: Rollback on failure
-        if: failure()
-        env:
-          GIT_PUSH_TOKEN: ${{ secrets.GIT_PUSH_TOKEN }}
-        run: |
-          git config user.email "ci@lab.home.arpa"
-          git config user.name  "HomeLab CI"
-          git remote set-url origin \
-            "https://swares:${GIT_PUSH_TOKEN}@github.com/swares/HomeLab.git"
-          ./scripts/rollback-app.sh
-          echo "Rolled back — ArgoCD will reconcile within ~60s."
+      # Rollback disabled until sync-check is stable — re-enable once green
+      # - name: Rollback on failure
+      #   if: failure()
+      #   env:
+      #     GIT_PUSH_TOKEN: ${{ secrets.GIT_PUSH_TOKEN }}
+      #   run: |
+      #     git config user.email "ci@lab.home.arpa"
+      #     git config user.name  "HomeLab CI"
+      #     git remote set-url origin \
+      #       "https://swares:${GIT_PUSH_TOKEN}@github.com/swares/HomeLab.git"
+      #     ./scripts/rollback-app.sh
+      #     echo "Rolled back — ArgoCD will reconcile within ~60s."
