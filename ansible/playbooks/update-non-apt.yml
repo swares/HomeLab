@@ -50,7 +50,7 @@
     - name: Show output
       ansible.builtin.debug:
         msg: "{{ pihole_up.stdout_lines }}"
-      when: pihole_bin.stat.exists and pihole_up is defined"
+      when: pihole_bin.stat.exists and pihole_up is defined
 
 # ------------------------------------------------------------------------------
 # 2. k3s upgrade
