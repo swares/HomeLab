@@ -19,7 +19,7 @@ jobs:
     name: ArgoCD sync + health probe
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 2
           token: ${{ secrets.GIT_PUSH_TOKEN }}
@@ -45,26 +45,6 @@ jobs:
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
         run: ./scripts/validate-rollout.sh
-
-      - name: Probe ingress endpoints
-        run: |
-          DOMAIN="apps.lab.home.arpa"
-          ENDPOINTS=(
-            "http://grafana.$DOMAIN"
-            "http://argocd.$DOMAIN"
-            "http://immich.$DOMAIN"
-          )
-          FAILED=0
-          for url in "${ENDPOINTS[@]}"; do
-            code=$(curl -sk -o /dev/null -w "%{http_code}" --max-time 10 "$url" || echo "000")
-            if [[ "$code" =~ ^(2|3|401|403) ]]; then
-              echo "OK $code  $url"
-            else
-              echo "FAIL $code  $url"
-              FAILED=1
-            fi
-          done
-          [ "$FAILED" -eq 0 ] || exit 1
 
       - name: Rollback on failure
         if: failure()

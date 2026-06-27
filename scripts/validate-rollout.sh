@@ -69,7 +69,7 @@ fi
 echo "" | tee -a "$REPORT"
 echo "--- Pod health ---" | tee -a "$REPORT"
 
-NOT_READY=$(oc get pods --all-namespaces \
+NOT_READY=$(kubectl get pods --all-namespaces \
   --field-selector='status.phase!=Running,status.phase!=Succeeded' \
   --no-headers 2>/dev/null | grep -v "Completed\|Running" || true)
 
@@ -85,8 +85,8 @@ fi
 echo "" | tee -a "$REPORT"
 echo "--- Route health probes ---" | tee -a "$REPORT"
 
-ROUTES=$(oc get routes --all-namespaces \
-  -o jsonpath='{range .items[*]}{.spec.host}{"\n"}{end}' 2>/dev/null || true)
+ROUTES=$(kubectl get ingress --all-namespaces \
+  -o jsonpath='{range .items[*]}{.spec.rules[*].host}{"\n"}{end}' 2>/dev/null || true)
 
 if [ -z "$ROUTES" ]; then
   echo "No Routes found — skipping HTTP probes." | tee -a "$REPORT"
