@@ -158,7 +158,7 @@
     - name: Apply all package updates (Arch Linux ARM)
       ansible.builtin.shell: |
         export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        pacman -Syu --noconfirm --noprogressbar 2>&1
+        pacman -Syu --noconfirm --noprogressbar --ignore libcamera,libcamera-ipa 2>&1
       register: pacman_result
       changed_when: "'there is nothing to do' not in (pacman_result.stdout | lower)"
       when: ansible_os_family == "Archlinux"

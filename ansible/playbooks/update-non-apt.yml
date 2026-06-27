@@ -22,25 +22,35 @@
   hosts: dns-1
   become: true
   tags: [pihole]
+  # TODO: remove the stat guard once pihole is installed (pending: flash octopi → Pi-hole v6)
   tasks:
+    - name: Check if pihole is installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/pihole
+      register: pihole_bin
+
+    - name: Skip notice
+      ansible.builtin.debug:
+        msg: "pihole not installed on {{ inventory_hostname }} — skipping update"
+      when: not pihole_bin.stat.exists
+
     - name: Run pihole -up (primary)
-      ansible.builtin.shell: |
-        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        pihole -up
+      ansible.builtin.command: /usr/local/bin/pihole -up
       register: pihole_up
       changed_when: "'Everything is up to date' not in pihole_up.stdout"
+      when: pihole_bin.stat.exists
 
     - name: Confirm pihole responding (primary)
-      ansible.builtin.shell: |
-        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        pihole status
+      ansible.builtin.command: /usr/local/bin/pihole status
       register: pihole_status
       changed_when: false
       failed_when: "'Active' not in pihole_status.stdout"
+      when: pihole_bin.stat.exists
 
     - name: Show output
       ansible.builtin.debug:
         msg: "{{ pihole_up.stdout_lines }}"
+      when: pihole_bin.stat.exists and pihole_up is defined"
 
 # ------------------------------------------------------------------------------
 # 2. k3s upgrade
