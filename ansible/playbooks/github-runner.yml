@@ -24,8 +24,8 @@
   hosts: h4-core
   become: true
   vars:
-    runner_user: github-runner
-    runner_home: /opt/github-runner
+    runner_user: swares
+    runner_home: /home/swares/lab/homelab/homelab/actions-runner
     runner_version: "2.325.0"   # check https://github.com/actions/runner/releases for latest
     runner_repo: "https://github.com/swares/HomeLab"
     runner_name: "h4-core"
