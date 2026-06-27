@@ -44,7 +44,7 @@ jobs:
         env:
           ARGOCD_SERVER: ${{ secrets.ARGOCD_SERVER }}
           ARGOCD_AUTH_TOKEN: ${{ secrets.ARGOCD_AUTH_TOKEN }}
-        run: ./scripts/validate-rollout.sh
+        run: bash scripts/validate-rollout.sh
 
       # Rollback disabled until sync-check is stable — re-enable once green
       # - name: Rollback on failure
