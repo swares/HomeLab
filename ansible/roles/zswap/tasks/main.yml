@@ -11,7 +11,12 @@
     state: present
   when: ansible_os_family == "Archlinux"
 
-- name: Disable zram swap unit (if requested)
+- name: Check if zswap kernel module is available
+  ansible.builtin.stat:
+    path: /sys/module/zswap
+  register: zswap_module
+
+- name: Disable zram swap unit (if requested and zswap available)
   ansible.builtin.systemd:
     name: "{{ item }}"
     state: stopped
@@ -20,13 +25,13 @@
     - zram-generator
     - systemd-zram-setup@zram0
   failed_when: false
-  when: zswap_disable_zram
+  when: zswap_disable_zram and zswap_module.stat.exists
 
-- name: Remove zram swap device
+- name: Remove zram swap device (if requested and zswap available)
   ansible.builtin.command: swapoff /dev/zram0
   failed_when: false
   changed_when: false
-  when: zswap_disable_zram
+  when: zswap_disable_zram and zswap_module.stat.exists
 
 - name: Create swapfile
   ansible.builtin.command:
@@ -80,6 +85,7 @@
       [Install]
       WantedBy=multi-user.target
   notify: reload systemd
+  when: zswap_module.stat.exists
 
 - name: Enable and start zswap-config service
   ansible.builtin.systemd:
@@ -87,6 +93,7 @@
     enabled: true
     state: started
     daemon_reload: true
+  when: zswap_module.stat.exists
 
 - name: Apply zswap settings immediately via sysfs
   ansible.builtin.shell: |
@@ -94,16 +101,20 @@
     echo {{ zswap_compressor }} > /sys/module/zswap/parameters/compressor
     echo {{ zswap_max_pool_percent }} > /sys/module/zswap/parameters/max_pool_percent
   changed_when: false
+  when: zswap_module.stat.exists
 
-- name: Report zswap status
-  ansible.builtin.shell: |
-    echo "enabled: $(cat /sys/module/zswap/parameters/enabled)"
-    echo "compressor: $(cat /sys/module/zswap/parameters/compressor)"
-    echo "max_pool_percent: $(cat /sys/module/zswap/parameters/max_pool_percent)"
-    echo "swap: $(swapon --show)"
-  register: zswap_status
+- name: Notice — zswap not available on {{ inventory_hostname }}
+  ansible.builtin.debug:
+    msg: >
+      zswap kernel module not found on {{ inventory_hostname }} (kernel {{ ansible_kernel }}).
+      Swapfile created at {{ zswap_swapfile_path }} for OOM overflow. zram remains active for compression.
+  when: not zswap_module.stat.exists
+
+- name: Report swap status
+  ansible.builtin.shell: swapon --show
+  register: swap_status
   changed_when: false
 
-- name: Show zswap status
+- name: Show swap status
   ansible.builtin.debug:
-    msg: "{{ zswap_status.stdout_lines }}"
+    msg: "{{ swap_status.stdout_lines }}"
