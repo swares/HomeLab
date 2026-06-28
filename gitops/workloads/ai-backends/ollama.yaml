@@ -11,7 +11,7 @@ spec:
   accessModes: [ReadWriteOnce]
   resources:
     requests:
-      storage: 40Gi          # room for several 3-7B models
+      storage: 200Gi         # NVMe-backed (/mnt/nvme, 469G available)
 ---
 apiVersion: apps/v1
 kind: Deployment
