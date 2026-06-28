@@ -91,7 +91,8 @@
     - name: Apply all package updates (Debian/Ubuntu)
       ansible.builtin.shell: |
         export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        apt-get update -qq && apt-get dist-upgrade -y && apt-get autoremove -y && apt-get autoclean -y
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -qq && apt-get dist-upgrade -y -o Dpkg::Options::="--force-confold" && apt-get autoremove -y && apt-get autoclean -y
       register: apt_result
       changed_when: "'0 upgraded' not in apt_result.stdout"
       when: ansible_os_family == "Debian"
@@ -159,7 +160,8 @@
     - name: Apply all package updates (Debian/Ubuntu)
       ansible.builtin.shell: |
         export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-        apt-get update -qq && apt-get dist-upgrade -y && apt-get autoremove -y && apt-get autoclean -y
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -qq && apt-get dist-upgrade -y -o Dpkg::Options::="--force-confold" && apt-get autoremove -y && apt-get autoclean -y
       register: apt_result
       changed_when: "'0 upgraded' not in apt_result.stdout"
       when: ansible_os_family == "Debian"
