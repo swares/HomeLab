@@ -1,0 +1,109 @@
+---
+- name: Install lz4 compressor (Debian/Ubuntu)
+  ansible.builtin.apt:
+    name: liblz4-tool
+    state: present
+  when: ansible_os_family == "Debian"
+
+- name: Install lz4 compressor (Arch)
+  ansible.builtin.pacman:
+    name: lz4
+    state: present
+  when: ansible_os_family == "Archlinux"
+
+- name: Disable zram swap unit (if requested)
+  ansible.builtin.systemd:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - zram-generator
+    - systemd-zram-setup@zram0
+  failed_when: false
+  when: zswap_disable_zram
+
+- name: Remove zram swap device
+  ansible.builtin.command: swapoff /dev/zram0
+  failed_when: false
+  changed_when: false
+  when: zswap_disable_zram
+
+- name: Create swapfile
+  ansible.builtin.command:
+    cmd: dd if=/dev/zero of={{ zswap_swapfile_path }} bs=1M count={{ zswap_swapfile_size_mb }}
+    creates: "{{ zswap_swapfile_path }}"
+
+- name: Set swapfile permissions
+  ansible.builtin.file:
+    path: "{{ zswap_swapfile_path }}"
+    mode: '0600'
+    owner: root
+    group: root
+
+- name: Format swapfile
+  ansible.builtin.command: mkswap {{ zswap_swapfile_path }}
+  register: mkswap_result
+  changed_when: mkswap_result.rc == 0
+  failed_when: mkswap_result.rc != 0
+
+- name: Enable swapfile
+  ansible.builtin.command: swapon {{ zswap_swapfile_path }}
+  register: swapon_result
+  changed_when: swapon_result.rc == 0
+  failed_when: false
+
+- name: Add swapfile to fstab
+  ansible.posix.mount:
+    path: none
+    src: "{{ zswap_swapfile_path }}"
+    fstype: swap
+    opts: sw
+    state: present
+
+- name: Deploy zswap config systemd service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/zswap-config.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Configure zswap parameters
+      After=local-fs.target
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/bin/sh -c '\
+        echo 1 > /sys/module/zswap/parameters/enabled && \
+        echo {{ zswap_compressor }} > /sys/module/zswap/parameters/compressor && \
+        echo {{ zswap_max_pool_percent }} > /sys/module/zswap/parameters/max_pool_percent'
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: reload systemd
+
+- name: Enable and start zswap-config service
+  ansible.builtin.systemd:
+    name: zswap-config
+    enabled: true
+    state: started
+    daemon_reload: true
+
+- name: Apply zswap settings immediately via sysfs
+  ansible.builtin.shell: |
+    echo 1 > /sys/module/zswap/parameters/enabled
+    echo {{ zswap_compressor }} > /sys/module/zswap/parameters/compressor
+    echo {{ zswap_max_pool_percent }} > /sys/module/zswap/parameters/max_pool_percent
+  changed_when: false
+
+- name: Report zswap status
+  ansible.builtin.shell: |
+    echo "enabled: $(cat /sys/module/zswap/parameters/enabled)"
+    echo "compressor: $(cat /sys/module/zswap/parameters/compressor)"
+    echo "max_pool_percent: $(cat /sys/module/zswap/parameters/max_pool_percent)"
+    echo "swap: $(swapon --show)"
+  register: zswap_status
+  changed_when: false
+
+- name: Show zswap status
+  ansible.builtin.debug:
+    msg: "{{ zswap_status.stdout_lines }}"

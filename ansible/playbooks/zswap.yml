@@ -1,0 +1,28 @@
+---
+# zswap.yml — Enable zswap on lab hosts.
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/zswap.yml
+#   ansible-playbook -i inventory/hosts.yml playbooks/zswap.yml -l rpi5
+
+- name: Configure zswap — RPi hosts (SD card backed)
+  hosts: rpi5,dns-1
+  become: true
+  gather_facts: true
+  vars:
+    zswap_swapfile_path: /swapfile
+    zswap_swapfile_size_mb: 1024   # 1 GB — most pages never reach disk
+    zswap_disable_zram: false
+  roles:
+    - zswap
+
+- name: Configure zswap — OPi 5 Pro nodes (NVMe backed)
+  hosts: opi5pro-1,opi5pro-2
+  become: true
+  gather_facts: true
+  vars:
+    zswap_swapfile_path: /mnt/nvme/swapfile
+    zswap_swapfile_size_mb: 8192   # 8 GB on NVMe — plenty of headroom
+    zswap_disable_zram: true
+  roles:
+    - zswap
