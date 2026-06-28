@@ -17,9 +17,12 @@ spec:
       containers:
         - name: authelia
           image: ghcr.io/authelia/authelia:4.38
+          command: ["authelia"]
           args:
-            - --config=/config/configuration.yml
-            - --config.experimental.filters=template
+            - --config
+            - /config/configuration.yml
+            - --config.experimental.filters
+            - template
           env:
             - name: AUTHELIA_JWT_SECRET_FILE
               value: /authelia-secrets/jwt_secret
