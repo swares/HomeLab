@@ -45,11 +45,18 @@
     owner: root
     group: root
 
+- name: Check if swapfile is already formatted
+  ansible.builtin.command: blkid -o value -s TYPE {{ zswap_swapfile_path }}
+  register: swapfile_type
+  changed_when: false
+  failed_when: false
+
 - name: Format swapfile
   ansible.builtin.command: mkswap {{ zswap_swapfile_path }}
   register: mkswap_result
   changed_when: mkswap_result.rc == 0
   failed_when: mkswap_result.rc != 0
+  when: swapfile_type.stdout.strip() != 'swap'
 
 - name: Enable swapfile
   ansible.builtin.command: swapon {{ zswap_swapfile_path }}
