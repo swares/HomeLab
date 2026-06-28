@@ -108,6 +108,28 @@ jobs:
         if: always()
         run: rm -f ansible/.vault_pass
 
+
+  zswap-config:
+    name: zswap configuration
+    runs-on: [self-hosted, Linux, X64]
+    needs: [apt-upgrade]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Write Ansible vault password
+        run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
+
+      - name: Apply zswap config
+        run: |
+          ANSIBLE_ROLES_PATH=/home/swares/lab/homelab/homelab/ansible/roles \
+          ansible-playbook -i ansible/inventory/hosts.yml \
+            ansible/playbooks/zswap.yml \
+            --vault-password-file ansible/.vault_pass
+
+      - name: Clean up vault pass
+        if: always()
+        run: rm -f ansible/.vault_pass
+
   lab-health-check:
     name: Lab health check
     runs-on: [self-hosted, Linux, X64]
