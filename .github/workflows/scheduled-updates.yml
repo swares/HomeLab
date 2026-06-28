@@ -117,12 +117,12 @@ jobs:
       - name: Set up kubeconfig
         run: |
           mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
-          chmod 600 ~/.kube/config
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > /tmp/lab-kubeconfig
+          chmod 600 /tmp/lab-kubeconfig
 
       - name: Run lab-check.sh
-        run: bash scripts/lab-check.sh || true   # informational — don't fail the workflow
+        run: KUBECONFIG=/tmp/lab-kubeconfig bash scripts/lab-check.sh || true   # informational — don't fail the workflow
 
       - name: Clean up kubeconfig
         if: always()
-        run: rm -f ~/.kube/config
+        run: rm -f /tmp/lab-kubeconfig
