@@ -1,7 +1,7 @@
 # Hardware Inventory & Roles
 
 Subnet: `192.168.1.0/24`. Gateway: `192.168.1.1`.
-Last verified: 2026-06-25.
+Last verified: 2026-06-28.
 
 > **Security:** Default passwords (`pi`/`odroid`/`root`) have been rotated on all managed
 > hosts via `ansible/playbooks/rotate-passwords.yml`. Credentials are in Ansible Vault —
@@ -12,16 +12,16 @@ Last verified: 2026-06-25.
 | Device | CPU | RAM | Wired IP | WiFi IP | Role |
 |--------|-----|-----|----------|---------|------|
 | **Odroid-H4 Ultra** | i3-N305 8C/8T x86 | 64 GB DDR5 | `192.168.1.160` | — | **Core: k3s server + NAS** |
-| **Orange Pi 5 Pro #1** | RK3588S 8C ARM | 16 GB | `192.168.1.168` | — | k3s agent · Ollama inference |
-| **Orange Pi 5 Pro #2** | RK3588S 8C ARM | 16 GB | `192.168.1.172` | — | k3s agent (pending bootstrap) |
+| **Orange Pi 5 Pro #1** | RK3588S 8C ARM | 16 GB | `192.168.1.168` | — | k3s agent · Ollama inference · Arch Linux ARM |
+| **Orange Pi 5 Pro #2** | RK3588S 8C ARM | 16 GB | `192.168.1.172` | — | k3s agent · Ubuntu 22.04 (Jammy) |
 | **N150 mini PC #1** | Intel N150 4C x86 | 16 GB | `192.168.1.10` | — | Pending (offline — network rewire needed) |
 | **N150 mini PC #2** | Intel N150 4C x86 | 16 GB | `192.168.1.171` | — | Pending (offline — network rewire needed) |
 | **N150 mini PC #3 (HTPC)** | Intel N150 4C x86 | 16 GB | — | `192.168.1.176` | Living-room HTPC |
 | **RPi 5** | Cortex-A76 4C | 8 GB | `192.168.1.128` | `192.168.1.124` (avoid) | HashiCorp Vault |
 | **RPi 4B** | Cortex-A72 4C | 8 GB | TBD | — | OpenLDAP (pending bootstrap) |
-| **RPi 3B #2** | Cortex-A53 4C | 1 GB | `192.168.1.148` | `192.168.1.152` (avoid) | DNS primary (Pi-hole) |
+| **RPi 3B #2** | Cortex-A53 4C | 1 GB | `192.168.1.148` | `192.168.1.152` (avoid) | DNS primary (Pi-hole pending — Bookworm flash required) |
 | **RPi 3B #1** | Cortex-A53 4C | 1 GB | — | — | ⚠ on-board power fault — retired |
-| **Odroid-XU3 #1** | Exynos5422 8C | 2 GB | `192.168.1.64` | — | Build agent (flagged unstable) |
+| **Odroid-XU3 #1** | Exynos5422 8C | 2 GB | `192.168.1.64` | — | Build agent (flagged unstable; Python <3.8 — excluded from Ansible auto-updates) |
 | **Orange Pi Zero 2W #1** | H618 A53 4C | 4 GB | — | `192.168.1.184` | DNS secondary (dnsmasq) |
 | **Orange Pi Zero 2W #2** | H618 A53 4C | 4 GB | — | `192.168.1.188` | MQTT broker (Mosquitto) |
 | **Orange Pi Zero 2W #3** | H618 A53 4C | 4 GB | — | TBD | Unassigned |
@@ -64,7 +64,8 @@ k3s PVs use the `local-path` StorageClass. Never provision against `lv_nas`.
 | Node | Role | IP | Notes |
 |------|------|----|-------|
 | `odroid-nas` | server | `192.168.1.160` | H4 Ultra |
-| `opi5pro-1` | agent | `192.168.1.168` | `role=inference` label; runs Ollama |
+| `opi5pro-1` | agent | `192.168.1.168` | Arch Linux ARM; `role=inference` label; runs Ollama |
+| `opi5pro-2` | agent | `192.168.1.172` | Ubuntu 22.04 (Jammy) |
 
 Ingress: Traefik. DNS: `*.apps.lab.home.arpa` → `192.168.1.160`.
 ArgoCD bootstraps all workloads from `gitops/` via `gitops/bootstrap/root-app.yaml`.
@@ -88,13 +89,13 @@ ArgoCD bootstraps all workloads from `gitops/` via `gitops/bootstrap/root-app.ya
 | AI Gateway (LiteLLM) | H4 (k3s) | `https://ai.apps.lab.home.arpa` |
 | Ollama | opi5pro-1 (k3s) | ClusterIP `:11434` |
 | HashiCorp Vault | RPi 5 | `http://192.168.1.128:8200` |
-| DNS primary (Pi-hole) | RPi 3B #2 | `192.168.1.148` |
+| DNS primary (Pi-hole pending) | RPi 3B #2 (octopi) | `192.168.1.148` — ⚠ flash Bookworm → Pi-hole v6 first |
 | DNS secondary (dnsmasq) | OPi Zero 2W #1 | `192.168.1.184` |
 | MQTT (Mosquitto) | OPi Zero 2W #2 | `192.168.1.188:1883` |
 
 ## Pending / TODO
 
-- OPi 5 Pro #2: assign IP, bootstrap k3s agent + second Ollama instance
+- ~~OPi 5 Pro #2~~: bootstrapped as k3s agent at `192.168.1.172` ✓ (Ollama not yet deployed)
 - RPi 4B: assign IP, bootstrap OpenLDAP
 - N150 #1/#2: network rewire → WinRM bootstrap → disable sleep
 - N150 #3: WinRM credentials (wrong password on file)
