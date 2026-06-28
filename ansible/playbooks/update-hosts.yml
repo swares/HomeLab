@@ -88,13 +88,22 @@
       delegate_to: "{{ k3s_control_host }}"
       changed_when: true
 
-    - name: Apply all package updates
+    - name: Apply all package updates (Debian/Ubuntu)
+      ansible.builtin.shell: |
+        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+        apt-get update -qq && apt-get dist-upgrade -y && apt-get autoremove -y && apt-get autoclean -y
+      register: apt_result
+      changed_when: "'0 upgraded' not in apt_result.stdout"
+      when: ansible_os_family == "Debian"
+
+    - name: Apply all package updates (Arch Linux ARM)
       ansible.builtin.shell: |
         export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         pacman -Rdd --noconfirm geocode-glib-common 2>/dev/null || true
         pacman -Syu --noconfirm --noprogressbar --ignore libcamera,libcamera-ipa 2>&1
       register: apt_result
       changed_when: "'there is nothing to do' not in (apt_result.stdout | lower)"
+      when: ansible_os_family == "Archlinux"
 
     - name: Check if reboot is required
       ansible.builtin.stat:
