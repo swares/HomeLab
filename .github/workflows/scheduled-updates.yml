@@ -29,9 +29,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show checked-out commit
-        run: git log --oneline -3
-
       - name: Write Ansible vault password
         run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
 
@@ -53,9 +50,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show checked-out commit
-        run: git log --oneline -3
-
       - name: Write Ansible vault password
         run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
 
@@ -76,9 +70,6 @@ jobs:
     if: vars.SKIP_VM_UPDATES != 'true'
     steps:
       - uses: actions/checkout@v4
-
-      - name: Show checked-out commit
-        run: git log --oneline -3
 
       - name: Write Ansible vault password
         run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
