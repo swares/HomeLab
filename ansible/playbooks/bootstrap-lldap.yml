@@ -24,8 +24,8 @@
     lldap_ldap_port: 3890
     lldap_base_dn: "dc=lab,dc=home,dc=arpa"
     lldap_admin_user: admin
-    lldap_admin_pass: "{{ vault_lldap_admin_pass }}"
-    lldap_jwt_secret: "{{ vault_lldap_jwt_secret }}"
+    lldap_admin_pass: "{{ lldap_admin_pass }}"
+    lldap_jwt_secret: "{{ lldap_jwt_secret }}"
 
   tasks:
     - name: Install dependencies
