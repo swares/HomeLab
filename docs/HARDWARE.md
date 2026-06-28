@@ -1,7 +1,7 @@
 # Hardware Inventory & Roles
 
 Subnet: `192.168.1.0/24`. Gateway: `192.168.1.1`.
-Last verified: 2026-06-28.
+Last verified: 2026-06-29.
 
 > **Security:** Default passwords (`pi`/`odroid`/`root`) have been rotated on all managed
 > hosts via `ansible/playbooks/rotate-passwords.yml`. Credentials are in Ansible Vault —
@@ -14,8 +14,8 @@ Last verified: 2026-06-28.
 | **Odroid-H4 Ultra** | i3-N305 8C/8T x86 | 64 GB DDR5 | `192.168.1.160` | — | **Core: k3s server + NAS** |
 | **Orange Pi 5 Pro #1** | RK3588S 8C ARM | 16 GB | `192.168.1.168` | — | k3s agent · Ollama inference · Arch Linux ARM |
 | **Orange Pi 5 Pro #2** | RK3588S 8C ARM | 16 GB | `192.168.1.172` | — | k3s agent · Ubuntu 22.04 (Jammy) |
-| **N150 mini PC #1** | Intel N150 4C x86 | 16 GB | `192.168.1.10` | — | Pending (offline — network rewire needed) |
-| **N150 mini PC #2** | Intel N150 4C x86 | 16 GB | `192.168.1.171` | — | Pending (offline — network rewire needed) |
+| **N150 mini PC #1** | Intel N150 4C x86 | 16 GB | `192.168.1.42` (br0) | — | KVM host · Ubuntu 24.04 · 373 GB VM storage |
+| **N150 mini PC #2** | Intel N150 4C x86 | 16 GB | `192.168.1.21` (br0) | — | KVM host · Ubuntu 24.04 · 373 GB VM storage |
 | **N150 mini PC #3 (HTPC)** | Intel N150 4C x86 | 16 GB | — | `192.168.1.176` | Living-room HTPC |
 | **RPi 5** | Cortex-A76 4C | 8 GB | `192.168.1.128` | `192.168.1.124` (avoid) | HashiCorp Vault |
 | **RPi 4B** | Cortex-A72 4C | 8 GB | TBD | — | OpenLDAP (pending bootstrap) |
@@ -95,9 +95,9 @@ ArgoCD bootstraps all workloads from `gitops/` via `gitops/bootstrap/root-app.ya
 
 ## Pending / TODO
 
-- ~~OPi 5 Pro #2~~: bootstrapped as k3s agent at `192.168.1.172` ✓ (Ollama not yet deployed)
+- ~~OPi 5 Pro #2~~: bootstrapped as k3s agent at `192.168.1.172` ✓
 - RPi 4B: assign IP, bootstrap OpenLDAP
-- N150 #1/#2: network rewire → WinRM bootstrap → disable sleep
+- ~~N150 #1/#2~~: flashed Ubuntu 24.04, KVM bootstrapped ✓ (n150-1=.42, n150-2=.21)
 - N150 #3: WinRM credentials (wrong password on file)
 - octopi (RPi 3B #2): flash Bookworm → run dns.yml → Pi-hole v6
 - Move photo library into `/mnt/cold-8t/immich`
