@@ -15,7 +15,7 @@ data:
       ldap:
         implementation: lldap
         address: ldap://192.168.1.70:3890
-        base_dn: DC=lab,DC=home,DC=arpa
+        base_dn: dc=lab,dc=home,dc=arpa
         user: uid=admin,ou=people,dc=lab,dc=home,dc=arpa
 
     session:
