@@ -111,6 +111,7 @@ jobs:
   lab-health-check:
     name: Lab health check
     runs-on: [self-hosted, Linux, X64]
+    needs: [apt-upgrade]
     steps:
       - uses: actions/checkout@v4
 
