@@ -44,11 +44,11 @@ data:
           - key_id: main
             algorithm: RS256
             use: sig
-            key: {{ secret "/run/secrets/oidc_private_key" | mindent 12 "|" | msquote }}
+            key: {{ secret "/authelia-secrets/oidc_private_key" | mindent 12 "|" | msquote }}
         clients:
           - client_id: immich
             client_name: Immich
-            client_secret: {{ secret "/run/secrets/immich_client_secret" | msquote }}
+            client_secret: {{ secret "/authelia-secrets/immich_client_secret" | msquote }}
             redirect_uris:
               - https://immich.apps.lab.home.arpa/auth/login
               - https://immich.apps.lab.home.arpa/user-settings
