@@ -1,0 +1,58 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: authelia-config
+  namespace: authelia
+data:
+  configuration.yml: |
+    server:
+      address: 'tcp://0.0.0.0:9091'
+
+    log:
+      level: info
+
+    authentication_backend:
+      ldap:
+        implementation: lldap
+        address: ldap://192.168.1.70:3890
+        base_dn: DC=lab,DC=home,DC=arpa
+        user: uid=admin,ou=people,dc=lab,dc=home,dc=arpa
+
+    session:
+      cookies:
+        - name: authelia_session
+          domain: lab.home.arpa
+          authelia_url: https://authelia.apps.lab.home.arpa
+          default_redirection_url: https://immich.apps.lab.home.arpa
+          expiration: 1h
+          inactivity: 5m
+
+    storage:
+      local:
+        path: /data/db.sqlite3
+
+    notifier:
+      filesystem:
+        filename: /data/notification.txt
+
+    access_control:
+      default_policy: one_factor
+
+    identity_providers:
+      oidc:
+        jwks:
+          - key_id: main
+            algorithm: RS256
+            use: sig
+            key: {{ secret "/run/secrets/oidc_private_key" | mindent 12 "|" | msquote }}
+        clients:
+          - client_id: immich
+            client_name: Immich
+            client_secret: {{ secret "/run/secrets/immich_client_secret" | msquote }}
+            redirect_uris:
+              - https://immich.apps.lab.home.arpa/auth/login
+              - https://immich.apps.lab.home.arpa/user-settings
+            scopes: [openid, profile, email]
+            response_types: [code]
+            grant_types: [authorization_code]
+            userinfo_signed_response_alg: none
