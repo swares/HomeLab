@@ -92,6 +92,7 @@
       ansible.builtin.shell: |
         export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         export DEBIAN_FRONTEND=noninteractive
+        dpkg --configure -a
         apt-get update -qq && apt-get dist-upgrade -y -o Dpkg::Options::="--force-confold" && apt-get autoremove -y && apt-get autoclean -y
       register: apt_result
       changed_when: "'0 upgraded' not in apt_result.stdout"
@@ -161,6 +162,7 @@
       ansible.builtin.shell: |
         export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
         export DEBIAN_FRONTEND=noninteractive
+        dpkg --configure -a
         apt-get update -qq && apt-get dist-upgrade -y -o Dpkg::Options::="--force-confold" && apt-get autoremove -y && apt-get autoclean -y
       register: apt_result
       changed_when: "'0 upgraded' not in apt_result.stdout"
