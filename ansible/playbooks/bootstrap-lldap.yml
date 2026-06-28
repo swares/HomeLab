@@ -97,7 +97,7 @@
           [Service]
           User={{ lldap_user }}
           Group={{ lldap_user }}
-          ExecStart={{ lldap_dir }}/lldap run --config-file {{ lldap_dir }}/lldap_config.toml
+          ExecStart={{ lldap_dir }}/amd64-lldap/lldap run --config-file {{ lldap_dir }}/lldap_config.toml
           WorkingDirectory={{ lldap_data }}
           Restart=on-failure
           RestartSec=5

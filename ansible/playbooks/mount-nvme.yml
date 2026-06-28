@@ -1,0 +1,68 @@
+---
+# mount-nvme.yml — Mount NVMe on OPi 5 Pro nodes and relocate Ollama model dir.
+#
+# Idempotent: safe to re-run. Models are moved only if not already on NVMe.
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/mount-nvme.yml \
+#     --vault-password-file .vault_pass
+
+- name: Mount NVMe and relocate Ollama models
+  hosts: opi5pro-1,opi5pro-2
+  become: true
+  gather_facts: true
+
+  vars:
+    nvme_device: /dev/nvme0n1p1
+    nvme_mount: /mnt/nvme
+    ollama_src: /usr/share/ollama/.ollama/models
+    ollama_dst: /mnt/nvme/ollama/models
+
+  tasks:
+    - name: Ensure mount point exists
+      ansible.builtin.file:
+        path: "{{ nvme_mount }}"
+        state: directory
+        mode: '0755'
+
+    - name: Mount NVMe (persistent via fstab)
+      ansible.posix.mount:
+        path: "{{ nvme_mount }}"
+        src: "{{ nvme_device }}"
+        fstype: ext4
+        opts: defaults,noatime
+        state: mounted
+
+    - name: Create Ollama model dir on NVMe
+      ansible.builtin.file:
+        path: "{{ ollama_dst }}"
+        state: directory
+        mode: '0755'
+        owner: ollama
+        group: ollama
+
+    - name: Check if Ollama model dir is already on NVMe
+      ansible.builtin.stat:
+        path: "{{ ollama_src }}"
+      register: ollama_src_stat
+
+    - name: Move existing models to NVMe
+      ansible.builtin.shell: |
+        mv {{ ollama_src }}/* {{ ollama_dst }}/ 2>/dev/null || true
+      when: ollama_src_stat.stat.exists and not ollama_src_stat.stat.islnk
+
+    - name: Remove old model dir
+      ansible.builtin.file:
+        path: "{{ ollama_src }}"
+        state: absent
+      when: ollama_src_stat.stat.exists and not ollama_src_stat.stat.islnk
+
+    - name: Symlink Ollama model dir to NVMe
+      ansible.builtin.file:
+        path: "{{ ollama_src }}"
+        src: "{{ ollama_dst }}"
+        state: link
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: NVMe mounted at {{ nvme_mount }}, Ollama models at {{ ollama_dst }}"
