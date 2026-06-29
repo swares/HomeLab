@@ -12,64 +12,58 @@ Ansible does **not** repartition the live root disk. Layout:
 | Device | Role | Mount |
 |--------|------|-------|
 | eMMC 256 GB | Host OS + etcd | `/` |
-| NVMe 4 TB | Live NAS (`lv_nas`) + k8s PVs (`local-path`) | `/srv/nas`, `/mnt/nvme0n1p2` |
+| NVMe 4 TB | Live NAS (`lv_nas`) + k8s PVs | `/srv/nas`, `/mnt/nvme0n1p2` |
 | md1 8 TB (RAID 1) | Primary cold tier | `/mnt/cold-8t` |
 | md0 ~5.45 TB (RAID 1) | Secondary cold copy | `/mnt/cold-sec` |
 
 ### 2. DNS records
 
-Add to Pi-hole / dnsmasq on octopi (192.168.1.148):
+Add to Pi-hole / dnsmasq on octopi (`192.168.1.148`):
 
 | Record | Type | Value |
 |--------|------|-------|
 | `api.lab.home.arpa` | A | `192.168.1.160` |
 | `*.apps.lab.home.arpa` | A | `192.168.1.160` |
 
-CoreDNS handles `*.apps.lab.home.arpa` resolution from inside the cluster automatically
-via the `coredns-custom` ConfigMap — no extra steps needed for new Ingresses.
+CoreDNS handles `*.apps.lab.home.arpa` inside the cluster automatically via the
+`coredns-custom` ConfigMap — no extra steps for new Ingresses.
 
 ### 3. Bootstrap secrets (before running playbooks)
 
-```bash
-# Ansible Vault password
-echo '<password>' > ansible/.vault_pass && chmod 600 ansible/.vault_pass
+    # Ansible Vault password
+    echo '<password>' > ansible/.vault_pass && chmod 600 ansible/.vault_pass
 
-# Restic password
-sudo bash -c 'echo "<password>" > /etc/restic/password && chmod 700 /etc/restic/password'
-```
+    # Restic password
+    sudo bash -c 'echo "<password>" > /etc/restic/password && chmod 700 /etc/restic/password'
 
 ### 4. Run the stages
 
-```bash
-cd ansible
-ansible-playbook -i inventory/hosts.yml playbooks/storage.yml --vault-password-file .vault_pass
-ansible-playbook -i inventory/hosts.yml playbooks/k3s-h4.yml  --vault-password-file .vault_pass
-ansible-playbook -i inventory/hosts.yml playbooks/backup.yml  --vault-password-file .vault_pass
-ansible-playbook -i inventory/hosts.yml playbooks/argocd.yml  --vault-password-file .vault_pass
-```
+    cd ansible
+    ansible-playbook -i inventory/hosts.yml playbooks/storage.yml --vault-password-file .vault_pass
+    ansible-playbook -i inventory/hosts.yml playbooks/k3s-h4.yml  --vault-password-file .vault_pass
+    ansible-playbook -i inventory/hosts.yml playbooks/backup.yml  --vault-password-file .vault_pass
+    ansible-playbook -i inventory/hosts.yml playbooks/argocd.yml  --vault-password-file .vault_pass
 
 ### 5. After Vault is up — sync secrets
 
-```bash
-export VAULT_ADDR=http://192.168.1.128:8200
-vault login
-VAULT_TOKEN=$(vault print token) \
-  ansible-playbook -i inventory/hosts.yml playbooks/sync-secrets-to-vault.yml \
-  --vault-password-file .vault_pass
-```
+    export VAULT_ADDR=http://192.168.1.128:8200
+    vault login
+    VAULT_TOKEN=$(vault print token) \
+      ansible-playbook -i inventory/hosts.yml playbooks/sync-secrets-to-vault.yml \
+      --vault-password-file .vault_pass
 
 ---
 
 ## Verify a healthy cluster
 
-```bash
-kubectl get nodes                      # node Ready
-kubectl get pods -A                    # all Running/Completed
-kubectl get sc                         # local-path present
-kubectl get ingress -A                 # Ingresses resolve to *.apps.lab.home.arpa
-kubectl get applications -n argocd    # all Synced/Healthy
-systemctl status backup-nas.timer backup-etcd.timer
-```
+    kubectl get nodes                      # node Ready
+    kubectl get pods -A                    # all Running/Completed
+    kubectl get sc                         # local-path present
+    kubectl get ingress -A                 # Ingresses listed
+    kubectl get applications -n argocd    # all Synced/Healthy
+    systemctl status backup-nas.timer backup-etcd.timer
+    ssh swares@192.168.1.128 systemctl status backup-vault.timer   # rpi5
+    ssh swares@192.168.1.70  systemctl status backup-lldap.timer   # ldap-1
 
 ---
 
@@ -77,8 +71,32 @@ systemctl status backup-nas.timer backup-etcd.timer
 
 1. Copy `gitops/workloads/sample-app/` to `gitops/workloads/<name>/` and edit manifests.
 2. Add `gitops/apps/<name>.yaml` (copy `sample-app.yaml`, change `name`/`path`/`namespace`).
-3. Add `cert-manager.io/cluster-issuer: lab-ca` annotation to the Ingress for TLS.
+3. Add `cert-manager.io/cluster-issuer: lab-ca` to the Ingress for automatic TLS.
 4. Open PR → merge → ArgoCD syncs.
+
+Never `kubectl apply` directly against main — it drifts and ArgoCD reverts it.
+
+---
+
+## Backups
+
+| Stream | When | What | Downtime |
+|--------|------|------|----------|
+| `backup-nas` | daily 01:30 | restic of `/srv/nas` + `/mnt/cold-8t/VMs` + `/mnt/cold-8t/immich` → cold-8t, then `restic copy` → cold-sec + offsite | none |
+| `backup-etcd` | daily | k3s SQLite state → `/mnt/cold-8t/k3s-etcd-snapshots/`, 7 copies retained | none |
+| `backup-vault` | daily 02:30 | Vault raft snapshot → `/mnt/cold-8t/vault-snapshots/`, 30-day retention | none |
+| `backup-lldap` | daily 02:45 | lldap SQLite → `/mnt/cold-8t/lldap-snapshots/`, 30-day retention | ~2s (lldap stop/start) |
+| Immich DB dump | daily 01:30 | `pg_dump` via k8s CronJob → `/mnt/cold-8t/immich/backups/` (captured by restic above) | none |
+
+Check:
+
+    export VAULT_ADDR=http://192.168.1.128:8200
+    export RESTIC_PASSWORD=$(vault kv get -field=password secret/lab/restic)
+    export RESTIC_REPOSITORY=/mnt/cold-8t/restic
+    restic snapshots
+    journalctl -u backup-nas.service --no-pager | tail -30
+
+**Never run `restic forget` or `restic prune` manually** — retention is managed by timers only.
 
 ---
 
@@ -86,117 +104,161 @@ systemctl status backup-nas.timer backup-etcd.timer
 
 ### Unseal after restart
 
-```bash
-export VAULT_ADDR=http://192.168.1.128:8200
-vault operator unseal  # x3 with offline keys
-vault status
-```
+    export VAULT_ADDR=http://192.168.1.128:8200
+    vault operator unseal  # x3 with offline keys
+    vault status
 
 ### Root token lost (Vault 2.x)
 
-```bash
-# Temporarily allow unauthenticated generate-root
-sudo bash -c 'echo "enable_unauthenticated_access = [\"generate-root\"]" >> /etc/vault.d/vault.hcl'
-sudo kill -s HUP $(pidof vault)
+Vault 2.x requires unauthenticated access to be explicitly enabled for generate-root:
 
-vault operator generate-root -init          # note OTP and nonce
-vault operator generate-root -nonce=<nonce> # x3 with unseal keys
-vault operator generate-root -decode=<encoded> -otp=<otp>
+    # On rpi5:
+    sudo bash -c 'echo "enable_unauthenticated_access = [\"generate-root\"]" >> /etc/vault.d/vault.hcl'
+    sudo kill -s HUP $(pidof vault)
 
-# Remove the config line and reload
-sudo sed -i '/enable_unauthenticated_access/d' /etc/vault.d/vault.hcl
-sudo kill -s HUP $(pidof vault)
-```
+    vault operator generate-root -init          # note OTP and nonce
+    vault operator generate-root -nonce=<nonce> # x3 with unseal keys
+    vault operator generate-root -decode=<encoded> -otp=<otp>
+
+    # Remove the config line and reload
+    sudo sed -i '/enable_unauthenticated_access/d' /etc/vault.d/vault.hcl
+    sudo kill -s HUP $(pidof vault)
 
 ### ESO token expired
 
-```bash
-vault policy write eso - << 'POLICY'
-path "secret/data/lab/*" { capabilities = ["read"] }
-path "secret/metadata/lab/*" { capabilities = ["read", "list"] }
-POLICY
-vault token create -display-name=eso -period=87600h -policy=eso
-kubectl create secret generic vault-token -n external-secrets \
-  --from-literal=token=<new-token> --dry-run=client -o yaml | kubectl apply -f -
-vault kv put secret/lab/eso token=<new-token>
-```
+    vault policy write eso - << 'POLICY'
+    path "secret/data/lab/*" { capabilities = ["read"] }
+    path "secret/metadata/lab/*" { capabilities = ["read", "list"] }
+    POLICY
+    vault token create -display-name=eso -period=87600h -policy=eso
+    kubectl create secret generic vault-token -n external-secrets \
+      --from-literal=token=<new-token> \
+      --dry-run=client -o yaml | kubectl apply -f -
+    vault kv put secret/lab/eso token=<new-token>
 
 ---
 
-## Storage operations
+## Recovery scenarios
 
-### Check array health
+### Cluster workload gone wrong
 
-```bash
-cat /proc/mdstat
-mdadm --detail /dev/md1    # primary 8TB
-mdadm --detail /dev/md0    # secondary ~5.45TB
-```
+    git revert <sha>
+    git push
+    # ArgoCD reconciles within minutes
 
-### RAID degraded — replace disk
+For immediate relief before the revert lands:
 
-```bash
-mdadm --detail /dev/md1                  # identify failed member
-mdadm /dev/md1 --add /dev/sdX           # add replacement; rebuild starts
-watch cat /proc/mdstat                   # monitor — wait for [UU]
-```
+    kubectl rollout undo deployment/<name> -n <namespace>
 
-Do not make storage changes until both mirrors show `[UU]`.
+### Full cluster loss — etcd restore
 
-### Check restic backups
+    sudo systemctl stop k3s
+    sudo k3s etcd-snapshot restore /mnt/cold-8t/etcd/<snapshot-name>
+    sudo systemctl start k3s
+    # ArgoCD re-syncs all workloads from git automatically
 
-```bash
-export VAULT_ADDR=http://192.168.1.128:8200
-export RESTIC_PASSWORD=$(vault kv get -field=password secret/lab/restic)
-export RESTIC_REPOSITORY=/mnt/cold-8t/restic
+### NAS data loss — restic restore
 
-restic snapshots                         # list snapshots
-restic check                             # verify integrity
-journalctl -u backup-nas.service --no-pager | tail -30
-```
+    export VAULT_ADDR=http://192.168.1.128:8200
+    export RESTIC_PASSWORD=$(vault kv get -field=password secret/lab/restic)
+    export RESTIC_REPOSITORY=/mnt/cold-8t/restic
+    restic restore latest --target /srv/nas
 
-**Never run `restic forget` or `restic prune` manually** — retention is handled by timers only.
+### UDMA CRC errors (SMART 199) — triage BEFORE replacing a disk
 
-### Restore NAS data from restic
+`UDMA_CRC_Error_Count` is a **link-layer** fault (cable / connector / SATA power /
+controller), not the platters. Two disks erroring identically means a shared cause, not two
+bad drives.
 
-```bash
-export RESTIC_PASSWORD=$(vault kv get -field=password secret/lab/restic)
-export RESTIC_REPOSITORY=/mnt/cold-8t/restic
-restic restore latest --target /mnt/cold-8t
-```
+    smartctl -a /dev/sdX | grep -E "UDMA_CRC|Reallocated_Sector|Current_Pending|Offline_Uncorrectable"
+    # 199 climbing  => active link problem. 5/197/198 all 0 => media is fine (link-only).
+
+Fix order: (1) reseat/replace SATA **data** cables; (2) check SATA **power** (marginal
+splitter is a classic cause); (3) move disks to **different SATA ports**; (4) update
+**H4 BIOS**; (5) re-test. If 199 stops climbing after a cable+power+port swap, the disks
+were never the problem.
+
+### RAID 1 member dropped
+
+The array is degraded, not lost — platter data is intact. After fixing the link:
+
+    cat /proc/mdstat                       # see which member fell out
+    mdadm --detail /dev/md1               # confirm state
+    mdadm /dev/md1 --re-add /dev/sdX1    # re-add; resyncs automatically
+
+Only if SMART 5/197/198 are non-zero (real media damage) do you replace the disk:
+`mdadm --manage /dev/md1 --fail /dev/sdX1 --remove /dev/sdX1`, fit new disk, partition to
+match, `--add`, let it rebuild.
+
+### Burn-in a re-attached / replaced cold mirror
+
+A re-attached array will assemble fine; the real question is whether the SATA link stays
+clean **under sustained load** — CRC only shows up while pushing data.
+
+1. Baseline 199 on both members:
+
+        cat /proc/mdstat
+        for d in sda sdb; do
+          smartctl -a /dev/$d | grep -E "UDMA_CRC|Reallocated_Sector|Current_Pending|Offline_Uncorrectable"
+        done
+
+2. Confirm array is clean: `mdadm --detail /dev/md1` → State clean, both active sync,
+   Failed Devices 0.
+
+3. Full read scrub while watching the link (hours for 8 TB):
+
+        # Terminal 1 — watch for link errors
+        journalctl -k -f | grep -i 'ata\|sata\|hard resetting\|SError\|failed command'
+
+        # Terminal 2 — run the scrub
+        echo check > /sys/block/md1/md/sync_action
+        watch -n5 cat /proc/mdstat
+
+        # When done, check results
+        cat /sys/block/md1/md/mismatch_cnt          # want 0
+        for d in sda sdb; do smartctl -a /dev/$d | grep UDMA_CRC; done
+
+4. Optional write stress (non-destructive to existing files):
+
+        fio --name=burn --directory=/mnt/cold-8t --size=20G --rw=randrw \
+            --bs=1M --numjobs=4 --time_based --runtime=1800 --group_reporting
+
+5. Confirm monitoring is armed: `systemctl status mdmonitor smartd`
+
+**Pass = all three:** 199 did not climb · no `ata`/`hard resetting` lines · `mismatch_cnt = 0`.
+
+If `mismatch_cnt > 0`, run `echo repair > /sys/block/md1/md/sync_action`, then re-check.
+Until it passes all three, keep backups landing on the secondary — don't promote on faith.
 
 ---
 
-## k3s operations
+## Storage tiers
 
-### Restart k3s
+- **Primary — 8 TB (`md1`, 2×8 TB) → `/mnt/cold-8t`.** restic repo + etcd snapshots +
+  Immich library. This is the trusted tier.
+- **Secondary — ~5.45 TB (2×6 TB) → `/mnt/cold-sec`.** `restic copy` of the critical-but-small
+  set (DB dumps, configs, irreplaceable originals).
+- **Hot — NVMe 4 TB.** Live NAS (`lv_nas`) + k8s PVs (`local-path` StorageClass).
 
-```bash
-sudo systemctl restart k3s
-kubectl get nodes    # wait for Ready
-```
+Because the secondary can't hold the entire multi-TB library, the bulk library's redundant
+copy is the offsite restic + md1's own mirror. The secondary covers the small critical set.
 
-### etcd snapshot restore
+### Migrate the ex-Synology secondary to a clean mirror
 
-```bash
-sudo systemctl stop k3s
-sudo k3s etcd-snapshot restore /mnt/cold-8t/etcd/<snapshot-name>
-sudo systemctl start k3s
-```
+(One-time: the secondary disks came off an old Synology — ext4 LVM `vg1000`.)
 
-### Force ArgoCD resync
+    # 1. Copy photos to primary (verify in Immich before deleting source)
+    rsync -aHAX --info=progress2 /mnt/cold-sec-old/<photos>/ /mnt/cold-8t/immich/library/
 
-```bash
-kubectl annotate application <app> -n argocd \
-  argocd.argoproj.io/refresh=hard --overwrite
-```
-
-### Restart a deployment after ConfigMap change
-
-```bash
-kubectl rollout restart deployment/<name> -n <namespace>
-kubectl rollout status deployment/<name> -n <namespace>
-```
+    # 2. Wipe old layout and create clean RAID 1 across the two 6 TB disks
+    umount /mnt/cold-sec-old
+    vgremove vg1000
+    mdadm --stop /dev/md2 /dev/md3
+    wipefs -a /dev/sda /dev/sdc
+    mdadm --create /dev/md0 --level=1 --raid-devices=2 /dev/sda /dev/sdc
+    mkfs.xfs /dev/md0
+    mdadm --detail --scan >> /etc/mdadm/mdadm.conf
+    # 3. Mount at /mnt/cold-sec; storage.yml manages it going forward.
 
 ---
 
@@ -206,10 +268,6 @@ kubectl rollout status deployment/<name> -n <namespace>
 |--------|------|-------|-------|
 | `api.lab.home.arpa` | A | `192.168.1.160` | k3s API server |
 | `*.apps.lab.home.arpa` | A | `192.168.1.160` | All Ingresses |
-| `authelia.apps.lab.home.arpa` | — | (wildcard) | OIDC provider |
-| `immich.apps.lab.home.arpa` | — | (wildcard) | Photo library |
-| `argocd.apps.lab.home.arpa` | — | (wildcard) | GitOps UI |
-| `grafana.apps.lab.home.arpa` | — | (wildcard) | Metrics UI |
 
 ---
 

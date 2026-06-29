@@ -14,15 +14,23 @@ box is recoverable from the RAID mirror plus git (see [RUNBOOK.md](RUNBOOK.md)).
 ## Secrets store
 
 **HashiCorp Vault** on rpi5 (`http://192.168.1.128:8200`) is the authoritative store for
-all lab credentials. See [WORKFLOWS.md](WORKFLOWS.md) for the three-direction sync loop
-and the list of what's stored where.
+all lab credentials. All secrets live under `secret/lab/*`. See
+[WORKFLOWS.md](WORKFLOWS.md) for the three-direction sync loop and the full inventory.
 
-The three credentials that must be safeguarded **outside** Vault (they exist before Vault
-can be used):
+The three credentials that must be safeguarded **outside** Vault — they exist before Vault
+can be used and cannot be stored inside it:
 
-- **Vault unseal keys** (3-of-5) — stored offline, physically secure
-- **Vault root token** — stored offline alongside unseal keys
-- **Ansible Vault password** (`.vault_pass` on H4, gitignored) — gates bootstrap secrets
+| Credential | Where stored | Why |
+|------------|-------------|-----|
+| Vault unseal keys (3-of-5) | Offline, physically secure | Required to unseal after restart |
+| Vault root token | Offline, alongside unseal keys | Required to generate new tokens |
+| Ansible Vault password (`.vault_pass` on H4) | Gitignored | Gates all bootstrap secrets |
+
+## Rotate the credentials from the hardware map
+
+The original hardware map stored plaintext logins (shared passwords, default `pi`/`odroid`/`root`
+accounts). Treat them as compromised: rotate every one, disable password SSH in favour of
+keys, and never commit credential fields. None are reproduced in this repo.
 
 ## Credentials — least privilege
 
@@ -34,16 +42,10 @@ can be used):
 - **Secrets never in git.** Restic password, Vault password, and all credentials live in
   HashiCorp Vault or Ansible Vault encrypted files. See `ansible/files/README.md`.
 
-## Rotate the credentials from the hardware map
-
-The original hardware map stored plaintext logins (shared passwords, default `pi`/`odroid`/`root`
-accounts). Treat them as compromised: rotate every one, disable password SSH in favour of
-keys, and never commit credential fields. None are reproduced in this repo.
-
 ## Permission tiers (`.claude/settings.json`)
 
 Pattern-matching on shell strings is a strong **speed bump**, not a sandbox — it backs up
-(never replaces) the contained blast radius and scoped credentials.
+(never replaces) the contained blast radius and scoped credentials. The tiers:
 
 | Tier | Behavior | Examples |
 |------|----------|---------|
@@ -54,12 +56,12 @@ Pattern-matching on shell strings is a strong **speed bump**, not a sandbox — 
 The deny list targets the two things that cause irreversible loss: **storage destruction**
 (LVM/RAID/filesystem ops) and **backup destruction** (`restic forget/prune`, disabling timers).
 
-## Pod security
+## Pod security (k3s)
 
 k3s uses standard **PodSecurityAdmission** (not OpenShift SCCs). The lazy fix when a pod
-won't start is `privileged: true` — don't. Fix the workload's `securityContext` to run
-non-root instead: `runAsNonRoot: true`, drop all capabilities, use `RuntimeDefault` seccomp.
-Never set `privileged: true`; it's in the deny list.
+won't start is `privileged: true` — don't. That's in the deny list. Fix the workload's
+`securityContext` to run non-root instead: `runAsNonRoot: true`, drop all capabilities,
+use `RuntimeDefault` seccomp. The sample app shows the right shape.
 
 ## Prompt injection
 
