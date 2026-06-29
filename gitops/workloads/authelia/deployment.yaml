@@ -16,7 +16,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: authelia
-          image: ghcr.io/authelia/authelia:4.38
+          image: ghcr.io/authelia/authelia:4.39
           command: ["authelia"]
           args:
             - --config
