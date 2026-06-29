@@ -1,15 +1,12 @@
 ---
 # Enable zswap on KVM hypervisors (Ubuntu 24.04, kernel 6.8+)
-# zswap intercepts swap writes, compresses pages in RAM, and only evicts to
-# disk when the pool fills — dramatically reducing swap I/O on the n150 NVMe.
 #
 # Run: ansible-playbook -i inventory/hosts.yml playbooks/zswap.yml \
 #        --vault-password-file .vault_pass --check
 #      ansible-playbook -i inventory/hosts.yml playbooks/zswap.yml \
 #        --vault-password-file .vault_pass
 #
-# A reboot is required for the kernel cmdline changes to take effect.
-# Sysfs params are applied immediately (current boot only until reboot).
+# A reboot is required for the GRUB cmdline changes to take effect.
 
 - name: Enable zswap on KVM hypervisors
   hosts: kvm_hosts
@@ -17,9 +14,9 @@
 
   vars:
     zswap_enabled: "1"
-    zswap_compressor: zstd          # best ratio/speed balance on x86
-    zswap_zpool: z3fold             # memory-efficient pool allocator
-    zswap_max_pool_percent: "20"    # cap compressed pool at 20% of RAM
+    zswap_compressor: zstd
+    zswap_zpool: z3fold
+    zswap_max_pool_percent: "20"
 
   tasks:
     - name: Check current kernel version
@@ -41,7 +38,13 @@
         msg: "zswap not available — check kernel config"
       when: not zswap_module.stat.exists
 
-    - name: Apply zswap params via sysfs (immediate, current boot)
+    - name: Ensure sysfsutils is installed
+      apt:
+        name: sysfsutils
+        state: present
+        update_cache: false
+
+    - name: Apply zswap params via sysfs.d (persists via sysfsutils)
       ansible.builtin.copy:
         dest: /etc/sysfs.d/zswap.conf
         content: |
@@ -51,12 +54,6 @@
           module/zswap/parameters/max_pool_percent = {{ zswap_max_pool_percent }}
         mode: "0644"
       notify: apply sysfs
-
-    - name: Ensure sysfsutils is installed (for sysfs.d persistence)
-      apt:
-        name: sysfsutils
-        state: present
-        update_cache: false
 
     - name: Set zswap kernel cmdline params in GRUB
       lineinfile:
@@ -90,7 +87,7 @@
   handlers:
     - name: apply sysfs
       command: systemctl restart sysfsutils
-      ignore_errors: true   # sysfsutils may not be running yet on first apply
+      ignore_errors: true
 
     - name: update grub
       command: update-grub
