@@ -36,7 +36,7 @@ data:
         filename: /data/notification.txt
 
     access_control:
-      default_policy: bypass
+      default_policy: one_factor
 
     identity_providers:
       oidc:
@@ -49,6 +49,7 @@ data:
           - client_id: immich
             client_name: Immich
             client_secret: {{ secret "/authelia-secrets/immich_client_secret" | msquote }}
+            authorization_policy: one_factor
             redirect_uris:
               - https://immich.apps.lab.home.arpa/auth/login
               - https://immich.apps.lab.home.arpa/user-settings
