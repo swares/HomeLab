@@ -1,28 +1,96 @@
 ---
-# zswap.yml — Enable zswap on lab hosts.
+# Enable zswap on KVM hypervisors (Ubuntu 24.04, kernel 6.8+)
+# zswap intercepts swap writes, compresses pages in RAM, and only evicts to
+# disk when the pool fills — dramatically reducing swap I/O on the n150 NVMe.
 #
-# Usage:
-#   ansible-playbook -i inventory/hosts.yml playbooks/zswap.yml
-#   ansible-playbook -i inventory/hosts.yml playbooks/zswap.yml -l rpi5
+# Run: ansible-playbook -i inventory/hosts.yml playbooks/zswap.yml \
+#        --vault-password-file .vault_pass --check
+#      ansible-playbook -i inventory/hosts.yml playbooks/zswap.yml \
+#        --vault-password-file .vault_pass
+#
+# A reboot is required for the kernel cmdline changes to take effect.
+# Sysfs params are applied immediately (current boot only until reboot).
 
-- name: Configure zswap — RPi hosts (SD card backed)
-  hosts: rpi5,dns-1
+- name: Enable zswap on KVM hypervisors
+  hosts: kvm_hosts
   become: true
-  gather_facts: true
-  vars:
-    zswap_swapfile_path: /swapfile
-    zswap_swapfile_size_mb: 1024   # 1 GB — most pages never reach disk
-    zswap_disable_zram: false
-  roles:
-    - zswap
 
-- name: Configure zswap — OPi 5 Pro nodes (NVMe backed)
-  hosts: opi5pro-1,opi5pro-2
-  become: true
-  gather_facts: true
   vars:
-    zswap_swapfile_path: /mnt/nvme/swapfile
-    zswap_swapfile_size_mb: 8192   # 8 GB on NVMe — plenty of headroom
-    zswap_disable_zram: true
-  roles:
-    - zswap
+    zswap_enabled: "1"
+    zswap_compressor: zstd          # best ratio/speed balance on x86
+    zswap_zpool: z3fold             # memory-efficient pool allocator
+    zswap_max_pool_percent: "20"    # cap compressed pool at 20% of RAM
+
+  tasks:
+    - name: Check current kernel version
+      command: uname -r
+      register: kernel_version
+      changed_when: false
+
+    - name: Show kernel version
+      debug:
+        msg: "Kernel: {{ kernel_version.stdout }}"
+
+    - name: Check if zswap module is available
+      stat:
+        path: /sys/module/zswap
+      register: zswap_module
+
+    - name: Fail if zswap not available in kernel
+      fail:
+        msg: "zswap not available — check kernel config"
+      when: not zswap_module.stat.exists
+
+    - name: Apply zswap params via sysfs (immediate, current boot)
+      ansible.builtin.copy:
+        dest: /etc/sysfs.d/zswap.conf
+        content: |
+          module/zswap/parameters/enabled = {{ zswap_enabled }}
+          module/zswap/parameters/compressor = {{ zswap_compressor }}
+          module/zswap/parameters/zpool = {{ zswap_zpool }}
+          module/zswap/parameters/max_pool_percent = {{ zswap_max_pool_percent }}
+        mode: "0644"
+      notify: apply sysfs
+
+    - name: Ensure sysfsutils is installed (for sysfs.d persistence)
+      apt:
+        name: sysfsutils
+        state: present
+        update_cache: false
+
+    - name: Set zswap kernel cmdline params in GRUB
+      lineinfile:
+        path: /etc/default/grub
+        regexp: '^GRUB_CMDLINE_LINUX='
+        line: >-
+          GRUB_CMDLINE_LINUX="zswap.enabled={{ zswap_enabled }}
+          zswap.compressor={{ zswap_compressor }}
+          zswap.zpool={{ zswap_zpool }}
+          zswap.max_pool_percent={{ zswap_max_pool_percent }}"
+        backrefs: true
+      notify: update grub
+
+    - name: Enable zswap immediately via sysfs
+      ansible.builtin.shell: |
+        echo {{ zswap_enabled }} > /sys/module/zswap/parameters/enabled
+        echo {{ zswap_compressor }} > /sys/module/zswap/parameters/compressor
+        echo {{ zswap_zpool }} > /sys/module/zswap/parameters/zpool
+        echo {{ zswap_max_pool_percent }} > /sys/module/zswap/parameters/max_pool_percent
+      changed_when: true
+
+    - name: Verify zswap is active
+      command: cat /sys/module/zswap/parameters/enabled
+      register: zswap_status
+      changed_when: false
+
+    - name: Show zswap status
+      debug:
+        msg: "zswap enabled: {{ zswap_status.stdout }}"
+
+  handlers:
+    - name: apply sysfs
+      command: systemctl restart sysfsutils
+      ignore_errors: true   # sysfsutils may not be running yet on first apply
+
+    - name: update grub
+      command: update-grub
