@@ -3,7 +3,7 @@ terraform {
   required_providers {
     proxmox = {
       source  = "bpg/proxmox"
-      version = "~> 0.66" # pin; validate your HCL against this version's docs
+      version = "~> 0.111" # pin; validate your HCL against this version's docs
     }
   }
 }
