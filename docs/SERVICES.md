@@ -10,123 +10,108 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
-| DNS (Pi-hole / dnsmasq) | ● | RPi 3B #2 (.59, **wired**) + Zero 2W secondary | Pi-hole on the dnsmasq engine; lab zone via Ansible `dns.yml`; ad-block scoped to household clients |
-| OpenLDAP (directory) | ● | RPi 4B (.99) | `make ldap` |
-| SSO (Keycloak / Authentik) | ○ | in-cluster | one login for Proxmox/Grafana/GitLab/Argo/Vault UIs |
-| Vault (secrets / PKI) | ● | RPi 5 (.67) | `make vault` (init/unseal manual) |
-| External Secrets Operator | ● | in-cluster | Vault → k8s |
-| NAS (NFS / SMB) | ● | H4 (.64) | |
-| MinIO (S3) | ● | H4 | models, datasets, registry, Glance images |
-| restic backups | ● | H4 (md1 8TB → md0 ~5.45TB) → offsite | bulk library → offsite; critical set → local secondary; nightly `restic copy` via timers |
-| smartd (SMART alerts) | ● | H4 | watches SMART 199 (UDMA CRC) + media attrs; email on failure |
-| mdadm monitor | ● | H4 | alerts on a degraded / dropped RAID 1 mirror member |
-| OpenTelemetry | ✓ | OPi 5 Pro #2 | |
-| Grafana | ✓ | in-cluster | |
-| Prometheus | ● | in-cluster | |
-| HostMon (black-box prober) | ● | Waveshare ESP32-S3 (edge) | ping/DNS/port/HTTP/SSL-expiry/trace probes + LCD status panel; webhook alerts; behind proxy/VLAN |
-| Loki (logs) | ○ | in-cluster | |
-| Tempo (traces) | ○ | in-cluster | |
-| Alertmanager | ○ | in-cluster | |
-| cert-manager | ● | in-cluster | |
-| Internal CA (step-ca / ACME) | ○ | TBD | for internal TLS |
-| chrony / NTP | ○ | all hosts | trivial but load-bearing for LDAP/k8s |
+| DNS (Pi-hole / dnsmasq) | ✓ | octopi RPi 3B #2 (.148, wired) | Pi-hole on dnsmasq; `lab.home.arpa` zone via custom records; ad-block for household clients |
+| CoreDNS custom zone | ● | k3s kube-system | `coredns-custom` ConfigMap; wildcard `*.apps.lab.home.arpa → 192.168.1.160` for in-cluster pod resolution |
+| lldap (directory) | ✓ | ldap-1 VM on n150-1 (192.168.1.70) | lightweight LDAP; web UI :17170; `dc=lab,dc=home,dc=arpa` |
+| Authelia (OIDC / SSO) | ✓ | k3s · authelia namespace | OIDC provider backed by lldap; gates Immich SSO; `authelia.apps.lab.home.arpa` |
+| Vault (secrets / PKI) | ✓ | RPi 5 (.128) | init/unseal manual; `secret/lab/*` for cluster secrets |
+| External Secrets Operator | ● | k3s | Vault → k8s Secrets |
+| cert-manager + lab CA | ✓ | k3s | `lab-ca` ClusterIssuer (self-signed root); signs `*.apps.lab.home.arpa` TLS certs |
+| NAS (NFS / SMB) | ✓ | H4 (.160) | `smbd` + `nfs-kernel-server`; **do not restart** |
+| restic backups | ✓ | H4 (md1 8TB → md0 ~5.45TB) | NAS + Immich library daily; etcd weekly; offsite via `backup-offsite.timer` |
+| smartd / mdadm monitor | ✓ | H4 | SMART 199 + media attrs; email + mdadm alerts on degraded mirror |
+| Grafana | ✓ | k3s | `grafana.apps.lab.home.arpa` |
+| Prometheus | ● | k3s | metrics scrape |
+| OpenTelemetry | ○ | k3s | traces pipeline |
+| Loki (logs) | ○ | k3s | |
+| Alertmanager | ○ | k3s | |
+| MQTT broker (Mosquitto) | ✓ | opi-zero2w-2 (.188) | always-on; point M5Stack here |
+| chrony / NTP | ○ | all hosts | load-bearing for LDAP/k8s cert validity |
 
 ## IaaS (L1)
 
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
-| Proxmox VE | ● | N150 ×3 | the cluster |
-| OpenTofu + `bpg/proxmox` | ● | `terraform/` | built |
-| OpenNebula | ✓ | H4 | installed; optional/alt |
-| OpenStack (Sunbeam) | ○ | nested VM | optional learning track |
+| KVM / libvirt | ✓ | n150-1 (.42) + n150-2 (.21) | bare-metal Ubuntu 24.04 hypervisors; cloud-init VMs |
+| NFS storage for VMs | ○ | H4 exports → n150 hosts | shared VM disk storage |
+| n150-3 (yikw) | ✓ | Windows HTPC | TV/browse; not a hypervisor |
 
 ## Platform / CaaS (L2)
 
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
-| k3s (bare-metal ARM) | ● | OPi 5 Pro ×2 + Zero 2W agents | AI/NPU tier |
-| Platform k3s / MicroShift (in VMs) | ● | Proxmox VMs | devops playground |
-| Argo CD | ● | in-cluster | GitOps |
-| Helm + Kustomize | ● | CASC | |
-| Ingress (Traefik / nginx) | ○ | in-cluster | |
-| Kyverno / OPA (policy) | ○ | in-cluster | |
-| Linkerd (service mesh) | ○ | in-cluster | light mesh; optional |
-| CSI (local-path / NFS-CSI / Longhorn) | ○ | in-cluster | pick a storage class |
+| k3s (H4 server + opi5pro-2 agent) | ✓ | H4 (.160) server · opi5pro-2 (.172) arm64 agent | single-server cluster; `local-path` StorageClass on NVMe |
+| Argo CD | ✓ | k3s | GitOps; app-of-apps from `gitops/apps/`; selfHeal + prune on |
+| Traefik ingress | ✓ | k3s | k3s default; all `*.apps.lab.home.arpa` Ingresses; TLS via cert-manager |
+| Helm + Kustomize | ● | CASC | used by ArgoCD |
+| Kyverno / OPA (policy) | ○ | k3s | |
+| Linkerd (service mesh) | ○ | k3s | optional |
 
 ## AI / Inference
 
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
-| RKLLama (NPU LLM) | ● | OPi 5 Pro ×2 | ~7–8 tok/s 3B |
-| OpenVINO Model Server (iGPU) | ● | H4 + N150 iGPUs | embeddings/STT/vision |
-| LiteLLM gateway | ● | in-cluster | unifies backends |
-| m5stack-adapter | ● | in-cluster | built (OpenAI shim) |
-| Claude Code orchestrator | ● | OPi 5 Pro #1 | escalation Tier 3 |
-| M5Stack escalation router | ✓ | M5Stack | edge front-end |
+| RKLLama (NPU LLM) | ✓ | opi5pro-1 (.168) | ~7–8 tok/s 3B on RK3588 NPU |
+| OpenVINO Model Server | ● | H4 + N150 iGPUs | embeddings / STT / vision |
+| LiteLLM gateway | ✓ | k3s · `ai.apps.lab.home.arpa` | unifies backends |
+| m5stack-adapter | ● | k3s | OpenAI shim for M5Stack |
+| Claude Code orchestrator | ● | opi5pro-1 | escalation Tier 3 |
+| M5Stack escalation router | ✓ | M5Stack | edge front-end; 3-tier escalation |
 | Whisper STT | ○ | OpenVINO | faster-than-realtime |
 | Embedding model (bge-small) | ○ | OpenVINO | RAG |
-| Vector DB (Qdrant / Chroma) | ○ | in-cluster | RAG store |
-| JupyterHub | ○ | H4 | needs the RAM |
-| MLflow (experiment tracking) | ○ | in-cluster / H4 | |
-| DVC (data/version) | ○ | with Git | |
-| Label Studio | ○ | in-cluster | annotation |
+| Vector DB (Qdrant / Chroma) | ○ | k3s | RAG store |
 | Ollama / llama.cpp | ○ | H4 CPU | fallback engine |
 
 ## Software dev
 
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
-| GitLab (SCM / CI / registry) | ● | **Proxmox VM** (n150-1) | moved off OPi 5 Pro #2 to de-load the AI board; provisioned by OpenTofu, k3s/host by Ansible |
-| GitLab Runners | ● | N150 VMs / k8s | |
+| GitLab (SCM / CI / registry) | ● | KVM VM on n150-1 | provisioned by cloud-init/Ansible |
+| GitLab Runners | ● | N150 VMs / k3s | |
 | Multi-arch buildx | ● | runners | x86 + arm64 |
-| Renovate (dep updates) | ○ | CI | |
-| Coder / devcontainers | ○ | VMs | ephemeral dev envs |
+| Renovate (dep updates) | ● | `renovate.json` in repo | Mend hosted |
 | Claude Code | ● | orchestrator / dev | agentic |
-| Harbor | ○ | — | optional; GitLab registry usually covers it |
 
 ## Provisioning (CASC)
 
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
-| Ansible | ✓ | control node | host config |
-| OpenTofu + cloud-init | ● | `terraform/` | VMs |
-| rpi-imager / cloud-init | ● | flashing | SD-card SBCs, SSH-ready |
+| Ansible | ✓ | control node | host config; `ansible/playbooks/`; vault-encrypted secrets |
+| KVM + cloud-init | ✓ | n150-1/2 | VMs via `virt-install`; SSH-ready |
+| rpi-imager / cloud-init | ● | flashing | SD-card SBCs |
 | PlatformIO / ESPHome / OTA | ● | firmware | microcontrollers |
-| netboot.xyz | ○ | — | optional x86 PXE |
 
 ## Edge / IoT / single-purpose
 
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
-| M5Stack framework | ✓ | M5Stack | sensors + router |
-| OctoPi | ✓ | — | **3D printer offline**; host repurposed to DNS |
-| MQTT broker (Mosquitto) | ● | **lab Zero 2W** (`make mqtt`) | relocated off dad's laptop to an always-on broker; laptop kept as a dev target. Point the framework here |
+| M5Stack framework | ✓ | M5Stack | sensors + escalation router |
+| Pi-hole | ✓ | octopi (.148) | DNS + ad-block |
+| MQTT (Mosquitto) | ✓ | opi-zero2w-2 (.188) | always-on broker |
 | Home Assistant | ○ | TBD | natural MQTT consumer; optional |
-
-> **HostMon vs. Prometheus.** HostMon is an *active prober* — it reaches out and asks "is this host/port/cert reachable from here, right now," from a fixed vantage point, and shows fleet health on its LCD. The in-cluster Prometheus/Grafana stack *pulls* rich internal metrics (CPU/RAM/disk/container health) over time. They're complementary: black-box reachability vs. white-box telemetry. HostMon complements, not replaces, the metrics stack — and its SSL-expiry check pairs well with the planned internal CA. Route its **webhook** at the lab's alert relay (MQTT/ntfy/Home Assistant), and front its HTTP-only dashboard with the **reverse proxy** (or keep it on a trusted/IoT VLAN).
 
 ## Applications
 
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
-| Immich — server | ● | H4 MicroShift · library on md1 (`/mnt/cold-8t`) | self-hosted photos/video; Argo workload |
-| Immich — machine learning | ● | H4 **CPU default** (OpenVINO or OPi `rknn` optional) | Smart Search + face recog; accel is best-effort, see workload README |
-| Immich — Postgres (vectorchord) | ● | NVMe hot (topolvm) | vector extension **mandatory**; nightly dump → md1 library |
-| Immich — Redis | ● | H4 (ephemeral) | cache |
+| Immich — server | ✓ | k3s · immich namespace | self-hosted photos/video; SSO via Authelia OIDC; `immich.apps.lab.home.arpa` |
+| Immich — machine learning | ✓ | k3s (CPU default) | Smart Search + face recog |
+| Immich — Postgres (vectorchord) | ✓ | NVMe hot (`local-path` PV) | vector extension mandatory; nightly dump → md1 |
+| Immich — Redis | ✓ | k3s (ephemeral) | cache |
 
-Immich is the first real end-user app. Its ML (Smart Search + face recog) runs on **CPU by
-default**; acceleration is optional and best-effort — **OpenVINO** on the H4 iGPU (Immich warns
-integrated graphics may have issues) or, more robustly, the **`rknn` backend on an OPi 5 Pro NPU**
-via remote ML. So it's a *candidate* OpenVINO/NPU consumer, not a guaranteed one.
+Immich authenticates via **Authelia OIDC** (SSO) or direct login. The Node.js runtime
+trusts the lab root CA via `NODE_EXTRA_CA_CERTS`, so TLS to `authelia.apps.lab.home.arpa`
+validates correctly.
 
 ## Gaps worth a decision
 
-1. ~~**MQTT broker (Mosquitto)**~~ — **DONE.** Relocated to an always-on lab Zero 2W (`make mqtt`); dad's laptop kept as a dev target.
-2. **Home Assistant** — *deferred by choice (future improvement).* The natural MQTT consumer if/when you want the home-automation side.
-3. **Reverse proxy + internal CA + SSO** — a dozen web UIs are coming; ingress + cert-manager/step-ca + Keycloak/Authentik keeps them sane.
-4. **Remote access** — WireGuard or Tailscale to reach the lab from outside.
-5. ~~**Offsite backup (the "1" in 3-2-1)**~~ — **DONE.** Nightly `restic copy` to an offsite repo (B2/rclone) via `backup-offsite.timer`; set `offsite_restic_repo` + creds in `/etc/restic/offsite.env` (from Vault).
-6. **Shared database service** — CloudNativePG (Postgres) + Redis operators if apps need state beyond GitLab.
-7. **UPS + NUT** — *deferred by choice (future improvement).* The H4 is a single storage point; a UPS + Network UPS Tools is cheap insurance when you're ready.
-8. **Homepage / dashboard** — a landing page once 30+ services are running. *(Black-box uptime is now partly covered by **HostMon** — the ESP32-S3 prober + LCD panel; a software status page is still nice-to-have.)*
-9. **k8s device plugins (rknpu / Intel-GPU)** — only if you run inference *in* k8s rather than bare-metal.
+1. **Home Assistant** — *deferred.* Natural MQTT consumer if/when you want home-automation.
+2. **Remote access** — WireGuard or Tailscale to reach the lab from outside.
+3. ~~**Reverse proxy + internal CA + SSO**~~ — **DONE.** Traefik ingress + cert-manager lab-ca + Authelia OIDC all deployed.
+4. ~~**MQTT broker**~~ — **DONE.** Relocated to always-on Zero 2W.
+5. ~~**Offsite backup**~~ — **DONE.** Nightly `restic copy` via `backup-offsite.timer`.
+6. **UPS + NUT** — *deferred.* The H4 is a single storage point; a UPS is cheap insurance.
+7. **Homepage / dashboard** — landing page once 30+ services are running.
+8. **Shared DB service** — CloudNativePG + Redis operators if more apps need state.
+9. **k8s device plugins (rknpu / Intel-GPU)** — only if inference runs *in* k8s rather than bare-metal.
+10. **RPi 4B reassignment** — now spare (lldap took over LDAP from what was planned for it).
