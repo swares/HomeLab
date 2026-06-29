@@ -1,0 +1,15 @@
+# Extends k3s CoreDNS with a wildcard zone for *.apps.lab.home.arpa → 192.168.1.160 (Traefik ingress).
+# Without this, pods on non-H4 nodes cannot resolve ingress hostnames via the cluster DNS.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: coredns-custom
+  namespace: kube-system
+data:
+  lab-apps.server: |
+    apps.lab.home.arpa:53 {
+        template IN A {
+            answer "{{ .Name }} 60 IN A 192.168.1.160"
+        }
+        cache 30
+    }
