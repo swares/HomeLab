@@ -1,107 +1,78 @@
 ---
-# bootstrap-lldap.yml — Install and configure Lldap on ldap-1 VM.
-#
-# Lldap is a lightweight LDAP server with web UI.
-# After this runs:
-#   Web UI:  http://192.168.1.70:17170
-#   LDAP:    ldap://192.168.1.70:3890
-#
-# Usage:
-#   ansible-playbook -i inventory/hosts.yml playbooks/bootstrap-lldap.yml \
-#     --vault-password-file .vault_pass
-
-- name: Bootstrap Lldap
-  hosts: ldap-1
+- name: Bootstrap lldap on ldap-1
+  hosts: ldap
   become: true
-  gather_facts: true
-
   vars:
     lldap_version: "v0.6.3"
+    lldap_install_dir: /opt/lldap
+    lldap_data_dir: /var/lib/lldap
     lldap_user: lldap
-    lldap_dir: /opt/lldap
-    lldap_data: /var/lib/lldap
-    lldap_http_port: 17170
-    lldap_ldap_port: 3890
-    lldap_base_dn: "dc=lab,dc=home,dc=arpa"
-    lldap_admin_user: admin
 
   tasks:
-    - name: Install dependencies
-      ansible.builtin.apt:
-        name: [curl, ca-certificates, libssl-dev]
-        state: present
-        update_cache: true
-
     - name: Create lldap system user
       ansible.builtin.user:
         name: "{{ lldap_user }}"
         system: true
         shell: /usr/sbin/nologin
-        home: "{{ lldap_data }}"
+        home: "{{ lldap_data_dir }}"
         create_home: true
 
-    - name: Create lldap directories
+    - name: Create install directory
       ansible.builtin.file:
-        path: "{{ item }}"
+        path: "{{ lldap_install_dir }}"
         state: directory
-        owner: "{{ lldap_user }}"
-        group: "{{ lldap_user }}"
-        mode: '0750'
-      loop:
-        - "{{ lldap_dir }}"
-        - "{{ lldap_data }}"
+        owner: root
+        group: root
+        mode: "0755"
 
-    - name: Download lldap binary
+    - name: Download lldap release
       ansible.builtin.get_url:
         url: "https://github.com/lldap/lldap/releases/download/{{ lldap_version }}/amd64-lldap.tar.gz"
         dest: /tmp/lldap.tar.gz
-        mode: '0644'
+        mode: "0644"
 
     - name: Extract lldap
       ansible.builtin.unarchive:
         src: /tmp/lldap.tar.gz
-        dest: "{{ lldap_dir }}"
+        dest: "{{ lldap_install_dir }}"
         remote_src: true
-        owner: "{{ lldap_user }}"
-        group: "{{ lldap_user }}"
 
-    - name: Deploy lldap config
+    - name: Write lldap config
       ansible.builtin.copy:
-        dest: "{{ lldap_dir }}/lldap_config.toml"
-        owner: "{{ lldap_user }}"
+        dest: "{{ lldap_install_dir }}/lldap_config.toml"
+        owner: root
         group: "{{ lldap_user }}"
-        mode: '0640'
+        mode: "0640"
         content: |
           verbose = false
           ldap_host = "0.0.0.0"
-          ldap_port = {{ lldap_ldap_port }}
+          ldap_port = 3890
           http_host = "0.0.0.0"
-          http_port = {{ lldap_http_port }}
-          http_url = "http://ldap.lab.home.arpa:{{ lldap_http_port }}"
-          jwt_secret = "{{ lldap_jwt_secret }}"
-          ldap_user_dn = "{{ lldap_admin_user }}"
+          http_port = 17170
+          http_url = "http://ldap.lab.home.arpa:17170"
+          ldap_base_dn = "dc=lab,dc=home,dc=arpa"
+          ldap_user_dn = "admin"
           ldap_user_pass = "{{ lldap_admin_pass }}"
-          database_url = "sqlite://{{ lldap_data }}/users.db?mode=rwc"
-          [ldap]
-          base_dn = "{{ lldap_base_dn }}"
+          jwt_secret = "{{ lldap_jwt_secret }}"
+          database_url = "sqlite://{{ lldap_data_dir }}/users.db?mode=rwc"
+          assets_path = "{{ lldap_install_dir }}/amd64-lldap/app"
 
-    - name: Deploy systemd service
+    - name: Create systemd service
       ansible.builtin.copy:
         dest: /etc/systemd/system/lldap.service
-        mode: '0644'
+        mode: "0644"
         content: |
           [Unit]
-          Description=Lightweight LDAP server
+          Description=LLDAP lightweight LDAP server
           After=network.target
-          
+
           [Service]
+          Type=simple
           User={{ lldap_user }}
-          Group={{ lldap_user }}
-          ExecStart={{ lldap_dir }}/amd64-lldap/lldap run --config-file {{ lldap_dir }}/lldap_config.toml
-          WorkingDirectory={{ lldap_data }}
+          WorkingDirectory={{ lldap_data_dir }}
+          ExecStart={{ lldap_install_dir }}/amd64-lldap/lldap run --config-file {{ lldap_install_dir }}/lldap_config.toml
           Restart=on-failure
-          RestartSec=5
-          
+
           [Install]
           WantedBy=multi-user.target
 
@@ -111,16 +82,3 @@
         enabled: true
         state: started
         daemon_reload: true
-
-    - name: Wait for lldap to be ready
-      ansible.builtin.uri:
-        url: "http://127.0.0.1:{{ lldap_http_port }}"
-        status_code: 200
-      retries: 12
-      delay: 5
-      register: lldap_ready
-      until: lldap_ready.status == 200
-
-    - name: Lldap ready
-      ansible.builtin.debug:
-        msg: "Lldap running — web UI: http://192.168.1.70:{{ lldap_http_port }} — LDAP: ldap://192.168.1.70:{{ lldap_ldap_port }}"

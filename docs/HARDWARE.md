@@ -13,15 +13,15 @@ Last verified: 2026-06-29.
 |--------|-----|-----|----------|---------|------|
 | **Odroid-H4 Ultra** | i3-N305 8C/8T x86 | 64 GB DDR5 | `192.168.1.160` | — | **Core: k3s server + NAS** |
 | **Orange Pi 5 Pro #1** | RK3588S 8C ARM | 16 GB | `192.168.1.168` | — | k3s agent · Ollama inference · Arch Linux ARM |
-| **Orange Pi 5 Pro #2** | RK3588S 8C ARM | 16 GB | `192.168.1.172` | — | k3s agent · Ubuntu 22.04 (Jammy) |
-| **N150 mini PC #1** | Intel N150 4C x86 | 16 GB | `192.168.1.42` (br0) | — | KVM host · Ubuntu 24.04 · 373 GB VM storage |
-| **N150 mini PC #2** | Intel N150 4C x86 | 16 GB | `192.168.1.21` (br0) | — | KVM host · Ubuntu 24.04 · 373 GB VM storage |
+| **Orange Pi 5 Pro #2** | RK3588S 8C ARM | 16 GB | `192.168.1.172` | — | k3s agent · Ollama inference · Ubuntu 22.04 |
+| **N150 mini PC #1** | Intel N150 4C x86 | 16 GB | `192.168.1.42` (br0) | — | KVM hypervisor · Ubuntu 24.04 · hosts ldap-1 VM |
+| **N150 mini PC #2** | Intel N150 4C x86 | 16 GB | `192.168.1.21` (br0) | — | KVM hypervisor · Ubuntu 24.04 |
 | **N150 mini PC #3 (HTPC)** | Intel N150 4C x86 | 16 GB | — | `192.168.1.176` | Living-room HTPC |
 | **RPi 5** | Cortex-A76 4C | 8 GB | `192.168.1.128` | `192.168.1.124` (avoid) | HashiCorp Vault |
-| **RPi 4B** | Cortex-A72 4C | 8 GB | TBD | — | OpenLDAP (pending bootstrap) |
-| **RPi 3B #2** | Cortex-A53 4C | 1 GB | `192.168.1.148` | `192.168.1.152` (avoid) | DNS primary (Pi-hole pending — Bookworm flash required) |
+| **RPi 4B** | Cortex-A72 4C | 8 GB | TBD | — | Unassigned (lldap now handles LDAP) |
+| **RPi 3B #2** | Cortex-A53 4C | 1 GB | `192.168.1.148` | `192.168.1.152` (avoid) | DNS primary (Pi-hole pending — needs Bookworm flash) |
 | **RPi 3B #1** | Cortex-A53 4C | 1 GB | — | — | ⚠ on-board power fault — retired |
-| **Odroid-XU3 #1** | Exynos5422 8C | 2 GB | `192.168.1.64` | — | Build agent (flagged unstable; Python <3.8 — excluded from Ansible auto-updates) |
+| **Odroid-XU3 #1** | Exynos5422 8C | 2 GB | `192.168.1.64` | — | Build agent (Python <3.8 — excluded from Ansible auto-updates) |
 | **Orange Pi Zero 2W #1** | H618 A53 4C | 4 GB | — | `192.168.1.184` | DNS secondary (dnsmasq) |
 | **Orange Pi Zero 2W #2** | H618 A53 4C | 4 GB | — | `192.168.1.188` | MQTT broker (Mosquitto) |
 | **Orange Pi Zero 2W #3** | H618 A53 4C | 4 GB | — | TBD | Unassigned |
@@ -29,14 +29,20 @@ Last verified: 2026-06-29.
 | **M5Stack LLM** | ESP32-S3 | — | — | USB | Edge AI inference |
 | **HostMon** | ESP32-S3 (Waveshare 4.3") | 8 MB PSRAM | LAN | — | Host prober + status panel |
 
+## VMs
+
+| VM | Host | IP | OS | Role |
+|----|------|----|----|------|
+| **ldap-1** | n150-1 | `192.168.1.70` | Ubuntu 24.04 | lldap v0.6.3 · LDAP/SSO directory |
+
 ## Network
 
 | Device | MAC | Notes |
 |--------|-----|-------|
 | H4 Ultra | `00:1E:06:45:99:E5` | 2.5 Gbps wired |
 | OPi 5 Pro #1 | `C0:74:2B:FB:46:B9` | 1 Gbps wired |
-| N150 #1 | `68:1D:EF:4D:C8:30` | 1 Gbps wired |
-| N150 #2 | `68:1D:EF:4D:DA:2F` | 1 Gbps wired |
+| N150 #1 br0 | `4A:6D:B5:BC:56:98` | 1 Gbps wired · KVM bridge MAC · `192.168.1.42` reserved |
+| N150 #2 br0 | `16:3C:00:47:C0:6E` | 1 Gbps wired · KVM bridge MAC · `192.168.1.21` reserved |
 | N150 #3 (HTPC) | `98:BD:80:5C:4C:D4` | WiFi 5 |
 | RPi 5 (wired) | `2C:CF:67:EF:E2:B3` | Use wired `.128` for Vault |
 | RPi 5 (WiFi) | `2C:CF:67:EF:E2:B4` | Avoid — use wired |
@@ -61,14 +67,15 @@ k3s PVs use the `local-path` StorageClass. Never provision against `lv_nas`.
 
 ## k3s Cluster
 
-| Node | Role | IP | Notes |
-|------|------|----|-------|
-| `odroid-nas` | server | `192.168.1.160` | H4 Ultra |
-| `opi5pro-1` | agent | `192.168.1.168` | Arch Linux ARM; `role=inference` label; runs Ollama |
-| `opi5pro-2` | agent | `192.168.1.172` | Ubuntu 22.04 (Jammy) |
+| Node | Role | IP | OS | Notes |
+|------|------|----|-----|-------|
+| `odroid-nas` | server | `192.168.1.160` | Ubuntu 22.04 | H4 Ultra |
+| `opi5pro-1` | agent | `192.168.1.168` | Arch Linux ARM | `role=inference`; NVMe-backed Ollama PVC |
+| `opi5pro-2` | agent | `192.168.1.172` | Ubuntu 22.04 | `role=inference`; NVMe-backed Ollama PVC |
 
 Ingress: Traefik. DNS: `*.apps.lab.home.arpa` → `192.168.1.160`.
 ArgoCD bootstraps all workloads from `gitops/` via `gitops/bootstrap/root-app.yaml`.
+CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home.arpa` resolution.
 
 ## AI / Inference
 
@@ -86,19 +93,22 @@ ArgoCD bootstraps all workloads from `gitops/` via `gitops/bootstrap/root-app.ya
 |---------|------|---------|
 | ArgoCD | H4 (k3s) | `https://argocd.apps.lab.home.arpa` |
 | Immich | H4 (k3s) | `https://immich.apps.lab.home.arpa` |
+| Authelia | H4 (k3s) | `https://authelia.apps.lab.home.arpa` |
 | AI Gateway (LiteLLM) | H4 (k3s) | `https://ai.apps.lab.home.arpa` |
-| Ollama | opi5pro-1 (k3s) | ClusterIP `:11434` |
+| Ollama #1 | opi5pro-1 (k3s) | ClusterIP `:11434` |
+| Ollama #2 | opi5pro-2 (k3s) | ClusterIP `:11434` |
+| lldap | ldap-1 VM (n150-1) | `http://192.168.1.70:17170` (UI) · `:3890` (LDAP) |
 | HashiCorp Vault | RPi 5 | `http://192.168.1.128:8200` |
-| DNS primary (Pi-hole pending) | RPi 3B #2 (octopi) | `192.168.1.148` — ⚠ flash Bookworm → Pi-hole v6 first |
-| DNS secondary (dnsmasq) | OPi Zero 2W #1 | `192.168.1.184` |
-| MQTT (Mosquitto) | OPi Zero 2W #2 | `192.168.1.188:1883` |
+| DNS primary | RPi 3B #2 | `192.168.1.148` (Pi-hole pending) |
+| DNS secondary | OPi Zero 2W #1 | `192.168.1.184` (dnsmasq) |
+| MQTT | OPi Zero 2W #2 | `192.168.1.188:1883` |
 
 ## Pending / TODO
 
-- ~~OPi 5 Pro #2~~: bootstrapped as k3s agent at `192.168.1.172` ✓
-- RPi 4B: assign IP, bootstrap OpenLDAP
-- ~~N150 #1/#2~~: flashed Ubuntu 24.04, KVM bootstrapped ✓ (n150-1=.42, n150-2=.21)
-- N150 #3: WinRM credentials (wrong password on file)
 - octopi (RPi 3B #2): flash Bookworm → run dns.yml → Pi-hole v6
-- Move photo library into `/mnt/cold-8t/immich`
+- Rotate lldap JWT secret (exposed in terminal session 2026-06-29)
+- Store n150-1/n150-2 sudo password in Ansible Vault
+- RPi 4B: reassign role (lldap now handles LDAP directory)
 - ArgoCD deploy key (`~/.ssh/argocd-deploy-key`): back up to Vault
+- Apply zswap role to n150-1/n150-2 (Ubuntu 24.04 kernel 6.8 has zswap)
+- N150 #3: WinRM credentials (wrong password on file)
