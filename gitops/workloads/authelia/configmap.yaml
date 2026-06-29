@@ -36,7 +36,7 @@ data:
         filename: /data/notification.txt
 
     access_control:
-      default_policy: one_factor
+      default_policy: bypass
 
     identity_providers:
       oidc:
