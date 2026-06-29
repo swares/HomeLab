@@ -27,7 +27,7 @@ jobs:
     name: Vault seal check
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Write Ansible vault password
         run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
@@ -48,7 +48,7 @@ jobs:
     name: Update Pi-hole
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Write Ansible vault password
         run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
@@ -69,7 +69,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     if: vars.SKIP_VM_UPDATES != 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Write Ansible vault password
         run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
@@ -105,7 +105,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     needs: [apt-upgrade]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Write Ansible vault password
         run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
@@ -126,7 +126,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     needs: [apt-upgrade]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up kubeconfig
         run: |
