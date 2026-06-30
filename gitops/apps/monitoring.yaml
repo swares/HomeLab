@@ -105,6 +105,11 @@ spec:
         prometheus-node-exporter:
           tolerations:
             - operator: Exists   # scrape inference nodes too
+          extraArgs:
+            # Enable systemd collector so backup timer metrics are available
+            # (used by LabBackupNasSilent / LabBackupEtcdSilent alert rules)
+            - --collector.systemd
+            - --collector.systemd.unit-whitelist=(backup-nas|backup-etcd)\.(service|timer)
 
         # ---- kube-state-metrics ----
         kube-state-metrics:
