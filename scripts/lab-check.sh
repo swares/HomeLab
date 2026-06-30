@@ -208,18 +208,18 @@ for entry in "swares@192.168.1.128:backup-vault.timer:rpi5" "swares@192.168.1.70
 done
 
 # Last backup run check (warn if NAS backup hasn't run in >26h)
-last_nas=$(systemctl show backup-nas.service --property=ExecMainStartTimestamp 2>/dev/null | \
-  awk -F= '{print $2}')
-if [[ -n "$last_nas" && "$last_nas" != "0" ]]; then
-  last_ts=$(date -d "$last_nas" +%s 2>/dev/null || echo 0)
-  age=$(( ($(date +%s) - last_ts) / 3600 ))
+# Use journal to find last invocation — systemctl property resets on boot.
+last_nas=$(journalctl -u backup-nas.service --no-pager -n 1 \
+  --output=short-unix 2>/dev/null | awk 'NR==1{print $1}')
+if [[ -n "$last_nas" && "$last_nas" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  age=$(( ($(date +%s) - ${last_nas%.*}) / 3600 ))
   if [[ $age -gt 26 ]]; then
     warn "backup-nas last ran ${age}h ago (expected ≤25h)"
   else
     ok "backup-nas last ran ${age}h ago"
   fi
 else
-  warn "backup-nas has not run yet since last boot"
+  warn "backup-nas has not run yet (no journal entry)"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
