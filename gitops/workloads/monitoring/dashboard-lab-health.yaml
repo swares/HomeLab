@@ -182,6 +182,50 @@ data:
               {"color": "text", "value": null}]}}}
         },
 
+        {
+          "type": "table", "id": 15, "title": "VMs",
+          "gridPos": {"h": 4, "w": 20, "x": 4, "y": 5},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [{"refId": "A", "instant": true,
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "expr": "libvirt_domain_state_code",
+            "legendFormat": "{{domain}}",
+            "format": "table"}],
+          "transformations": [
+            {"id": "organize", "options": {
+              "excludeByName": {"Time": true, "uuid": true, "__name__": true, "instance": true, "job": true},
+              "renameByName": {"domain": "VM", "Value": "State"}
+            }}
+          ],
+          "options": {"cellHeight": "sm", "showHeader": true,
+            "footer": {"show": false, "reducer": ["sum"]}},
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "custom": {"align": "left", "cellOptions": {"type": "auto"}, "inspect": false},
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+            },
+            "overrides": [
+              {
+                "matcher": {"id": "byName", "options": "State"},
+                "properties": [
+                  {"id": "custom.cellOptions", "value": {"type": "color-text"}},
+                  {"id": "mappings", "value": [{"type": "value", "options": {
+                    "0": {"text": "No state",    "color": "text",   "index": 0},
+                    "1": {"text": "Running",     "color": "green",  "index": 1},
+                    "2": {"text": "Blocked",     "color": "yellow", "index": 2},
+                    "3": {"text": "Paused",      "color": "yellow", "index": 3},
+                    "4": {"text": "Shutting down","color": "orange","index": 4},
+                    "5": {"text": "Shut off",    "color": "red",    "index": 5},
+                    "6": {"text": "Crashed",     "color": "red",    "index": 6},
+                    "7": {"text": "Suspended",   "color": "blue",   "index": 7}
+                  }}]
+                }
+              }
+            ]
+          }
+        },
+
         {"type": "row", "id": 101, "title": "Compute", "collapsed": false,
          "gridPos": {"h": 1, "w": 24, "x": 0, "y": 9}},
 
