@@ -194,7 +194,7 @@ data:
           "transformations": [
             {"id": "organize", "options": {
               "excludeByName": {"Time": true, "uuid": true, "__name__": true, "instance": true, "job": true},
-              "renameByName": {"domain": "VM", "Value": "State"}
+              "renameByName": {"domain": "VM", "Value": "State", "Value #A": "State"}
             }}
           ],
           "options": {"cellHeight": "sm", "showHeader": true,
