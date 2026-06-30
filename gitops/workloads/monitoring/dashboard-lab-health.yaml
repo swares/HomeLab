@@ -1,0 +1,393 @@
+---
+# Grafana dashboard: Lab Health & Capacity
+# Auto-imported by the Grafana sidecar (sidecar.dashboards.enabled=true).
+# Sections: Fleet Status · Compute · H4 Storage · Host Overview table
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dashboard-lab-health
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  lab-health.json: |
+    {
+      "title": "Lab Health & Capacity",
+      "uid": "lab-health-cap",
+      "tags": ["lab"],
+      "refresh": "1m",
+      "schemaVersion": 39,
+      "graphTooltip": 1,
+      "time": {"from": "now-3h", "to": "now"},
+      "timepicker": {},
+      "timezone": "browser",
+      "editable": true,
+      "annotations": {"list": []},
+      "links": [],
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {},
+            "hide": 0,
+            "includeAll": false,
+            "multi": false,
+            "refresh": 1
+          }
+        ]
+      },
+      "panels": [
+
+        {"type": "row", "id": 100, "title": "Fleet Status", "collapsed": false,
+         "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0}},
+
+        {
+          "type": "stat", "id": 1, "title": "Hosts Up",
+          "gridPos": {"h": 4, "w": 4, "x": 0, "y": 1},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [{"refId": "A", "instant": true,
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "expr": "count(up{job=~\"node-exporter.*\"} == 1)",
+            "legendFormat": "Up"}],
+          "options": {"colorMode": "background", "graphMode": "none",
+            "justifyMode": "center", "orientation": "auto",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "textMode": "auto"},
+          "fieldConfig": {"defaults": {
+            "color": {"mode": "thresholds"}, "unit": "short",
+            "thresholds": {"mode": "absolute", "steps": [
+              {"color": "red", "value": null},
+              {"color": "yellow", "value": 5},
+              {"color": "green", "value": 10}]}}}
+        },
+
+        {
+          "type": "stat", "id": 2, "title": "Hosts Down",
+          "gridPos": {"h": 4, "w": 4, "x": 4, "y": 1},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [{"refId": "A", "instant": true,
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "expr": "count(up{job=~\"node-exporter.*\"} == 0) or vector(0)",
+            "legendFormat": "Down"}],
+          "options": {"colorMode": "background", "graphMode": "none",
+            "justifyMode": "center", "orientation": "auto",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "textMode": "auto"},
+          "fieldConfig": {"defaults": {
+            "color": {"mode": "thresholds"}, "unit": "short",
+            "mappings": [{"type": "value", "options": {
+              "0": {"text": "All up", "color": "green", "index": 0}}}],
+            "thresholds": {"mode": "absolute", "steps": [
+              {"color": "green", "value": null},
+              {"color": "red", "value": 1}]}}}
+        },
+
+        {
+          "type": "stat", "id": 3, "title": "k3s Nodes Ready",
+          "gridPos": {"h": 4, "w": 4, "x": 8, "y": 1},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [{"refId": "A", "instant": true,
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "expr": "count(kube_node_status_condition{condition=\"Ready\",status=\"true\"} == 1)",
+            "legendFormat": "Ready"}],
+          "options": {"colorMode": "background", "graphMode": "none",
+            "justifyMode": "center", "orientation": "auto",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "textMode": "auto"},
+          "fieldConfig": {"defaults": {
+            "color": {"mode": "thresholds"}, "unit": "short",
+            "thresholds": {"mode": "absolute", "steps": [
+              {"color": "red", "value": null},
+              {"color": "green", "value": 1}]}}}
+        },
+
+        {
+          "type": "stat", "id": 4, "title": "Running Pods",
+          "gridPos": {"h": 4, "w": 4, "x": 12, "y": 1},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [{"refId": "A", "instant": true,
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "expr": "count(kube_pod_status_phase{phase=\"Running\"} == 1)",
+            "legendFormat": "Running"}],
+          "options": {"colorMode": "value", "graphMode": "none",
+            "justifyMode": "center", "orientation": "auto",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "textMode": "auto"},
+          "fieldConfig": {"defaults": {
+            "color": {"mode": "thresholds"}, "unit": "short",
+            "thresholds": {"mode": "absolute", "steps": [
+              {"color": "red", "value": null},
+              {"color": "green", "value": 1}]}}}
+        },
+
+        {
+          "type": "stat", "id": 5, "title": "RAID md0 (cold-sec)",
+          "gridPos": {"h": 4, "w": 4, "x": 16, "y": 1},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [{"refId": "A", "instant": true,
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "expr": "sum(node_md_disks{device=\"md0\",state=\"failed\"}) or vector(0)",
+            "legendFormat": "Failed disks"}],
+          "options": {"colorMode": "background", "graphMode": "none",
+            "justifyMode": "center", "orientation": "auto",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "textMode": "auto"},
+          "fieldConfig": {"defaults": {
+            "color": {"mode": "thresholds"}, "unit": "short",
+            "mappings": [{"type": "value", "options": {
+              "0": {"text": "Clean", "color": "green", "index": 0}}}],
+            "thresholds": {"mode": "absolute", "steps": [
+              {"color": "green", "value": null},
+              {"color": "red", "value": 1}]}}}
+        },
+
+        {
+          "type": "stat", "id": 6, "title": "RAID md1 (cold-8t)",
+          "gridPos": {"h": 4, "w": 4, "x": 20, "y": 1},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [{"refId": "A", "instant": true,
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "expr": "sum(node_md_disks{device=\"md1\",state=\"failed\"}) or vector(0)",
+            "legendFormat": "Failed disks"}],
+          "options": {"colorMode": "background", "graphMode": "none",
+            "justifyMode": "center", "orientation": "auto",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "textMode": "auto"},
+          "fieldConfig": {"defaults": {
+            "color": {"mode": "thresholds"}, "unit": "short",
+            "mappings": [{"type": "value", "options": {
+              "0": {"text": "Clean", "color": "green", "index": 0}}}],
+            "thresholds": {"mode": "absolute", "steps": [
+              {"color": "green", "value": null},
+              {"color": "red", "value": 1}]}}}
+        },
+
+        {"type": "row", "id": 101, "title": "Compute", "collapsed": false,
+         "gridPos": {"h": 1, "w": 24, "x": 0, "y": 5}},
+
+        {
+          "type": "timeseries", "id": 7, "title": "CPU Usage %",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [{"refId": "A",
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "expr": "100 - (avg by (instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+            "legendFormat": "{{instance}}"}],
+          "options": {
+            "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom"},
+            "tooltip": {"mode": "multi", "sort": "desc"}},
+          "fieldConfig": {"defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "percent", "min": 0, "max": 100,
+            "custom": {
+              "drawStyle": "line", "lineInterpolation": "smooth",
+              "fillOpacity": 10, "lineWidth": 1,
+              "showPoints": "never", "spanNulls": true,
+              "thresholdsStyle": {"mode": "line+area"}},
+            "thresholds": {"mode": "absolute", "steps": [
+              {"color": "transparent", "value": null},
+              {"color": "red", "value": 90}]}}}
+        },
+
+        {
+          "type": "timeseries", "id": 8, "title": "Memory Usage %",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [{"refId": "A",
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
+            "legendFormat": "{{instance}}"}],
+          "options": {
+            "legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom"},
+            "tooltip": {"mode": "multi", "sort": "desc"}},
+          "fieldConfig": {"defaults": {
+            "color": {"mode": "palette-classic"},
+            "unit": "percent", "min": 0, "max": 100,
+            "custom": {
+              "drawStyle": "line", "lineInterpolation": "smooth",
+              "fillOpacity": 10, "lineWidth": 1,
+              "showPoints": "never", "spanNulls": true,
+              "thresholdsStyle": {"mode": "line+area"}},
+            "thresholds": {"mode": "absolute", "steps": [
+              {"color": "transparent", "value": null},
+              {"color": "red", "value": 90}]}}}
+        },
+
+        {"type": "row", "id": 102, "title": "H4 Storage Tiers", "collapsed": false,
+         "gridPos": {"h": 1, "w": 24, "x": 0, "y": 14}},
+
+        {
+          "type": "gauge", "id": 9, "title": "cold-8t (8 TB primary)",
+          "gridPos": {"h": 6, "w": 6, "x": 0, "y": 15},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [{"refId": "A", "instant": true,
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "expr": "(1 - node_filesystem_avail_bytes{mountpoint=\"/mnt/cold-8t\"} / node_filesystem_size_bytes{mountpoint=\"/mnt/cold-8t\"}) * 100",
+            "legendFormat": "cold-8t"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "showThresholdLabels": false, "showThresholdMarkers": true,
+            "orientation": "auto"},
+          "fieldConfig": {"defaults": {
+            "color": {"mode": "thresholds"}, "unit": "percent", "min": 0, "max": 100,
+            "thresholds": {"mode": "absolute", "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 75},
+              {"color": "red", "value": 90}]}}}
+        },
+
+        {
+          "type": "gauge", "id": 10, "title": "cold-sec (~5.45 TB secondary)",
+          "gridPos": {"h": 6, "w": 6, "x": 6, "y": 15},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [{"refId": "A", "instant": true,
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "expr": "(1 - node_filesystem_avail_bytes{mountpoint=\"/mnt/cold-sec\"} / node_filesystem_size_bytes{mountpoint=\"/mnt/cold-sec\"}) * 100",
+            "legendFormat": "cold-sec"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "showThresholdLabels": false, "showThresholdMarkers": true,
+            "orientation": "auto"},
+          "fieldConfig": {"defaults": {
+            "color": {"mode": "thresholds"}, "unit": "percent", "min": 0, "max": 100,
+            "thresholds": {"mode": "absolute", "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 75},
+              {"color": "red", "value": 90}]}}}
+        },
+
+        {
+          "type": "gauge", "id": 11, "title": "NVMe (4 TB hot)",
+          "gridPos": {"h": 6, "w": 6, "x": 12, "y": 15},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [{"refId": "A", "instant": true,
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "expr": "(1 - node_filesystem_avail_bytes{mountpoint=\"/mnt/nvme0n1p2\"} / node_filesystem_size_bytes{mountpoint=\"/mnt/nvme0n1p2\"}) * 100",
+            "legendFormat": "NVMe"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "showThresholdLabels": false, "showThresholdMarkers": true,
+            "orientation": "auto"},
+          "fieldConfig": {"defaults": {
+            "color": {"mode": "thresholds"}, "unit": "percent", "min": 0, "max": 100,
+            "thresholds": {"mode": "absolute", "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 75},
+              {"color": "red", "value": 90}]}}}
+        },
+
+        {
+          "type": "gauge", "id": 12, "title": "eMMC (256 GB OS)",
+          "gridPos": {"h": 6, "w": 6, "x": 18, "y": 15},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [{"refId": "A", "instant": true,
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "expr": "(1 - node_filesystem_avail_bytes{mountpoint=\"/\",job=\"node-exporter\",node=\"odroid-nas\"} / node_filesystem_size_bytes{mountpoint=\"/\",job=\"node-exporter\",node=\"odroid-nas\"}) * 100",
+            "legendFormat": "eMMC"}],
+          "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "showThresholdLabels": false, "showThresholdMarkers": true,
+            "orientation": "auto"},
+          "fieldConfig": {"defaults": {
+            "color": {"mode": "thresholds"}, "unit": "percent", "min": 0, "max": 100,
+            "thresholds": {"mode": "absolute", "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 75},
+              {"color": "red", "value": 90}]}}}
+        },
+
+        {"type": "row", "id": 103, "title": "Host Overview", "collapsed": false,
+         "gridPos": {"h": 1, "w": 24, "x": 0, "y": 21}},
+
+        {
+          "type": "table", "id": 13, "title": "Host Overview",
+          "gridPos": {"h": 10, "w": 24, "x": 0, "y": 22},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [
+            {"refId": "A", "instant": true,
+              "datasource": {"type": "prometheus", "uid": "${datasource}"},
+              "expr": "up{job=~\"node-exporter.*\"}",
+              "legendFormat": "{{instance}}"},
+            {"refId": "B", "instant": true,
+              "datasource": {"type": "prometheus", "uid": "${datasource}"},
+              "expr": "100 - (avg by (instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+              "legendFormat": "{{instance}}"},
+            {"refId": "C", "instant": true,
+              "datasource": {"type": "prometheus", "uid": "${datasource}"},
+              "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
+              "legendFormat": "{{instance}}"},
+            {"refId": "D", "instant": true,
+              "datasource": {"type": "prometheus", "uid": "${datasource}"},
+              "expr": "node_time_seconds - node_boot_time_seconds",
+              "legendFormat": "{{instance}}"}
+          ],
+          "transformations": [
+            {"id": "merge", "options": {}},
+            {"id": "organize", "options": {
+              "renameByName": {
+                "Value #A": "Up",
+                "Value #B": "CPU %",
+                "Value #C": "Memory %",
+                "Value #D": "Uptime"
+              }
+            }}
+          ],
+          "options": {
+            "cellHeight": "sm",
+            "showHeader": true,
+            "sortBy": [{"desc": false, "displayName": "instance"}],
+            "footer": {"show": false, "reducer": ["sum"]}
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {"mode": "thresholds"},
+              "custom": {"align": "auto", "cellOptions": {"type": "auto"}, "inspect": false},
+              "mappings": [],
+              "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}
+            },
+            "overrides": [
+              {
+                "matcher": {"id": "byName", "options": "Up"},
+                "properties": [
+                  {"id": "custom.cellOptions", "value": {"type": "color-text"}},
+                  {"id": "mappings", "value": [{"type": "value", "options": {
+                    "1": {"text": "✓ up", "color": "green", "index": 0},
+                    "0": {"text": "✗ down", "color": "red", "index": 1}
+                  }}]}
+                ]
+              },
+              {
+                "matcher": {"id": "byName", "options": "CPU %"},
+                "properties": [
+                  {"id": "unit", "value": "percent"},
+                  {"id": "decimals", "value": 1},
+                  {"id": "custom.cellOptions", "value": {"type": "color-background", "mode": "gradient"}},
+                  {"id": "thresholds", "value": {"mode": "absolute", "steps": [
+                    {"color": "green", "value": null},
+                    {"color": "yellow", "value": 70},
+                    {"color": "red", "value": 90}]}}
+                ]
+              },
+              {
+                "matcher": {"id": "byName", "options": "Memory %"},
+                "properties": [
+                  {"id": "unit", "value": "percent"},
+                  {"id": "decimals", "value": 1},
+                  {"id": "custom.cellOptions", "value": {"type": "color-background", "mode": "gradient"}},
+                  {"id": "thresholds", "value": {"mode": "absolute", "steps": [
+                    {"color": "green", "value": null},
+                    {"color": "yellow", "value": 70},
+                    {"color": "red", "value": 90}]}}
+                ]
+              },
+              {
+                "matcher": {"id": "byName", "options": "Uptime"},
+                "properties": [
+                  {"id": "unit", "value": "dtdurations"},
+                  {"id": "custom.cellOptions", "value": {"type": "auto"}}
+                ]
+              }
+            ]
+          }
+        }
+
+      ]
+    }
