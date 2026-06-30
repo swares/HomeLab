@@ -170,7 +170,7 @@ data:
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "targets": [{"refId": "A", "instant": true,
             "datasource": {"type": "prometheus", "uid": "${datasource}"},
-            "expr": "count(libvirt_domain_state_info{state=\"running\"} == 1) or vector(0)",
+            "expr": "count(libvirt_domain_state_code == 1) or vector(0)",
             "legendFormat": "Running VMs"}],
           "options": {"colorMode": "value", "graphMode": "none",
             "justifyMode": "center", "orientation": "auto",
