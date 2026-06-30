@@ -4,12 +4,19 @@
 # via the kube-prometheus-stack DaemonSet — exclude them from this playbook.
 #
 # Run:
-#   ansible-playbook -i inventory/hosts.yml playbooks/node-exporter.yml --check
 #   ansible-playbook -i inventory/hosts.yml playbooks/node-exporter.yml
 #
 - name: Install and enable node_exporter on non-cluster hosts
   hosts: node_exporter
   become: true
+
+  pre_tasks:
+    # Minimal Armbian images (opi-zero2w) ship without python3-apt, which the
+    # apt module requires. Bootstrap it via raw (works without python3-apt).
+    - name: Bootstrap python3-apt (required by apt module)
+      ansible.builtin.raw: |
+        dpkg -s python3-apt &>/dev/null || apt-get install -y python3-apt
+      changed_when: false
 
   tasks:
     - name: Install prometheus-node-exporter
@@ -32,6 +39,4 @@
         proto: tcp
         src: 192.168.1.0/24
         comment: Prometheus node_exporter
-      when: ansible_facts.get('ufw_status', '') == 'active' or
-            lookup('pipe', 'ufw status 2>/dev/null | head -1') is search('active')
       ignore_errors: true   # ufw may not be installed on all hosts
