@@ -1,0 +1,195 @@
+---
+# Deploy Promtail on non-cluster Linux hosts.
+# Cluster nodes get Promtail via the k3s DaemonSet (gitops/apps/promtail.yaml).
+# This playbook covers: ldap-1, n150-1/2, octopi-dns, opi-zero2w-*, rpi5
+#
+# Install method: binary from GitHub releases (works on all distros/arches).
+#   Debian: also available via Grafana APT repo, but binary keeps parity with Arch.
+#   Arch:   promtail is in AUR; binary download avoids yay dependency.
+#
+# Run:
+#   ansible-playbook -i inventory/hosts.yml playbooks/promtail.yml
+#   ansible-playbook -i inventory/hosts.yml playbooks/promtail.yml --check
+#
+- name: Deploy Promtail on non-cluster hosts
+  hosts: node_exporter:rpi5
+  become: true
+
+  vars:
+    promtail_version: "3.1.0"
+    promtail_user: promtail
+    promtail_group: promtail
+    promtail_bin: /usr/local/bin/promtail
+    promtail_config_dir: /etc/promtail
+    promtail_positions_dir: /var/lib/promtail
+
+    # Map ansible_architecture to the Grafana release asset suffix
+    arch_map:
+      x86_64: amd64
+      aarch64: arm64
+      armv7l: arm
+      armv6l: arm
+
+    promtail_arch: "{{ arch_map[ansible_architecture] | default('amd64') }}"
+    promtail_download_url: >-
+      https://github.com/grafana/loki/releases/download/v{{ promtail_version }}/promtail-linux-{{ promtail_arch }}.zip
+
+  pre_tasks:
+    - name: Bootstrap python3-apt on Debian hosts
+      ansible.builtin.raw: dpkg -s python3-apt &>/dev/null || apt-get install -y python3-apt
+      changed_when: false
+      when: ansible_os_family == 'Debian'
+
+  tasks:
+    # ---- Binary installation ----
+    - name: Install unzip (Debian)
+      ansible.builtin.apt:
+        name: unzip
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_os_family == 'Debian'
+
+    - name: Install unzip (Arch)
+      community.general.pacman:
+        name: unzip
+        state: present
+      when: ansible_os_family == 'Archlinux'
+
+    - name: Check installed Promtail version
+      ansible.builtin.command: "{{ promtail_bin }} --version"
+      register: promtail_installed_version
+      changed_when: false
+      failed_when: false
+
+    - name: Download Promtail binary
+      ansible.builtin.get_url:
+        url: "{{ promtail_download_url }}"
+        dest: /tmp/promtail-linux-{{ promtail_arch }}.zip
+        mode: "0644"
+      when: >
+        promtail_installed_version.rc != 0 or
+        promtail_version not in promtail_installed_version.stdout
+
+    - name: Extract Promtail binary
+      ansible.builtin.unarchive:
+        src: /tmp/promtail-linux-{{ promtail_arch }}.zip
+        dest: /tmp/
+        remote_src: true
+      when: >
+        promtail_installed_version.rc != 0 or
+        promtail_version not in promtail_installed_version.stdout
+
+    - name: Install Promtail binary
+      ansible.builtin.copy:
+        src: /tmp/promtail-linux-{{ promtail_arch }}
+        dest: "{{ promtail_bin }}"
+        mode: "0755"
+        owner: root
+        group: root
+        remote_src: true
+      when: >
+        promtail_installed_version.rc != 0 or
+        promtail_version not in promtail_installed_version.stdout
+      notify: Restart promtail
+
+    # ---- User / directories ----
+    - name: Create promtail group
+      ansible.builtin.group:
+        name: "{{ promtail_group }}"
+        system: true
+
+    - name: Create promtail user
+      ansible.builtin.user:
+        name: "{{ promtail_user }}"
+        group: "{{ promtail_group }}"
+        system: true
+        shell: /sbin/nologin
+        create_home: false
+        comment: Grafana Promtail log shipper
+        # Allow reading systemd journal
+        groups: systemd-journal
+        append: true
+
+    - name: Create config directory
+      ansible.builtin.file:
+        path: "{{ promtail_config_dir }}"
+        state: directory
+        owner: "{{ promtail_user }}"
+        group: "{{ promtail_group }}"
+        mode: "0755"
+
+    - name: Create positions directory
+      ansible.builtin.file:
+        path: "{{ promtail_positions_dir }}"
+        state: directory
+        owner: "{{ promtail_user }}"
+        group: "{{ promtail_group }}"
+        mode: "0755"
+
+    # ---- Config ----
+    - name: Deploy Promtail config
+      ansible.builtin.template:
+        src: promtail-config.yml.j2
+        dest: "{{ promtail_config_dir }}/config.yml"
+        owner: "{{ promtail_user }}"
+        group: "{{ promtail_group }}"
+        mode: "0640"
+      notify: Restart promtail
+
+    # ---- systemd unit ----
+    - name: Deploy Promtail systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/promtail.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Promtail log shipper
+          Documentation=https://grafana.com/docs/loki/latest/clients/promtail/
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=simple
+          User={{ promtail_user }}
+          Group={{ promtail_group }}
+          ExecStart={{ promtail_bin }} -config.file={{ promtail_config_dir }}/config.yml
+          Restart=on-failure
+          RestartSec=10s
+          # Allow reading /var/log/journal
+          SupplementaryGroups=systemd-journal
+          # Harden
+          PrivateTmp=true
+          ProtectSystem=full
+          NoNewPrivileges=true
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart promtail
+
+    - name: Enable and start promtail
+      ansible.builtin.systemd:
+        name: promtail
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    # ---- Firewall ----
+    - name: Allow Promtail metrics port through ufw (Debian, if active)
+      community.general.ufw:
+        rule: allow
+        port: "9080"
+        proto: tcp
+        src: 192.168.1.0/24
+        comment: Promtail metrics
+      when: ansible_os_family == 'Debian'
+      ignore_errors: true
+
+  handlers:
+    - name: Restart promtail
+      ansible.builtin.systemd:
+        name: promtail
+        state: restarted
+        daemon_reload: true
