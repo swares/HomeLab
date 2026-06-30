@@ -41,6 +41,7 @@ declare -A HOSTS=(
   [n150-2]=192.168.1.21
   [n150-3/yikw]=192.168.1.176
   [xu3-1]=192.168.1.64
+  [ldap-1/lldap]=192.168.1.70
 )
 
 echo -e "${BLU}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RST}"
@@ -182,14 +183,27 @@ done
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "Backup timers"
+# Local timers (H4)
 for timer in backup-nas.timer backup-etcd.timer; do
   state=$(systemctl is-active "$timer" 2>/dev/null)
-  next=$(systemctl show "$timer" --property=NextElapseUSecRealtime 2>/dev/null | \
-    awk -F= '{print $2}')
   if [[ "$state" == "active" ]]; then
     ok "$timer active"
   else
     fail "$timer — $state"
+  fi
+done
+
+# Remote timers
+for entry in "swares@192.168.1.128:backup-vault.timer:rpi5" "swares@192.168.1.70:backup-lldap.timer:ldap-1"; do
+  host=$(echo "$entry" | cut -d: -f1)
+  timer=$(echo "$entry" | cut -d: -f2)
+  label=$(echo "$entry" | cut -d: -f3)
+  state=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "$host" \
+    "systemctl is-active $timer" 2>/dev/null || echo "unreachable")
+  if [[ "$state" == "active" ]]; then
+    ok "$timer ($label) active"
+  else
+    fail "$timer ($label) — $state"
   fi
 done
 
@@ -246,6 +260,29 @@ else
   ok "eMMC (OS) — ${emmc_use}% used"
 fi
 
+# RAID array health
+for array in md0 md1; do
+  if [[ -e /dev/$array ]]; then
+    state=$(awk "/^md${array##md} /{found=1} found && /State :/{print \$3; exit}" /proc/mdstat 2>/dev/null)
+    detail=$(mdadm --detail /dev/$array 2>/dev/null)
+    array_state=$(echo "$detail" | awk '/State :/{print $3}')
+    failed=$(echo "$detail" | awk '/Failed Devices :/{print $4}')
+    degraded=$(echo "$detail" | awk '/Degraded :/{print $3}')
+    if [[ "$array_state" == "clean" ]]; then
+      ok "/dev/$array — clean"
+    elif [[ "$array_state" == "active" ]]; then
+      ok "/dev/$array — active"
+    elif echo "$array_state" | grep -qi "degraded"; then
+      fail "/dev/$array — DEGRADED (failed=$failed) — check mdadm --detail /dev/$array"
+    else
+      warn "/dev/$array — $array_state"
+    fi
+    if [[ -n "$failed" && "$failed" != "0" ]]; then
+      fail "/dev/$array — $failed failed device(s)"
+    fi
+  fi
+done
+
 # ─────────────────────────────────────────────────────────────────────────────
 section "Vault"
 VAULT_ADDR_REMOTE="http://192.168.1.128:8200"
@@ -263,6 +300,35 @@ else
     warn "Vault status unknown: $vault_status"
   fi
 fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+section "lldap"
+lldap_resp=$(curl -sk --max-time 5 "http://192.168.1.70:17170/health" 2>/dev/null)
+if [[ -z "$lldap_resp" ]]; then
+  # Fall back to TCP check on LDAP port
+  if nc -z -w3 192.168.1.70 3890 2>/dev/null; then
+    ok "lldap LDAP port 3890 reachable"
+  else
+    fail "lldap (192.168.1.70) — unreachable on port 17170 and 3890"
+  fi
+else
+  ok "lldap HTTP (192.168.1.70:17170) reachable"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+section "External Secrets"
+while IFS= read -r line; do
+  name=$(echo "$line" | awk '{print $1}')
+  ns=$(echo "$line" | awk '{print $2}')
+  ready=$(echo "$line" | awk '{print $3}')
+  if [[ "$ready" == "True" ]]; then
+    ok "ExternalSecret $ns/$name synced"
+  else
+    fail "ExternalSecret $ns/$name — not synced (check ESO + Vault token)"
+  fi
+done < <(kubectl get externalsecret -A --no-headers \
+  -o custom-columns='NAME:.metadata.name,NS:.metadata.namespace,READY:.status.conditions[0].status' \
+  2>/dev/null)
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "Ollama inference (opi5pro-1)"
