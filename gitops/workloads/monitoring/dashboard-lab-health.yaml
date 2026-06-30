@@ -164,12 +164,30 @@ data:
               {"color": "red", "value": 1}]}}}
         },
 
+        {
+          "type": "stat", "id": 14, "title": "VMs Running",
+          "gridPos": {"h": 4, "w": 4, "x": 0, "y": 5},
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "targets": [{"refId": "A", "instant": true,
+            "datasource": {"type": "prometheus", "uid": "${datasource}"},
+            "expr": "count(libvirt_domain_state_info{state=\"running\"} == 1) or vector(0)",
+            "legendFormat": "Running VMs"}],
+          "options": {"colorMode": "value", "graphMode": "none",
+            "justifyMode": "center", "orientation": "auto",
+            "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+            "textMode": "auto"},
+          "fieldConfig": {"defaults": {
+            "color": {"mode": "thresholds"}, "unit": "short",
+            "thresholds": {"mode": "absolute", "steps": [
+              {"color": "text", "value": null}]}}}
+        },
+
         {"type": "row", "id": 101, "title": "Compute", "collapsed": false,
-         "gridPos": {"h": 1, "w": 24, "x": 0, "y": 5}},
+         "gridPos": {"h": 1, "w": 24, "x": 0, "y": 9}},
 
         {
           "type": "timeseries", "id": 7, "title": "CPU Usage %",
-          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 6},
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 10},
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "targets": [{"refId": "A",
             "datasource": {"type": "prometheus", "uid": "${datasource}"},
@@ -193,7 +211,7 @@ data:
 
         {
           "type": "timeseries", "id": 8, "title": "Memory Usage %",
-          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 6},
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 10},
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "targets": [{"refId": "A",
             "datasource": {"type": "prometheus", "uid": "${datasource}"},
@@ -216,11 +234,11 @@ data:
         },
 
         {"type": "row", "id": 102, "title": "H4 Storage Tiers", "collapsed": false,
-         "gridPos": {"h": 1, "w": 24, "x": 0, "y": 14}},
+         "gridPos": {"h": 1, "w": 24, "x": 0, "y": 18}},
 
         {
           "type": "gauge", "id": 9, "title": "cold-8t (8 TB primary)",
-          "gridPos": {"h": 6, "w": 6, "x": 0, "y": 15},
+          "gridPos": {"h": 6, "w": 6, "x": 0, "y": 19},
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "targets": [{"refId": "A", "instant": true,
             "datasource": {"type": "prometheus", "uid": "${datasource}"},
@@ -239,7 +257,7 @@ data:
 
         {
           "type": "gauge", "id": 10, "title": "cold-sec (~5.45 TB secondary)",
-          "gridPos": {"h": 6, "w": 6, "x": 6, "y": 15},
+          "gridPos": {"h": 6, "w": 6, "x": 6, "y": 19},
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "targets": [{"refId": "A", "instant": true,
             "datasource": {"type": "prometheus", "uid": "${datasource}"},
@@ -258,7 +276,7 @@ data:
 
         {
           "type": "gauge", "id": 11, "title": "NVMe (4 TB hot)",
-          "gridPos": {"h": 6, "w": 6, "x": 12, "y": 15},
+          "gridPos": {"h": 6, "w": 6, "x": 12, "y": 19},
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "targets": [{"refId": "A", "instant": true,
             "datasource": {"type": "prometheus", "uid": "${datasource}"},
@@ -277,7 +295,7 @@ data:
 
         {
           "type": "gauge", "id": 12, "title": "eMMC (256 GB OS)",
-          "gridPos": {"h": 6, "w": 6, "x": 18, "y": 15},
+          "gridPos": {"h": 6, "w": 6, "x": 18, "y": 19},
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "targets": [{"refId": "A", "instant": true,
             "datasource": {"type": "prometheus", "uid": "${datasource}"},
@@ -295,11 +313,11 @@ data:
         },
 
         {"type": "row", "id": 103, "title": "Host Overview", "collapsed": false,
-         "gridPos": {"h": 1, "w": 24, "x": 0, "y": 21}},
+         "gridPos": {"h": 1, "w": 24, "x": 0, "y": 25}},
 
         {
           "type": "table", "id": 13, "title": "Host Overview",
-          "gridPos": {"h": 10, "w": 24, "x": 0, "y": 22},
+          "gridPos": {"h": 10, "w": 24, "x": 0, "y": 26},
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "targets": [
             {"refId": "A", "instant": true,

@@ -81,6 +81,11 @@ spec:
                   - source_labels: [__address__]
                     regex: '([^:]+):\d+'
                     target_label: instance
+              - job_name: libvirt
+                static_configs:
+                  - targets:
+                      - 192.168.1.42:9177   # n150-1 (KVM host)
+                      - 192.168.1.21:9177   # n150-2 (KVM host)
 
         # ---- Alertmanager ----
         alertmanager:
