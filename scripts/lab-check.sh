@@ -264,7 +264,7 @@ fi
 for array in md0 md1; do
   if grep -q "^${array} " /proc/mdstat 2>/dev/null; then
     # [UU] = all members up; [_U]/[U_] = degraded
-    bitmap=$(grep -A2 "^${array} " /proc/mdstat | grep -o '\[.*\]' | tail -1)
+    bitmap=$(grep -A2 "^${array} " /proc/mdstat | grep -o '\[U*_*U*\]' | tail -1)
     if [[ -z "$bitmap" ]]; then
       warn "/dev/$array — present but could not read member bitmap"
     elif echo "$bitmap" | grep -q "_"; then
