@@ -131,7 +131,7 @@ fi
 kubectl get pods -A --no-headers 2>/dev/null | awk '{
   restarts=$5+0
   if (restarts >= 5) print $1, $2, $5
-}' | grep -v 'svclb-' | while read ns pod restarts; do
+}' | grep -v 'svclb-' || true | while read ns pod restarts; do
   warn "[$ns] $pod has $restarts restarts"
 done
 
