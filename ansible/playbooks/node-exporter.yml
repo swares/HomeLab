@@ -3,6 +3,10 @@
 # Cluster nodes (h4-core, opi5pro-1/2, rpi5, xu3-1) get node_exporter
 # via the kube-prometheus-stack DaemonSet — exclude them from this playbook.
 #
+# Supported OS families:
+#   Debian  — ldap-1, n150-1, n150-2, octopi-dns  (apt)
+#   Archlinux — opi-zero2w-{1,2,4}                (pacman)
+#
 # Run:
 #   ansible-playbook -i inventory/hosts.yml playbooks/node-exporter.yml
 #
@@ -11,20 +15,27 @@
   become: true
 
   pre_tasks:
-    # Minimal Armbian images (opi-zero2w) ship without python3-apt, which the
-    # apt module requires. Bootstrap it via raw (works without python3-apt).
-    - name: Bootstrap python3-apt (required by apt module)
-      ansible.builtin.raw: |
-        dpkg -s python3-apt &>/dev/null || apt-get install -y python3-apt
+    # Debian only: minimal images (e.g. Armbian) may lack python3-apt
+    - name: Bootstrap python3-apt (Debian hosts, required by apt module)
+      ansible.builtin.raw: dpkg -s python3-apt &>/dev/null || apt-get install -y python3-apt
       changed_when: false
+      when: ansible_os_family == 'Debian'
 
   tasks:
-    - name: Install prometheus-node-exporter
+    - name: Install prometheus-node-exporter (Debian)
       ansible.builtin.apt:
         name: prometheus-node-exporter
         state: present
         update_cache: true
         cache_valid_time: 3600
+      when: ansible_os_family == 'Debian'
+
+    - name: Install prometheus-node-exporter (Arch)
+      community.general.pacman:
+        name: prometheus-node-exporter
+        state: present
+        update_cache: true
+      when: ansible_os_family == 'Archlinux'
 
     - name: Enable and start node_exporter
       ansible.builtin.systemd:
@@ -32,11 +43,12 @@
         enabled: true
         state: started
 
-    - name: Allow node_exporter port through ufw (if active)
+    - name: Allow node_exporter port through ufw (Debian, if active)
       community.general.ufw:
         rule: allow
         port: "9100"
         proto: tcp
         src: 192.168.1.0/24
         comment: Prometheus node_exporter
-      ignore_errors: true   # ufw may not be installed on all hosts
+      when: ansible_os_family == 'Debian'
+      ignore_errors: true
