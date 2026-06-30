@@ -9,7 +9,9 @@ Before=lvm2-monitor.service microshift.service
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/sbin/losetup {{ microshift_loop_dev }} {{ microshift_lvm_file }}
+ExecStart=/bin/bash -c 'losetup {{ microshift_loop_dev }} {{ microshift_lvm_file }} || losetup {{ microshift_loop_dev }} | grep -q microshift-lvm.img'
+ExecStart=/sbin/vgchange -ay {{ microshift_vg }}
+ExecStop=/sbin/vgchange -an {{ microshift_vg }}
 ExecStop=/usr/sbin/losetup -d {{ microshift_loop_dev }}
 
 [Install]
