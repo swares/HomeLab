@@ -127,11 +127,11 @@ else
   done <<< "$bad_pods"
 fi
 
-# High restart count warning
+# High restart count warning (exclude svclb-* — k3s LB DaemonSet restarts are expected)
 kubectl get pods -A --no-headers 2>/dev/null | awk '{
   restarts=$5+0
   if (restarts >= 5) print $1, $2, $5
-}' | while read ns pod restarts; do
+}' | grep -v 'svclb-' | while read ns pod restarts; do
   warn "[$ns] $pod has $restarts restarts"
 done
 
@@ -260,26 +260,20 @@ else
   ok "eMMC (OS) — ${emmc_use}% used"
 fi
 
-# RAID array health
+# RAID array health (/proc/mdstat — no sudo needed)
 for array in md0 md1; do
-  if [[ -e /dev/$array ]]; then
-    detail=$(mdadm --detail /dev/$array 2>/dev/null) || true
-    array_state=$(echo "$detail" | awk '/State :/{print $3}' || true)
-    failed=$(echo "$detail" | awk '/Failed Devices :/{print $4}' || true)
-    if [[ -z "$array_state" ]]; then
-      warn "/dev/$array — could not read state"
-    elif [[ "$array_state" == "clean" || "$array_state" == "active" ]]; then
-      ok "/dev/$array — $array_state"
-    elif echo "$array_state" | grep -qi "degraded"; then
-      fail "/dev/$array — DEGRADED (failed devices: ${failed:-?}) — run: mdadm --detail /dev/$array"
+  if grep -q "^${array} " /proc/mdstat 2>/dev/null; then
+    # [UU] = all members up; [_U]/[U_] = degraded
+    bitmap=$(grep -A2 "^${array} " /proc/mdstat | grep -o '\[.*\]' | tail -1)
+    if [[ -z "$bitmap" ]]; then
+      warn "/dev/$array — present but could not read member bitmap"
+    elif echo "$bitmap" | grep -q "_"; then
+      fail "/dev/$array — DEGRADED $bitmap — run: mdadm --detail /dev/$array"
     else
-      warn "/dev/$array — $array_state"
-    fi
-    if [[ -n "$failed" && "$failed" != "0" ]]; then
-      fail "/dev/$array — $failed failed device(s)"
+      ok "/dev/$array — $bitmap (all members up)"
     fi
   else
-    warn "/dev/$array — device not present"
+    warn "/dev/$array — not found in /proc/mdstat"
   fi
 done
 
