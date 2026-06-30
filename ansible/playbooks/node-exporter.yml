@@ -1,0 +1,37 @@
+---
+# Deploy prometheus-node-exporter on non-cluster Linux hosts.
+# Cluster nodes (h4-core, opi5pro-1/2, rpi5, xu3-1) get node_exporter
+# via the kube-prometheus-stack DaemonSet — exclude them from this playbook.
+#
+# Run:
+#   ansible-playbook -i inventory/hosts.yml playbooks/node-exporter.yml --check
+#   ansible-playbook -i inventory/hosts.yml playbooks/node-exporter.yml
+#
+- name: Install and enable node_exporter on non-cluster hosts
+  hosts: node_exporter
+  become: true
+
+  tasks:
+    - name: Install prometheus-node-exporter
+      ansible.builtin.apt:
+        name: prometheus-node-exporter
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Enable and start node_exporter
+      ansible.builtin.systemd:
+        name: prometheus-node-exporter
+        enabled: true
+        state: started
+
+    - name: Allow node_exporter port through ufw (if active)
+      community.general.ufw:
+        rule: allow
+        port: "9100"
+        proto: tcp
+        src: 192.168.1.0/24
+        comment: Prometheus node_exporter
+      when: ansible_facts.get('ufw_status', '') == 'active' or
+            lookup('pipe', 'ufw status 2>/dev/null | head -1') is search('active')
+      ignore_errors: true   # ufw may not be installed on all hosts

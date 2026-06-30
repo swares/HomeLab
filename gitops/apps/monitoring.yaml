@@ -65,6 +65,22 @@ spec:
             podMonitorNamespaceSelector: {}
             serviceMonitorNamespaceSelector: {}
             ruleNamespaceSelector: {}
+            # Static scrape targets — non-cluster hosts running apt node_exporter
+            additionalScrapeConfigs:
+              - job_name: node-exporter-external
+                static_configs:
+                  - targets:
+                      - 192.168.1.70:9100   # ldap-1 (lldap VM)
+                      - 192.168.1.42:9100   # n150-1 (KVM host)
+                      - 192.168.1.21:9100   # n150-2 (KVM host)
+                      - 192.168.1.148:9100  # octopi (DNS primary)
+                      - 192.168.1.184:9100  # opi-zero2w-1 (DNS secondary)
+                      - 192.168.1.188:9100  # opi-zero2w-2 (MQTT)
+                      - 192.168.1.99:9100   # opi-zero2w-4
+                relabel_configs:
+                  - source_labels: [__address__]
+                    regex: '([^:]+):\d+'
+                    target_label: instance
 
         # ---- Alertmanager ----
         alertmanager:
