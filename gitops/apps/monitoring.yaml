@@ -48,6 +48,13 @@ spec:
 
         # ---- Prometheus ----
         prometheus:
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            hosts:
+              - prometheus.apps.lab.home.arpa
+            paths:
+              - /
           prometheusSpec:
             retention: 30d
             retentionSize: "40GB"
@@ -89,6 +96,13 @@ spec:
 
         # ---- Alertmanager ----
         alertmanager:
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            hosts:
+              - alertmanager.apps.lab.home.arpa
+            paths:
+              - /
           alertmanagerSpec:
             nodeSelector:
               kubernetes.io/hostname: odroid-nas
