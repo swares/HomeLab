@@ -263,23 +263,23 @@ fi
 # RAID array health
 for array in md0 md1; do
   if [[ -e /dev/$array ]]; then
-    state=$(awk "/^md${array##md} /{found=1} found && /State :/{print \$3; exit}" /proc/mdstat 2>/dev/null)
-    detail=$(mdadm --detail /dev/$array 2>/dev/null)
-    array_state=$(echo "$detail" | awk '/State :/{print $3}')
-    failed=$(echo "$detail" | awk '/Failed Devices :/{print $4}')
-    degraded=$(echo "$detail" | awk '/Degraded :/{print $3}')
-    if [[ "$array_state" == "clean" ]]; then
-      ok "/dev/$array — clean"
-    elif [[ "$array_state" == "active" ]]; then
-      ok "/dev/$array — active"
+    detail=$(mdadm --detail /dev/$array 2>/dev/null) || true
+    array_state=$(echo "$detail" | awk '/State :/{print $3}' || true)
+    failed=$(echo "$detail" | awk '/Failed Devices :/{print $4}' || true)
+    if [[ -z "$array_state" ]]; then
+      warn "/dev/$array — could not read state"
+    elif [[ "$array_state" == "clean" || "$array_state" == "active" ]]; then
+      ok "/dev/$array — $array_state"
     elif echo "$array_state" | grep -qi "degraded"; then
-      fail "/dev/$array — DEGRADED (failed=$failed) — check mdadm --detail /dev/$array"
+      fail "/dev/$array — DEGRADED (failed devices: ${failed:-?}) — run: mdadm --detail /dev/$array"
     else
       warn "/dev/$array — $array_state"
     fi
     if [[ -n "$failed" && "$failed" != "0" ]]; then
       fail "/dev/$array — $failed failed device(s)"
     fi
+  else
+    warn "/dev/$array — device not present"
   fi
 done
 
