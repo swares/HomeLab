@@ -281,7 +281,7 @@ data:
           "datasource": {"type": "prometheus", "uid": "${datasource}"},
           "targets": [{"refId": "A", "instant": true,
             "datasource": {"type": "prometheus", "uid": "${datasource}"},
-            "expr": "(1 - node_filesystem_avail_bytes{mountpoint=\"/\",job=\"node-exporter\",node=\"odroid-nas\"} / node_filesystem_size_bytes{mountpoint=\"/\",job=\"node-exporter\",node=\"odroid-nas\"}) * 100",
+            "expr": "(1 - node_filesystem_avail_bytes{mountpoint=\"/\",instance=~\"192\\\\.168\\\\.1\\\\.160.*\"} / node_filesystem_size_bytes{mountpoint=\"/\",instance=~\"192\\\\.168\\\\.1\\\\.160.*\"}) * 100",
             "legendFormat": "eMMC"}],
           "options": {"reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
             "showThresholdLabels": false, "showThresholdMarkers": true,
