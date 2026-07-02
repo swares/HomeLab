@@ -36,6 +36,7 @@
           tls-san:
             - "{{ k3s_node_ip }}"
             - api.lab.home.arpa
+            - "192.168.1.200"      # kube-vip VIP — must be in SAN before n150s join
           # Keep Traefik (ingress), local-path-provisioner (storage), and servicelb enabled
           # servicelb is k3s's built-in LB — assigns node IP to LoadBalancer services (Traefik needs this)
           # Write kubeconfig world-readable so the ansible user can read it

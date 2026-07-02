@@ -13,7 +13,7 @@
   become: true
 
   vars:
-    k3s_server_url: "https://192.168.1.160:6443"
+    k3s_server_url: "https://192.168.1.200:6443"   # kube-vip VIP — survives any single server node failure
     k3s_version: "{{ lookup('vars', 'k3s_version', default='v1.31.4+k3s1') }}"
 
   pre_tasks:
