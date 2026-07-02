@@ -1,6 +1,6 @@
 ---
 - name: Bootstrap lldap on ldap-1
-  hosts: ldap
+  hosts: lldap
   become: true
   vars:
     lldap_version: "v0.6.3"
