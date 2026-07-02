@@ -104,32 +104,32 @@
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-- name: Patch standalone VMs (snapshot → upgrade → health check)
-  hosts: standalone_vms     # tag standalone VMs in inventory with group standalone_vms
+- name: Patch standalone VMs (virsh snapshot → upgrade → health check → rollback on failure)
+  hosts: standalone_vms     # add VMs to this group in inventory with required vars:
+                            #   kvm_host:        inventory hostname of the libvirt hypervisor
+                            #   libvirt_vm_name: name as known to virsh (e.g. ldap-1)
+                            #   health_check_url: URL to probe after reboot (optional)
   serial: 1
   become: true
   gather_facts: true
 
   vars:
-    proxmox_api_host:    "pve-n150-1.lab.home.arpa"
-    proxmox_api_user:    "ansible@pam"
-    reboot_timeout:      300
+    reboot_timeout:       300
     health_check_timeout: 120
-    snapshot_name:       "pre-update-{{ ansible_date_time.date }}"
+    snapshot_name:        "pre-update-{{ ansible_date_time.date }}"
 
   tasks:
-    - name: Create Proxmox snapshot before patching
-      community.general.proxmox_snap:
-        api_host:         "{{ proxmox_api_host }}"
-        api_user:         "{{ proxmox_api_user }}"
-        api_token_id:     "{{ proxmox_api_token_id }}"
-        api_token_secret: "{{ proxmox_api_token_secret }}"
-        vmid:             "{{ proxmox_vmid }}"
-        snapname:         "{{ snapshot_name }}"
-        description:      "Auto pre-update snapshot by Ansible {{ ansible_date_time.iso8601 }}"
-        state: present
-      delegate_to: localhost
+    - name: Create virsh snapshot before patching
+      ansible.builtin.command: >
+        virsh snapshot-create-as
+          --domain {{ libvirt_vm_name }}
+          --name   {{ snapshot_name }}
+          --description "Auto pre-update snapshot by Ansible {{ ansible_date_time.iso8601 }}"
+          --atomic
+      delegate_to: "{{ kvm_host }}"
+      become: true
       register: snapshot_result
+      changed_when: snapshot_result.rc == 0
 
     - name: Apply all available package updates
       ansible.builtin.apt:
@@ -164,28 +164,48 @@
       until:    health_result.status in [200, 301, 302, 401, 403]
       when: health_check_url is defined
 
+    - name: Delete snapshot after successful update
+      ansible.builtin.command: >
+        virsh snapshot-delete --domain {{ libvirt_vm_name }} --snapshotname {{ snapshot_name }}
+      delegate_to: "{{ kvm_host }}"
+      become: true
+      changed_when: true
+
     - name: Report success
       ansible.builtin.debug:
         msg: >
           {{ inventory_hostname }} patched successfully.
-          Snapshot: {{ snapshot_name }}.
+          Snapshot {{ snapshot_name }} created and removed.
           Health: {{ health_result.status | default('skipped') }}.
 
   rescue:
-    - name: "ROLLBACK: restore Proxmox snapshot {{ snapshot_name }}"
-      community.general.proxmox_snap:
-        api_host:         "{{ proxmox_api_host }}"
-        api_user:         "{{ proxmox_api_user }}"
-        api_token_id:     "{{ proxmox_api_token_id }}"
-        api_token_secret: "{{ proxmox_api_token_secret }}"
-        vmid:             "{{ proxmox_vmid }}"
-        snapname:         "{{ snapshot_name }}"
-        state:            rollback
-      delegate_to: localhost
+    - name: "ROLLBACK: shut down VM before reverting snapshot"
+      ansible.builtin.command: >
+        virsh shutdown --domain {{ libvirt_vm_name }}
+      delegate_to: "{{ kvm_host }}"
+      become: true
+      failed_when: false
+
+    - name: "ROLLBACK: wait for VM to stop"
+      ansible.builtin.command: >
+        virsh domstate {{ libvirt_vm_name }}
+      delegate_to: "{{ kvm_host }}"
+      become: true
+      register: vm_state
+      retries: 12
+      delay: 5
+      until: "'shut off' in vm_state.stdout"
+      changed_when: false
+
+    - name: "ROLLBACK: revert to snapshot {{ snapshot_name }}"
+      ansible.builtin.command: >
+        virsh snapshot-revert --domain {{ libvirt_vm_name }} --snapshotname {{ snapshot_name }} --running
+      delegate_to: "{{ kvm_host }}"
+      become: true
 
     - name: Fail with rollback notice
       ansible.builtin.fail:
         msg: >
           Update FAILED for {{ inventory_hostname }}.
-          Rolled back to snapshot {{ snapshot_name }}.
+          Reverted to snapshot {{ snapshot_name }} — VM is running again.
           Check the output above for the root cause.
