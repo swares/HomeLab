@@ -130,7 +130,7 @@
     # ---- Config ----
     - name: Deploy Promtail config
       ansible.builtin.template:
-        src: promtail-config.yml.j2
+        src: ../templates/promtail-config.yml.j2
         dest: "{{ promtail_config_dir }}/config.yml"
         owner: "{{ promtail_user }}"
         group: "{{ promtail_group }}"

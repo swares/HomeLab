@@ -114,6 +114,33 @@ spec:
                   resources:
                     requests:
                       storage: 2Gi
+          # Routing: all real alerts → m5stack-adapter webhook.
+          # Watchdog and InfoInhibitor go to the null receiver (expected noise).
+          config:
+            global:
+              resolve_timeout: 5m
+            inhibit_rules:
+              - source_matchers:
+                  - alertname = "InfoInhibitor"
+                target_matchers:
+                  - severity = "info"
+            route:
+              group_by: ['alertname', 'namespace']
+              group_wait: 30s
+              group_interval: 5m
+              repeat_interval: 4h
+              receiver: 'null'
+              routes:
+                - matchers:
+                    - alertname =~ "InfoInhibitor|Watchdog"
+                  receiver: 'null'
+                - receiver: m5stack
+            receivers:
+              - name: 'null'
+              - name: m5stack
+                webhook_configs:
+                  - url: 'http://m5stack-adapter.monitoring.svc.cluster.local:8080/webhook'
+                    send_resolved: true
 
         # ---- Node exporter — runs on all nodes ----
         prometheus-node-exporter:
