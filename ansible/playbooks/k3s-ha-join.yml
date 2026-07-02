@@ -1,0 +1,163 @@
+---
+# k3s-ha-join.yml — Join n150-1 and n150-2 as k3s server nodes to form a 3-node HA control plane.
+#
+# Prerequisites (must be done BEFORE running this playbook):
+#   1. Merge the kube-vip PR and confirm Argo CD has deployed kube-vip to the H4
+#   2. Confirm VIP 192.168.1.200 is reachable: ping 192.168.1.200
+#   3. Confirm k3s API is reachable via VIP: curl -k https://192.168.1.200:6443/healthz
+#   4. H4's k3s tls-san already includes 192.168.1.200 (done via k3s-h4.yml update)
+#
+# Usage (run one node at a time and verify before adding the next):
+#   ansible-playbook -i inventory/hosts.yml playbooks/k3s-ha-join.yml \
+#     -l n150-1 --vault-password-file .vault_pass --ask-become-pass
+#
+#   ansible-playbook -i inventory/hosts.yml playbooks/k3s-ha-join.yml \
+#     -l n150-2 --vault-password-file .vault_pass --ask-become-pass
+#
+# After both nodes join:
+#   kubectl get nodes          # expect 3 control-plane nodes + existing agents
+#   kubectl get pods -n kube-system -l app=kube-vip-ds   # expect 3 pods (one per server)
+
+- name: Join k3s server node to HA control plane
+  hosts: k3s_new_servers     # run with -l n150-1 or -l n150-2; don't run both at once
+  become: true
+  serial: 1
+
+  vars:
+    k3s_vip:      "192.168.1.200"
+    k3s_api_url:  "https://{{ k3s_vip }}:6443"
+    k3s_version:  "{{ hostvars[inventory_hostname]['k3s_version'] | default('stable') }}"
+    k3s_node_ip:  "{{ node_ip }}"
+    k3s_config_dir: /etc/rancher/k3s
+    kubeconfig_dest: "/home/{{ ansible_user }}/.kube/config"
+
+  pre_tasks:
+    - name: Verify VIP is reachable before joining
+      ansible.builtin.uri:
+        url: "https://{{ k3s_vip }}:6443/healthz"
+        validate_certs: false
+        status_code: 200
+      delegate_to: localhost
+      become: false
+      failed_when: false
+      register: vip_check
+
+    - name: Abort if VIP is not reachable
+      ansible.builtin.fail:
+        msg: >
+          VIP {{ k3s_vip }} is not answering on :6443. Ensure kube-vip is running on the H4
+          and the H4's tls-san includes {{ k3s_vip }} before joining additional server nodes.
+      when: vip_check.status != 200
+
+    - name: Read node token from h4-core
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: _k3s_token_raw
+      delegate_to: h4-core
+      become: true
+      no_log: true
+
+    - name: Set k3s token fact
+      ansible.builtin.set_fact:
+        k3s_token: "{{ _k3s_token_raw.content | b64decode | trim }}"
+      no_log: true
+
+  tasks:
+    - name: Install dependencies
+      ansible.builtin.apt:
+        name: [curl, iptables, nfs-common]
+        state: present
+        update_cache: true
+
+    - name: Ensure k3s config directory exists
+      ansible.builtin.file:
+        path: "{{ k3s_config_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Write k3s server config for HA join
+      ansible.builtin.copy:
+        dest: "{{ k3s_config_dir }}/config.yaml"
+        mode: "0600"
+        content: |
+          # Ansible-managed — k3s HA server config for {{ inventory_hostname }}
+          server: "{{ k3s_api_url }}"
+          node-ip: "{{ k3s_node_ip }}"
+          tls-san:
+            - "{{ k3s_vip }}"
+            - "{{ k3s_node_ip }}"
+            - api.lab.home.arpa
+          write-kubeconfig-mode: "0644"
+      no_log: true    # config contains token path; token written separately below
+
+    - name: Write k3s token
+      ansible.builtin.copy:
+        dest: "{{ k3s_config_dir }}/token"
+        mode: "0600"
+        content: "{{ k3s_token }}"
+      no_log: true
+
+    - name: Check if k3s is already installed
+      ansible.builtin.stat:
+        path: /usr/local/bin/k3s
+      register: k3s_bin
+
+    - name: Install k3s server (joins existing cluster via VIP)
+      ansible.builtin.shell: |
+        curl -sfL https://get.k3s.io | \
+          INSTALL_K3S_VERSION="{{ k3s_version }}" \
+          K3S_TOKEN="{{ k3s_token }}" \
+          sh -s - server
+      args:
+        executable: /bin/bash
+      when: not k3s_bin.stat.exists
+      changed_when: true
+      no_log: true
+      async: 300
+      poll: 15
+
+    - name: Wait for node to appear in cluster as Ready
+      ansible.builtin.command: >
+        kubectl wait node/{{ ansible_hostname }}
+          --for=condition=Ready
+          --timeout=180s
+      delegate_to: h4-core
+      become: false
+      register: node_ready
+      retries: 10
+      delay: 15
+      until: node_ready.rc == 0
+      changed_when: false
+
+    - name: Create .kube dir for ansible user
+      ansible.builtin.file:
+        path: "/home/{{ ansible_user }}/.kube"
+        state: directory
+        owner: "{{ ansible_user }}"
+        mode: "0700"
+
+    - name: Copy kubeconfig for ansible user
+      ansible.builtin.copy:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: "{{ kubeconfig_dest }}"
+        owner: "{{ ansible_user }}"
+        mode: "0600"
+        remote_src: true
+
+    - name: Set KUBECONFIG in .bashrc
+      ansible.builtin.lineinfile:
+        path: "/home/{{ ansible_user }}/.bashrc"
+        line: 'export KUBECONFIG=~/.kube/config'
+        regexp: '^export KUBECONFIG='
+
+  post_tasks:
+    - name: Show cluster node status
+      ansible.builtin.command: kubectl get nodes -o wide
+      delegate_to: h4-core
+      become: false
+      register: nodes_out
+      changed_when: false
+
+    - name: Node status
+      ansible.builtin.debug:
+        msg: "{{ nodes_out.stdout_lines }}"
