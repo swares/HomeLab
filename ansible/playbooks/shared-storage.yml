@@ -253,14 +253,15 @@
         state: absent
 
     - name: Verify SSH from n150-2 to n150-1 (migration transport check)
-      # become: false — the SSH key lives in /home/swares/.ssh/; root has none.
-      # play-level become:true (and ansible_become group var) would otherwise run
-      # this as root, which has no authorized key on the remote host.
+      # ansible_become: true in kvm_hosts group vars overrides task-level become:false.
+      # Workaround: explicitly become swares (sudo -u swares) so the command runs
+      # with access to /home/swares/.ssh/id_ed25519, not root's empty key ring.
       ansible.builtin.command: >
         ssh -o BatchMode=yes -o ConnectTimeout=5
           {{ hostvars['n150-1']['ansible_host'] }}
           echo "SSH OK from n150-2 to n150-1"
-      become: false
+      become: true
+      become_user: "{{ ansible_user }}"
       register: ssh_test
       changed_when: false
 
