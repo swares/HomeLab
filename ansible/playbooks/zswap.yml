@@ -15,7 +15,7 @@
   vars:
     zswap_enabled: "1"
     zswap_compressor: zstd
-    zswap_zpool: z3fold
+    zswap_zpool: zsmalloc        # z3fold deprecated and removed in kernel 6.8+
     zswap_max_pool_percent: "20"
 
   tasks:
@@ -56,15 +56,17 @@
       notify: apply sysfs
 
     - name: Set zswap kernel cmdline params in GRUB
+      # Ubuntu 24.04 uses GRUB_CMDLINE_LINUX_DEFAULT for runtime params.
+      # backrefs: false so we insert the line if it doesn't already exist.
       lineinfile:
         path: /etc/default/grub
-        regexp: '^GRUB_CMDLINE_LINUX='
+        regexp: '^GRUB_CMDLINE_LINUX_DEFAULT='
         line: >-
-          GRUB_CMDLINE_LINUX="zswap.enabled={{ zswap_enabled }}
+          GRUB_CMDLINE_LINUX_DEFAULT="zswap.enabled={{ zswap_enabled }}
           zswap.compressor={{ zswap_compressor }}
           zswap.zpool={{ zswap_zpool }}
           zswap.max_pool_percent={{ zswap_max_pool_percent }}"
-        backrefs: true
+        backrefs: false
       notify: update grub
 
     - name: Enable zswap immediately via sysfs
