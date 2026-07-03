@@ -126,5 +126,5 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 - ✅ ArgoCD deploy key: sync-secrets-to-vault.yml backs up ~/.ssh/argocd-deploy-key to secret/lab/argocd (2026-07-03)
 - ✅ zswap enabled on n150-1/n150-2: zstd compressor, zsmalloc zpool, 20% max pool (2026-07-03)
 - N150 #3: WinRM credentials (wrong password on file)
-- Authelia → PostgreSQL migration (enables replicas: 2 for true HA)
+- ✅ Authelia → PostgreSQL: postgres.yaml added, configmap+deployment updated, replicas:2 — pending password generation + git push (2026-07-03)
 - ✅ Shared NFS storage between n150-1/n150-2: /srv/libvirt-shared, libvirt-shared pool active on both nodes, SSH key exchange complete — VM live migration ready (2026-07-03)
