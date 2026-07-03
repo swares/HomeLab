@@ -391,18 +391,24 @@
         port: 3890
         timeout: 30
 
-    - name: LDAP application check — anonymous base search
+    - name: LDAP application check — authenticated base search
+      # ldap-utils is on the KVM host (Phase 1), not the sandbox VM.
+      # Delegate to the KVM host, which reaches the sandbox via virbr-sandbox.
+      # lldap disallows anonymous binds (rc=48), so bind as the admin user.
+      # lldap_admin_pass comes from Ansible Vault (same var used in bootstrap-lldap.yml).
       ansible.builtin.command: >
         ldapsearch
-          -H {{ sandbox_ldap }}
+          -H ldap://{{ ansible_host }}:3890
           -x
+          -D "uid=admin,ou=people,dc=lab,dc=home,dc=arpa"
+          -w "{{ lldap_admin_pass }}"
           -b "dc=lab,dc=home,dc=arpa"
           -s base
           "(objectClass=*)"
+      delegate_to: "{{ hostvars['sandbox-clone']['p_kvm_host'] }}"
       register: ldap_check
       changed_when: false
-      # Anonymous base search confirms the directory is up and serving the base DN.
-      # A bind check with credentials can be added once lldap_admin_pass is in scope here.
+      no_log: true
 
     - name: Mark sandbox healthy
       ansible.builtin.set_fact:
