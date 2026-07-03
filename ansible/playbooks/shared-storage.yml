@@ -67,7 +67,8 @@
 
     - name: Enable and start NFS server
       ansible.builtin.systemd:
-        name: nfs-kernel-server
+        # Package is nfs-kernel-server; systemd unit name on Ubuntu 24.04 is nfs-server
+        name: nfs-server
         enabled: true
         state: started
 

@@ -124,7 +124,7 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 - ✅ sandbox-vm-update.yml: clone-test-promote pipeline for VM OS updates (2026-07-02)
 - Store n150-1/n150-2 sudo password in Ansible Vault
 - ArgoCD deploy key (`~/.ssh/argocd-deploy-key`): back up to Vault
-- Apply zswap role to n150-1/n150-2 (Ubuntu 24.04 kernel 6.8 has zswap)
+- ✅ zswap enabled on n150-1/n150-2: zstd compressor, zsmalloc zpool, 20% max pool (2026-07-03)
 - N150 #3: WinRM credentials (wrong password on file)
 - Authelia → PostgreSQL migration (enables replicas: 2 for true HA)
 - Shared storage between n150-1/n150-2 (NFS or Ceph — enables VM live migration)
