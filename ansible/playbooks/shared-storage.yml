@@ -253,13 +253,14 @@
         state: absent
 
     - name: Verify SSH from n150-2 to n150-1 (migration transport check)
-      # Explicit -l to force swares user — play-level become:true would otherwise
-      # run this as root, causing root@n150-1 which has no authorized key.
+      # become: false — the SSH key lives in /home/swares/.ssh/; root has none.
+      # play-level become:true (and ansible_become group var) would otherwise run
+      # this as root, which has no authorized key on the remote host.
       ansible.builtin.command: >
         ssh -o BatchMode=yes -o ConnectTimeout=5
-          -l {{ ansible_user }}
           {{ hostvars['n150-1']['ansible_host'] }}
           echo "SSH OK from n150-2 to n150-1"
+      become: false
       register: ssh_test
       changed_when: false
 
