@@ -214,9 +214,12 @@
       when: item != inventory_hostname
 
     - name: Add every other KVM host to known_hosts (suppress StrictHostKeyChecking)
+      # Explicit path: ansible_become:true in group vars causes this to run as root,
+      # which would write to /root/.ssh/known_hosts — not swares's known_hosts.
       ansible.builtin.known_hosts:
         name: "{{ hostvars[item]['ansible_host'] }}"
         key: "{{ lookup('pipe', 'ssh-keyscan -t ed25519 ' + hostvars[item]['ansible_host'] + ' 2>/dev/null') }}"
+        path: "/home/{{ ansible_user }}/.ssh/known_hosts"
         state: present
       loop: "{{ groups['kvm_hosts'] }}"
       when:
