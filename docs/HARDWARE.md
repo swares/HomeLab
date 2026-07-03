@@ -112,7 +112,7 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 ## Pending / TODO
 
 - octopi (RPi 3B #2): flash Bookworm → run dns.yml → Pi-hole v6
-- Rotate lldap JWT secret (exposed in terminal session 2026-06-29)
+- ✅ lldap JWT secret rotated 2026-07-02
 - Store n150-1/n150-2 sudo password in Ansible Vault
 - RPi 4B: confirm OS is Raspberry Pi OS Bookworm before running dns.yml
 - ArgoCD deploy key (`~/.ssh/argocd-deploy-key`): back up to Vault
