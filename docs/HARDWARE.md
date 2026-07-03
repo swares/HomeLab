@@ -122,9 +122,9 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 - ✅ HA k3s: n150-1 + n150-2 joined as server nodes, kube-vip VIP 192.168.1.200 (2026-07-02)
 - ✅ Authelia: livenessProbe + PodDisruptionBudget added (2026-07-02)
 - ✅ sandbox-vm-update.yml: clone-test-promote pipeline for VM OS updates (2026-07-02)
-- Store n150-1/n150-2 sudo password in Ansible Vault
-- ArgoCD deploy key (`~/.ssh/argocd-deploy-key`): back up to Vault
+- ✅ n150-1/n150-2 sudo password: Ansible-Vault-encrypted in group_vars/kvm_hosts/secrets.yml; sync-secrets-to-vault.yml now backs it up to secret/lab/hosts (2026-07-03)
+- ✅ ArgoCD deploy key: sync-secrets-to-vault.yml backs up ~/.ssh/argocd-deploy-key to secret/lab/argocd (2026-07-03)
 - ✅ zswap enabled on n150-1/n150-2: zstd compressor, zsmalloc zpool, 20% max pool (2026-07-03)
 - N150 #3: WinRM credentials (wrong password on file)
 - Authelia → PostgreSQL migration (enables replicas: 2 for true HA)
-- Shared storage between n150-1/n150-2 (NFS or Ceph — enables VM live migration)
+- ✅ Shared NFS storage between n150-1/n150-2: /srv/libvirt-shared, libvirt-shared pool active on both nodes, SSH key exchange complete — VM live migration ready (2026-07-03)
