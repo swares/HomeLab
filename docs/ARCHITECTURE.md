@@ -17,23 +17,34 @@ fleet**. Everything that runs inside the cluster is declared in git and reconcil
 Ansible runs rarely (setup and changes you approve). Argo runs continuously. Claude lives
 mostly in the git/Argo layer.
 
-## The core node — k3s on the H4 Ultra
+## k3s cluster — 3-node HA control plane
 
-k3s is Rancher's lightweight, single-binary Kubernetes distribution. It runs as a **single
-systemd service** on a normal Linux host, so the NAS services (`smbd`/`nfs`) coexist as
-ordinary host processes. It brings a minimal control plane (containerd, Flannel CNI,
-embedded etcd), **Traefik** as the default ingress controller (so you use standard
-`networking.k8s.io/v1 Ingress` objects), and the **local-path** StorageClass for dynamic
-persistent volumes on the NVMe — but drops the heavy parts of full Kubernetes distributions.
-That's exactly the footprint trade that lets it share an 8-core box with a NAS.
+k3s is Rancher's lightweight, single-binary Kubernetes distribution. It brings a minimal
+control plane (containerd, Flannel CNI, embedded etcd), **Traefik** as the default ingress
+controller, and the **local-path** StorageClass for dynamic persistent volumes — but drops
+the heavy parts of full Kubernetes.
 
-The node sits on the H4's 2.5GbE NIC (Intel I226-V) at `192.168.1.160`. The OS lives on
-the 256 GB eMMC, leaving the whole NVMe for etcd + PVs + live NAS. The base domain is
-`lab.home.arpa` (RFC 8375 reserved for home networks), so an Ingress named `web` resolves
-as `web.apps.lab.home.arpa`.
+The control plane runs across **three server nodes** with embedded etcd, providing quorum
+and tolerating one server failure without cluster downtime:
 
-**opi5pro-2** (`192.168.1.172`) runs as a k3s agent — extra compute for workloads that can
-tolerate arm64. Add it to a workload with `nodeSelector: kubernetes.io/arch: arm64`.
+| Node | IP | Hardware |
+|------|----|---------|
+| `odroid-nas` | `192.168.1.160` | H4 Ultra — also runs NAS (`smbd`/`nfs`) |
+| `n150-1` | `192.168.1.42` | N150 mini PC — also KVM hypervisor |
+| `n150-2` | `192.168.1.21` | N150 mini PC — also KVM hypervisor |
+
+**kube-vip** runs as a DaemonSet on all three server nodes and advertises a floating VIP at
+`192.168.1.200` via ARP. All k3s traffic (internal + `kubectl`) targets the VIP; if any
+one server goes down, the VIP moves to another server within seconds.
+
+The API endpoint is `https://api.lab.home.arpa:6443` (DNS: `api.lab.home.arpa → 192.168.1.200`).
+The VIP's SAN is in the k3s TLS certificate.
+
+The base domain is `lab.home.arpa` (RFC 8375 reserved for home networks), so an Ingress
+named `web` resolves as `web.apps.lab.home.arpa`.
+
+**opi5pro-1/2** run as k3s agents — ARM64 inference compute. Target with
+`nodeSelector: kubernetes.io/arch: arm64`.
 
 ## GitOps reconcile loop
 
@@ -113,16 +124,21 @@ flowchart LR
 
 ## Network & DNS
 
-The lab is a flat **192.168.1.0/24** network; the H4 is wired at 2.5 Gbps (Intel I226-V)
-at `192.168.1.160`. **DNS is the linchpin of the install** — k3s needs an
-`api.lab.home.arpa` record and a wildcard `*.apps.lab.home.arpa`, both pointing at
-`192.168.1.160`. Pi-hole (octopi, `.148`) is the LAN resolver; it delegates
-`lab.home.arpa` to itself via `dnsmasq` custom records.
+The lab is a flat **192.168.1.0/24** network. **DNS is the linchpin of the install** —
+k3s needs `api.lab.home.arpa → 192.168.1.200` (kube-vip VIP) and
+`*.apps.lab.home.arpa → 192.168.1.160` (H4 Traefik ingress).
+
+Three DNS servers provide redundancy:
+
+| Role | Host | IP | Engine |
+|------|------|----|--------|
+| Primary | RPi 3B #2 (octopi) | `192.168.1.148` | Pi-hole (Bookworm pending) |
+| Secondary | RPi 4B | `192.168.1.116` | Pi-hole v6 |
+| Tertiary | OPi Zero 2W #1 | `192.168.1.184` | dnsmasq (fallback) |
 
 Inside the cluster, CoreDNS has a custom zone (`coredns-custom` ConfigMap in kube-system)
 that answers all `*.apps.lab.home.arpa` queries with `192.168.1.160`, ensuring pods on any
-node (including the arm64 agent) resolve Ingress names without relying on the host's
-`systemd-resolved`.
+node resolve Ingress names without relying on the host's `systemd-resolved`.
 
 ## Identity & SSO
 
@@ -143,13 +159,13 @@ Ingresses using a self-signed lab root CA stored in the `lab-root-ca` secret.
 The H4 is the only box that can carry a real control plane plus storage, so it stays the
 core. The other hardware has defined supporting roles:
 
-- **n150-1 / n150-2** (`192.168.1.42` / `192.168.1.21`) — KVM hypervisors (Ubuntu 24.04).
-  Currently host `ldap-1` (lldap). NPU-capable; candidate inference nodes.
-- **Orange Pi 5 Pro ×2 (8C/16 GB/NPU)** — opi5pro-1 runs RKLLama + LiteLLM gateway;
-  opi5pro-2 is a k3s agent (`192.168.1.172`).
+- **n150-1 / n150-2** (`192.168.1.42` / `192.168.1.21`) — dual role: k3s server nodes
+  (embedded etcd quorum) + KVM hypervisors (Ubuntu 24.04). Host `ldap-1` VM (lldap).
+- **Orange Pi 5 Pro ×2 (8C/16 GB/NPU)** — k3s agents; opi5pro-1/2 run Ollama inference.
 - **RPi 5** (`192.168.1.128`) — HashiCorp Vault.
-- **RPi 4B** (`192.168.1.99`) — available (previously OpenLDAP, now superseded by lldap).
-- **octopi (RPi 3B #2)** (`192.168.1.148`) — Pi-hole DNS.
+- **RPi 4B** (`192.168.1.116`) — DNS secondary (Pi-hole v6, Debian Bookworm).
+- **octopi (RPi 3B #2)** (`192.168.1.148`) — DNS primary (Pi-hole, Bookworm flash pending).
+- **OPi Zero 2W #1** (`192.168.1.184`) — DNS tertiary / fallback (dnsmasq).
 - **opi-zero2w-2** (`192.168.1.188`) — MQTT broker (Mosquitto).
 - **xu3-1** (`192.168.1.64`) — build agent.
 - **M5Stack + OPi NPUs** — edge inference endpoints, not cluster nodes.

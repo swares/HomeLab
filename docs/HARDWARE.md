@@ -72,13 +72,18 @@ k3s PVs use the `local-path` StorageClass. Never provision against `lv_nas`.
 
 ## k3s Cluster
 
+3-node HA control plane (embedded etcd quorum). kube-vip VIP: `192.168.1.200`.
+API: `https://api.lab.home.arpa:6443`.
+
 | Node | Role | IP | OS | Notes |
 |------|------|----|-----|-------|
-| `odroid-nas` | server | `192.168.1.160` | Ubuntu 22.04 | H4 Ultra |
+| `odroid-nas` | server | `192.168.1.160` | Ubuntu 22.04 | H4 Ultra; also runs NAS |
+| `n150-1` | server | `192.168.1.42` | Ubuntu 24.04 | Also KVM hypervisor (ldap-1 VM) |
+| `n150-2` | server | `192.168.1.21` | Ubuntu 24.04 | Also KVM hypervisor |
 | `opi5pro-1` | agent | `192.168.1.168` | Arch Linux ARM | `role=inference`; NVMe-backed Ollama PVC |
 | `opi5pro-2` | agent | `192.168.1.172` | Ubuntu 22.04 | `role=inference`; NVMe-backed Ollama PVC |
 
-Ingress: Traefik. DNS: `*.apps.lab.home.arpa` → `192.168.1.160`.
+Ingress: Traefik. DNS: `*.apps.lab.home.arpa` → `192.168.1.160`; `api.lab.home.arpa` → `192.168.1.200` (VIP).
 ArgoCD bootstraps all workloads from `gitops/` via `gitops/bootstrap/root-app.yaml`.
 CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home.arpa` resolution.
 
@@ -113,8 +118,13 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 
 - octopi (RPi 3B #2): flash Bookworm → run dns.yml → Pi-hole v6
 - ✅ lldap JWT secret rotated 2026-07-02
+- ✅ RPi 4B: Pi-hole v6 secondary DNS live at 192.168.1.116 (2026-07-02)
+- ✅ HA k3s: n150-1 + n150-2 joined as server nodes, kube-vip VIP 192.168.1.200 (2026-07-02)
+- ✅ Authelia: livenessProbe + PodDisruptionBudget added (2026-07-02)
+- ✅ sandbox-vm-update.yml: clone-test-promote pipeline for VM OS updates (2026-07-02)
 - Store n150-1/n150-2 sudo password in Ansible Vault
-- RPi 4B: confirm OS is Raspberry Pi OS Bookworm before running dns.yml
 - ArgoCD deploy key (`~/.ssh/argocd-deploy-key`): back up to Vault
 - Apply zswap role to n150-1/n150-2 (Ubuntu 24.04 kernel 6.8 has zswap)
 - N150 #3: WinRM credentials (wrong password on file)
+- Authelia → PostgreSQL migration (enables replicas: 2 for true HA)
+- Shared storage between n150-1/n150-2 (NFS or Ceph — enables VM live migration)

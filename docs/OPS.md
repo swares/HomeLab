@@ -8,6 +8,7 @@ Jump to:
 - [Register self-hosted GitHub Actions runner](#register-self-hosted-github-actions-runner)
 - [k3s upgrade](#k3s-upgrade)
 - [OS package updates](#os-package-updates)
+- [VM OS updates (sandbox pipeline)](#vm-os-updates-sandbox-pipeline)
 - [Add a new workload](#add-a-new-workload)
 - [Update a secret in Vault](#update-a-secret-in-vault)
 - [Force an ArgoCD sync](#force-an-argocd-sync)
@@ -52,6 +53,10 @@ Renovate opens a PR bumping `k3s_version` in
 `ansible/inventory/group_vars/all/k3s.yml` when a new release is tagged.
 Never auto-merges — a drain cycle is required.
 
+The cluster is **3-node HA** (odroid-nas + n150-1 + n150-2 as servers; opi5pro-1/2 as
+agents). kube-vip VIP is `192.168.1.200`. Upgrade server nodes one at a time — etcd
+quorum (2-of-3) stays intact while one node drains.
+
 ### 1. Review and merge the PR
 
 Check the k3s release notes at `https://github.com/rancher/k3s/releases`, then merge
@@ -64,65 +69,56 @@ grep k3s_version ~/lab/homelab/homelab/ansible/inventory/group_vars/all/k3s.yml
 # e.g. k3s_version: "v1.36.2+k3s1"
 ```
 
-### 3. Upgrade H4 (k3s server)
+### 3. Upgrade server nodes (one at a time)
 
 ```bash
 cd ~/lab/homelab/homelab/ansible
 
-# Dry-run first
-ansible-playbook -i inventory/hosts.yml playbooks/update-non-apt.yml \
-  --tags k3s --limit h4-core --check --vault-password-file .vault_pass
-
-# Apply
+# Upgrade odroid-nas (server)
 ansible-playbook -i inventory/hosts.yml playbooks/update-non-apt.yml \
   --tags k3s --limit h4-core --vault-password-file .vault_pass
-```
 
-Verify:
-```bash
-kubectl get nodes    # odroid-nas should show new version
-k3s --version
-```
+# Verify before continuing
+kubectl get nodes   # odroid-nas at new version, n150-1/n150-2 still old — that's fine
 
-### 4. Upgrade opi5pro-1 (first agent)
+# Upgrade n150-1 (server)
+ansible-playbook -i inventory/hosts.yml playbooks/update-non-apt.yml \
+  --tags k3s --limit n150-1 --vault-password-file .vault_pass
 
-```bash
-# SSH to opi5pro-1 and run the installer with all required vars
-# (Get the token from H4 first)
-TOKEN=$(sudo cat /var/lib/rancher/k3s/server/node-token)
-
-# Then on opi5pro-1 (ssh swares@192.168.1.168):
-curl -sfL https://get.k3s.io | \
-  INSTALL_K3S_VERSION=v1.36.2+k3s1 \
-  K3S_URL=https://192.168.1.160:6443 \
-  K3S_TOKEN=<token> \
-  sh -s - agent
-
-# Verify from H4
 kubectl get nodes
+
+# Upgrade n150-2 (server)
+ansible-playbook -i inventory/hosts.yml playbooks/update-non-apt.yml \
+  --tags k3s --limit n150-2 --vault-password-file .vault_pass
+
+kubectl get nodes   # all 3 servers at new version
 ```
 
-Or via Ansible:
+### 4. Upgrade agents (opi5pro-1, opi5pro-2)
+
 ```bash
 ansible-playbook -i inventory/hosts.yml playbooks/update-non-apt.yml \
   --tags k3s --limit opi5pro-1 --vault-password-file .vault_pass
+
+ansible-playbook -i inventory/hosts.yml playbooks/update-non-apt.yml \
+  --tags k3s --limit opi5pro-2 --vault-password-file .vault_pass
+
+kubectl get nodes   # all 5 nodes at new version
 ```
-
-### 5. Upgrade opi5pro-2 (second agent)
-
-Same as step 4 with `opi5pro-2` / `192.168.1.172`.
 
 ### If the installer fails with `Error: --server is required`
 
-The env file was not written correctly. Fix it directly on the agent node:
+The env file was not written correctly. Fix directly on the agent node:
 
 ```bash
 sudo tee /etc/systemd/system/k3s-agent.service.env <<EOF
-K3S_URL=https://192.168.1.160:6443
+K3S_URL=https://192.168.1.200:6443
 K3S_TOKEN=<token-from-h4>
 EOF
 sudo systemctl daemon-reload && sudo systemctl restart k3s-agent
 ```
+
+Note: agent nodes point at the kube-vip VIP (`192.168.1.200`), not a specific server.
 
 ---
 
@@ -154,6 +150,52 @@ ansible-playbook -i inventory/hosts.yml playbooks/update-hosts.yml \
 
 If H4 is flagged as needing a reboot, see
 [Drain and reboot H4](#drain-and-reboot-h4-maintenance-window).
+
+---
+
+## VM OS updates (sandbox pipeline)
+
+KVM VMs (e.g. `ldap-1`) are updated via a clone-test-promote pipeline that validates
+updates in an isolated sandbox before touching production.
+
+### Validate only (safe to run anytime)
+
+```bash
+cd ~/lab/homelab/homelab/ansible
+ansible-playbook -i inventory/hosts.yml playbooks/sandbox-vm-update.yml \
+  -e target_vm=ldap-1 \
+  --vault-password-file .vault_pass --ask-become-pass
+```
+
+What it does:
+1. Suspends `ldap-1` briefly, copies disk to standalone sandbox image, resumes
+2. Patches sandbox netplan to DHCP, boots `ldap-1-sandbox` on isolated NAT network
+3. Runs `apt dist-upgrade` + reboot in sandbox
+4. Checks HTTP `:17170` (web UI) and authenticated LDAP `:3890`
+5. Destroys sandbox VM and disk — production untouched
+
+### Validate + promote (apply to production)
+
+```bash
+ansible-playbook -i inventory/hosts.yml playbooks/sandbox-vm-update.yml \
+  -e "target_vm=ldap-1 promote_on_pass=true" \
+  --vault-password-file .vault_pass --ask-become-pass
+```
+
+If all checks pass, the pipeline compacts the updated sandbox disk, shuts `ldap-1` down
+briefly, swaps the disk, and restarts. Old disk saved as `ldap-1-pre-YYYY-MM-DD.qcow2`.
+
+### Add a new VM to the pipeline
+
+Add inventory vars to the `standalone_vms` group in `ansible/inventory/hosts.yml`:
+```yaml
+standalone_vms:
+  hosts:
+    my-vm:
+      kvm_host: n150-1
+      libvirt_vm_name: my-vm
+      health_check_url: http://192.168.1.XX:PORT
+```
 
 ---
 
