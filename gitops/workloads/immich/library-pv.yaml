@@ -6,7 +6,14 @@ spec:
   accessModes: ["ReadWriteOnce"]
   persistentVolumeReclaimPolicy: Retain
   storageClassName: ""                        # statically bound, not provisioned
-  hostPath: { path: /mnt/cold-8t/immich }     # the 8 TB RAID 1 mirror
+  hostPath: { path: /mnt/cold-8t/immich }     # the 8 TB RAID 1 mirror — lives on odroid-nas only
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: [odroid-nas]
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
