@@ -11,6 +11,8 @@ spec:
       template:
         spec:
           restartPolicy: OnFailure
+          nodeSelector:
+            kubernetes.io/hostname: odroid-nas
           containers:
             - name: dump
               image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
@@ -20,6 +22,7 @@ spec:
               command: ["/bin/sh","-c"]
               args:
                 - >
+                  mkdir -p /usr/src/app/upload/backups &&
                   pg_dump -h immich-postgres -U immich -d immich --clean --if-exists
                   | gzip > /usr/src/app/upload/backups/immich-$(date +%F).sql.gz
               volumeMounts: [{ name: library, mountPath: /usr/src/app/upload }]

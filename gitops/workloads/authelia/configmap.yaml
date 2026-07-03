@@ -28,12 +28,17 @@ data:
           inactivity: 5m
 
     storage:
-      local:
-        path: /data/db.sqlite3
+      postgres:
+        address: tcp://authelia-postgres:5432
+        database: authelia
+        username: authelia
 
     notifier:
       filesystem:
-        filename: /data/notification.txt
+        # /tmp is ephemeral per-pod — fine for a homelab notifier.
+        # Notifications (password-reset links etc.) appear here; check pod logs
+        # if you need them. Switch to smtp: if you add a mail relay.
+        filename: /tmp/notification.txt
 
     access_control:
       default_policy: one_factor

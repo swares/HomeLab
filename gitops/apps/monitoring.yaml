@@ -75,11 +75,12 @@ spec:
             # Static scrape targets — non-cluster hosts running apt node_exporter
             additionalScrapeConfigs:
               - job_name: node-exporter-external
+                # n150-1 and n150-2 are now k3s server nodes — their node-exporter
+                # runs as a DaemonSet pod and is scraped via ServiceMonitor.
+                # Keeping them here caused port 9100 conflicts with the DaemonSet.
                 static_configs:
                   - targets:
                       - 192.168.1.70:9100   # ldap-1 (lldap VM)
-                      - 192.168.1.42:9100   # n150-1 (KVM host)
-                      - 192.168.1.21:9100   # n150-2 (KVM host)
                       - 192.168.1.148:9100  # octopi (DNS primary)
                       - 192.168.1.184:9100  # opi-zero2w-1 (DNS secondary)
                       - 192.168.1.188:9100  # opi-zero2w-2 (MQTT)
