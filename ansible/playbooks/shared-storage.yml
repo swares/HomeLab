@@ -1,0 +1,290 @@
+---
+# shared-storage.yml — NFS shared storage between n150-1 (server) and n150-2 (client).
+#
+# Enables virsh live migration for any VM whose disk is on the shared pool.
+#
+# Storage layout after this runs:
+#   n150-1: /srv/libvirt-shared/  (local SSD, exported over NFS)
+#   n150-2: /srv/libvirt-shared/  (NFS mount from n150-1, same path)
+#   Both:   libvirt pool "libvirt-shared" → /srv/libvirt-shared/
+#   Existing local pool "vms" → /var/lib/libvirt/images/ (unchanged)
+#
+# Live migration (after moving a VM disk to the shared pool):
+#   # From n150-1 → n150-2
+#   virsh migrate --live --persistent <vm> qemu+ssh://192.168.1.21/system
+#   # From n150-2 → n150-1
+#   virsh migrate --live --persistent <vm> qemu+ssh://192.168.1.42/system
+#
+# Move an existing VM to shared storage (example: ldap-1):
+#   sudo virsh shutdown ldap-1
+#   sudo mv /var/lib/libvirt/images/ldap-1.qcow2 /srv/libvirt-shared/
+#   sudo virsh edit ldap-1   # update <source file=...> path
+#   sudo virsh start ldap-1
+#
+# Run:
+#   ansible-playbook -i inventory/hosts.yml playbooks/shared-storage.yml \
+#     --vault-password-file .vault_pass
+#
+# Check-mode safe: NFS mounts and virsh pool commands are skipped in check mode.
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Play 1 — NFS server (n150-1)
+# ─────────────────────────────────────────────────────────────────────────────
+- name: "NFS server — n150-1 exports /srv/libvirt-shared"
+  hosts: n150-1
+  become: true
+  gather_facts: true
+
+  vars:
+    shared_path: /srv/libvirt-shared
+    nfs_export_subnet: 192.168.1.0/24
+
+  tasks:
+    - name: Install NFS server
+      ansible.builtin.apt:
+        name: nfs-kernel-server
+        state: present
+        update_cache: false
+
+    - name: Create shared directory
+      ansible.builtin.file:
+        path: "{{ shared_path }}"
+        state: directory
+        owner: root
+        group: libvirt
+        mode: "0775"
+
+    - name: Export shared directory to lab subnet
+      # no_root_squash: libvirtd runs as root and must own VM disk files.
+      # sync: write-through ensures QEMU sees a consistent view after failover.
+      ansible.builtin.lineinfile:
+        path: /etc/exports
+        line: "{{ shared_path }} {{ nfs_export_subnet }}(rw,sync,no_subtree_check,no_root_squash)"
+        create: true
+        mode: "0644"
+      notify: reload exports
+
+    - name: Enable and start NFS server
+      ansible.builtin.systemd:
+        # Package is nfs-kernel-server; systemd unit name on Ubuntu 24.04 is nfs-server
+        name: nfs-server
+        enabled: true
+        state: started
+
+    - name: Define libvirt-shared storage pool
+      ansible.builtin.command: >
+        virsh pool-define-as libvirt-shared dir --target {{ shared_path }}
+      register: pool_define
+      changed_when: pool_define.rc == 0
+      failed_when: pool_define.rc != 0 and 'already exists' not in pool_define.stderr
+
+    - name: Build storage pool
+      ansible.builtin.command: virsh pool-build libvirt-shared
+      failed_when: false
+      changed_when: false
+
+    - name: Start storage pool
+      ansible.builtin.command: virsh pool-start libvirt-shared
+      register: pool_start
+      changed_when: pool_start.rc == 0
+      failed_when: pool_start.rc != 0 and 'already active' not in pool_start.stderr
+
+    - name: Autostart storage pool
+      ansible.builtin.command: virsh pool-autostart libvirt-shared
+      changed_when: false
+
+    - name: Verify pool is active
+      ansible.builtin.command: virsh pool-info libvirt-shared
+      register: pool_info
+      changed_when: false
+
+    - name: Show pool status
+      ansible.builtin.debug:
+        msg: "{{ pool_info.stdout_lines }}"
+
+  handlers:
+    - name: reload exports
+      ansible.builtin.command: exportfs -ra
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Play 2 — NFS client (n150-2)
+# ─────────────────────────────────────────────────────────────────────────────
+- name: "NFS client — n150-2 mounts /srv/libvirt-shared from n150-1"
+  hosts: n150-2
+  become: true
+  gather_facts: true
+
+  vars:
+    shared_path: /srv/libvirt-shared
+    nfs_server_ip: "{{ hostvars['n150-1']['ansible_host'] }}"
+
+  tasks:
+    - name: Install NFS client
+      ansible.builtin.apt:
+        name: nfs-common
+        state: present
+        update_cache: false
+
+    - name: Create mount point
+      ansible.builtin.file:
+        path: "{{ shared_path }}"
+        state: directory
+        owner: root
+        group: libvirt
+        mode: "0775"
+
+    - name: Mount NFS share and persist in fstab
+      # hard: retry forever on NFS outage (vs soft which errors out mid-write)
+      # _netdev: wait for network before mounting at boot
+      # timeo/retrans: be patient with a LAN NFS server
+      ansible.posix.mount:
+        path: "{{ shared_path }}"
+        src: "{{ nfs_server_ip }}:{{ shared_path }}"
+        fstype: nfs4
+        opts: "defaults,_netdev,hard,timeo=60,retrans=5,rsize=1048576,wsize=1048576"
+        state: mounted
+
+    - name: Confirm mount is accessible
+      ansible.builtin.command: mountpoint -q {{ shared_path }}
+      changed_when: false
+
+    - name: Define libvirt-shared storage pool
+      ansible.builtin.command: >
+        virsh pool-define-as libvirt-shared dir --target {{ shared_path }}
+      register: pool_define
+      changed_when: pool_define.rc == 0
+      failed_when: pool_define.rc != 0 and 'already exists' not in pool_define.stderr
+
+    - name: Build storage pool
+      ansible.builtin.command: virsh pool-build libvirt-shared
+      failed_when: false
+      changed_when: false
+
+    - name: Start storage pool
+      ansible.builtin.command: virsh pool-start libvirt-shared
+      register: pool_start
+      changed_when: pool_start.rc == 0
+      failed_when: pool_start.rc != 0 and 'already active' not in pool_start.stderr
+
+    - name: Autostart storage pool
+      ansible.builtin.command: virsh pool-autostart libvirt-shared
+      changed_when: false
+
+    - name: Verify pool is active
+      ansible.builtin.command: virsh pool-info libvirt-shared
+      register: pool_info
+      changed_when: false
+
+    - name: Show pool status
+      ansible.builtin.debug:
+        msg: "{{ pool_info.stdout_lines }}"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Play 3 — SSH key exchange (required for virsh migrate qemu+ssh://)
+# ─────────────────────────────────────────────────────────────────────────────
+- name: "SSH key exchange — passwordless virsh migrate between n150s"
+  hosts: kvm_hosts
+  become: false
+  gather_facts: true
+
+  tasks:
+    - name: Generate ed25519 SSH key for {{ ansible_user }} (if absent)
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        generate_ssh_key: true
+        ssh_key_type: ed25519
+        ssh_key_comment: "{{ ansible_user }}@{{ inventory_hostname }}-virsh-migrate"
+      become: true
+      register: ssh_keygen
+
+    - name: Read public key
+      ansible.builtin.slurp:
+        src: "~{{ ansible_user }}/.ssh/id_ed25519.pub"
+      register: local_pubkey
+
+    - name: Authorize this host's key on every other KVM host
+      ansible.posix.authorized_key:
+        user: "{{ ansible_user }}"
+        key: "{{ hostvars[item]['local_pubkey']['content'] | b64decode | trim }}"
+        state: present
+      loop: "{{ groups['kvm_hosts'] }}"
+      when: item != inventory_hostname
+
+    - name: Add every other KVM host to known_hosts (suppress StrictHostKeyChecking)
+      # Explicit path: ansible_become:true in group vars causes this to run as root,
+      # which would write to /root/.ssh/known_hosts — not swares's known_hosts.
+      ansible.builtin.known_hosts:
+        name: "{{ hostvars[item]['ansible_host'] }}"
+        key: "{{ lookup('pipe', 'ssh-keyscan -t ed25519 ' + hostvars[item]['ansible_host'] + ' 2>/dev/null') }}"
+        path: "/home/{{ ansible_user }}/.ssh/known_hosts"
+        state: present
+      loop: "{{ groups['kvm_hosts'] }}"
+      when:
+        - item != inventory_hostname
+        - hostvars[item]['ansible_host'] is defined
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Play 4 — Smoke test
+# ─────────────────────────────────────────────────────────────────────────────
+- name: "Smoke test — write/read across NFS from n150-2"
+  hosts: n150-2
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: Write test file to shared storage from n150-2
+      ansible.builtin.copy:
+        dest: /srv/libvirt-shared/.migration-test
+        content: "written by n150-2 at {{ ansible_date_time.iso8601 | default('now') }}"
+        mode: "0644"
+
+    - name: Read test file back (confirms NFS round-trip)
+      ansible.builtin.command: cat /srv/libvirt-shared/.migration-test
+      register: test_read
+      changed_when: false
+
+    - name: Show test result
+      ansible.builtin.debug:
+        msg: "NFS round-trip OK: {{ test_read.stdout }}"
+
+    - name: Remove test file
+      ansible.builtin.file:
+        path: /srv/libvirt-shared/.migration-test
+        state: absent
+
+    - name: Verify SSH from n150-2 to n150-1 (migration transport check)
+      # ansible_become: true in kvm_hosts group vars overrides task-level become:false.
+      # Workaround: explicitly become swares (sudo -u swares) so the command runs
+      # with access to /home/swares/.ssh/id_ed25519, not root's empty key ring.
+      ansible.builtin.command: >
+        ssh -o BatchMode=yes -o ConnectTimeout=5
+          {{ hostvars['n150-1']['ansible_host'] }}
+          echo "SSH OK from n150-2 to n150-1"
+      become: true
+      become_user: "{{ ansible_user }}"
+      register: ssh_test
+      changed_when: false
+
+    - name: Show SSH test result
+      ansible.builtin.debug:
+        msg: "{{ ssh_test.stdout }}"
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg:
+          - "✅ NFS share mounted at /srv/libvirt-shared"
+          - "✅ libvirt-shared pool active on both nodes"
+          - "✅ SSH key exchange complete"
+          - ""
+          - "To migrate a VM, first move its disk to the shared pool:"
+          - "  sudo virsh shutdown <vm>"
+          - "  sudo mv /var/lib/libvirt/images/<vm>.qcow2 /srv/libvirt-shared/"
+          - "  sudo virsh edit <vm>   # update <source file=...>"
+          - "  sudo virsh start <vm>"
+          - ""
+          - "Then live-migrate:"
+          - "  virsh migrate --live --persistent <vm> qemu+ssh://192.168.1.21/system"
+          - "  virsh migrate --live --persistent <vm> qemu+ssh://192.168.1.42/system"
