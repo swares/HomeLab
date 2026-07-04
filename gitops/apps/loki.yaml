@@ -39,7 +39,7 @@ spec:
         singleBinary:
           replicas: 1
           nodeSelector:
-            kubernetes.io/hostname: odroid-nas
+            kubernetes.io/hostname: n150-1
           persistence:
             enabled: true
             storageClass: local-path

@@ -29,7 +29,7 @@ spec:
             storageClassName: local-path
             size: 5Gi
           nodeSelector:
-            kubernetes.io/hostname: odroid-nas
+            kubernetes.io/hostname: n150-1
           ingress:
             enabled: true
             ingressClassName: traefik
@@ -67,7 +67,7 @@ spec:
                     requests:
                       storage: 50Gi
             nodeSelector:
-              kubernetes.io/hostname: odroid-nas
+              kubernetes.io/hostname: n150-1
             # Scrape all namespaces
             podMonitorNamespaceSelector: {}
             serviceMonitorNamespaceSelector: {}
@@ -106,7 +106,7 @@ spec:
               - /
           alertmanagerSpec:
             nodeSelector:
-              kubernetes.io/hostname: odroid-nas
+              kubernetes.io/hostname: n150-1
             storage:
               volumeClaimTemplate:
                 spec:
@@ -156,7 +156,7 @@ spec:
         # ---- kube-state-metrics ----
         kube-state-metrics:
           nodeSelector:
-            kubernetes.io/hostname: odroid-nas
+            kubernetes.io/hostname: n150-1
 
         # ---- Admission webhooks — disabled (homelab; TLS secret bootstrap unreliable on k3s) ----
         prometheusOperator:
@@ -181,7 +181,4 @@ spec:
   syncPolicy:
     automated:
       prune: true
-      selfHeal: true
-    syncOptions:
-      - CreateNamespace=true
-      - ServerSideApply=true   # required for large CRDs
+      sel
