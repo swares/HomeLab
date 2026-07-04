@@ -91,6 +91,14 @@
     # ================================================================
     # Pi-hole path (Debian Bullseye+ / Ubuntu / Raspberry Pi OS Bookworm)
     # ================================================================
+    - name: (pihole) stop and disable standalone dnsmasq if running (conflicts with FTL on port 53)
+      ansible.builtin.systemd:
+        name: dnsmasq
+        state: stopped
+        enabled: false
+      when: dns_engine == 'pihole'
+      failed_when: false   # service may not be installed
+
     - name: (pihole) ensure group
       ansible.builtin.group:
         name: pihole
