@@ -14,7 +14,7 @@ data:
     authentication_backend:
       ldap:
         implementation: lldap
-        address: ldap://192.168.1.70:3890
+        address: ldap://lldap.lldap.svc.cluster.local:3890
         base_dn: dc=lab,dc=home,dc=arpa
         user: uid=admin,ou=people,dc=lab,dc=home,dc=arpa
 
