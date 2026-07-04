@@ -181,4 +181,7 @@ spec:
   syncPolicy:
     automated:
       prune: true
-      sel
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true   # required for large CRDs
