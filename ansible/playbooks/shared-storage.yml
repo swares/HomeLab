@@ -1,5 +1,10 @@
 ---
-# shared-storage.yml — NFS shared storage between n150-1 (server) and n150-2 (client).
+# shared-storage.yml — NFS shared storage for the lab.
+#
+# Play 0: Install nfs-common on all k3s nodes so they can mount NFS PVs
+#         (required for the immich-library NFS PersistentVolume).
+#
+# Plays 1-4: NFS shared storage between n150-1 (server) and n150-2 (client).
 #
 # Enables virsh live migration for any VM whose disk is on the shared pool.
 #
@@ -26,6 +31,32 @@
 #     --vault-password-file .vault_pass
 #
 # Check-mode safe: NFS mounts and virsh pool commands are skipped in check mode.
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Play 0 — nfs-common on all k3s nodes
+# Required for kubelet to mount NFS PersistentVolumes (e.g. immich-library).
+# Handles both apt-based nodes (n150-x, odroid-nas) and pacman-based (opi5pro-x).
+# ─────────────────────────────────────────────────────────────────────────────
+- name: "nfs-common — install NFS client on all k3s nodes"
+  hosts: k3s_server:k3s_agents
+  become: true
+  gather_facts: true
+  tags: [nfs_clients]
+
+  tasks:
+    - name: (apt) install nfs-common
+      ansible.builtin.apt:
+        name: nfs-common
+        state: present
+        update_cache: false
+      when: ansible_pkg_mgr == 'apt'
+
+    - name: (pacman) install nfs-utils
+      community.general.pacman:
+        name: nfs-utils
+        state: present
+      when: ansible_pkg_mgr == 'pacman'
 
 
 # ─────────────────────────────────────────────────────────────────────────────
