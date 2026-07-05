@@ -1,6 +1,6 @@
 # Convenience targets. All Ansible runs target the host(s) in inventory/hosts.yml.
 .PHONY: help check storage microshift backup argocd all dns ai-nodes vault ldap mqtt k3s-vms \
-        update-containers update-vms bake-image validate-rollout ansible-deps bootstrap
+        k3s-registry update-containers update-vms bake-image validate-rollout ansible-deps bootstrap
 
 # Use the venv if present, fall back to whatever is on PATH.
 VENV          ?= /opt/ansible
@@ -34,8 +34,11 @@ microshift:  ## (legacy) Install + configure MicroShift — H4 now uses k3s, see
 backup:      ## Install restic + etcd backup timers
 	cd ansible && $(ANSIBLE) playbooks/backup.yml
 
-ai-nodes:    ## Install NPU/iGPU inference runtimes (RKLLama, OpenVINO)
+ai-nodes:    ## Install NPU/iGPU inference runtimes (RKLLama, OpenVINO, orchestrator)
 	cd ansible && $(ANSIBLE) playbooks/ai-nodes.yml
+
+k3s-registry: ## Configure k3s nodes + build agent to use lab registry (run after registry is up)
+	cd ansible && $(ANSIBLE) playbooks/k3s-registry.yml
 
 argocd:      ## Bootstrap Argo CD + app-of-apps
 	cd ansible && $(ANSIBLE) playbooks/argocd.yml

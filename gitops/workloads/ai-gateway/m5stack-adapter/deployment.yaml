@@ -12,7 +12,8 @@ spec:
         - name: adapter
           # Image is BUILT FROM THE FRAMEWORK REPO (scripts/openai_adapter/), not here.
           # Pin the tag you pushed; bump it when the framework's protocol/adapter changes.
-          image: registry.lab.home.arpa/m5stack-adapter:0.1.0
+          # Push: docker push registry.apps.lab.home.arpa/m5stack-adapter:<ver>
+          image: registry.apps.lab.home.arpa/m5stack-adapter:0.1.0
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8080 }]
           envFrom: [{ configMapRef: { name: m5stack-adapter-env } }]
