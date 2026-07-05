@@ -12,7 +12,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 |---------|:------:|-----------|-------|
 | DNS (Pi-hole / dnsmasq) | ✓ | octopi RPi 3B #2 (.148, wired) | Pi-hole on dnsmasq; `lab.home.arpa` zone via custom records; ad-block for household clients |
 | CoreDNS custom zone | ● | k3s kube-system | `coredns-custom` ConfigMap; wildcard `*.apps.lab.home.arpa → 192.168.1.160` for in-cluster pod resolution |
-| lldap (directory) | ✓ | ldap-1 VM on n150-1 (192.168.1.70) | lightweight LDAP; web UI :17170; `dc=lab,dc=home,dc=arpa` |
+| lldap (directory) | ✓ | k3s · lldap namespace | lightweight LDAP; web UI `lldap.apps.lab.home.arpa`; LDAP :3890; `dc=lab,dc=home,dc=arpa`; SQLite on local-path PVC; ldap-1 VM decommissioned |
 | Authelia (OIDC / SSO) | ✓ | k3s · authelia namespace | OIDC provider backed by lldap; gates Immich SSO; `authelia.apps.lab.home.arpa` |
 | Vault (secrets / PKI) | ✓ | RPi 5 (.128) | init/unseal manual; `secret/lab/*` for cluster secrets |
 | External Secrets Operator | ● | k3s | Vault → k8s Secrets |
@@ -25,7 +25,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | OpenTelemetry | ○ | k3s | traces pipeline |
 | Loki (logs) | ○ | k3s | |
 | Alertmanager | ○ | k3s | |
-| MQTT broker (Mosquitto) | ✓ | opi-zero2w-2 (.188) | always-on; point M5Stack here |
+| MQTT broker (Mosquitto) | ✓ | opi-zero2w-2 (.188) primary · opi-zero2w-4 (.99) secondary | HA bridge — topics mirrored bidirectionally at QoS 1; M5Stack auto-fails over to secondary |
 | chrony / NTP | ○ | all hosts | load-bearing for LDAP/k8s cert validity |
 
 ## IaaS (L1)

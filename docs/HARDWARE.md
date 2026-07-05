@@ -33,7 +33,7 @@ Last verified: 2026-06-29.
 
 | VM | Host | IP | OS | Role |
 |----|------|----|----|------|
-| **ldap-1** | n150-1 | `192.168.1.70` | Ubuntu 24.04 | lldap v0.6.3 · LDAP/SSO directory |
+| **ldap-1** | n150-1 | `192.168.1.70` | Ubuntu 24.04 | ~~lldap v0.6.3~~ **decommissioned 2026-07-04** — lldap migrated to k3s `lldap` namespace |
 
 ## Network
 
@@ -107,12 +107,13 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 | AI Gateway (LiteLLM) | H4 (k3s) | `https://ai.apps.lab.home.arpa` |
 | Ollama #1 | opi5pro-1 (k3s) | ClusterIP `:11434` |
 | Ollama #2 | opi5pro-2 (k3s) | ClusterIP `:11434` |
-| lldap | ldap-1 VM (n150-1) | `http://192.168.1.70:17170` (UI) · `:3890` (LDAP) |
+| lldap | k3s lldap namespace | `https://lldap.apps.lab.home.arpa` (UI) · ClusterIP `:3890` (LDAP) |
 | HashiCorp Vault | RPi 5 | `http://192.168.1.128:8200` |
 | DNS primary | RPi 3B #2 | `192.168.1.148` (Pi-hole pending) |
 | DNS secondary | OPi Zero 2W #1 | `192.168.1.184` (dnsmasq fallback) |
 | DNS secondary | RPi 4B | `192.168.1.116` (Pi-hole v6) |
-| MQTT | OPi Zero 2W #2 | `192.168.1.188:1883` |
+| MQTT primary | OPi Zero 2W #2 | `192.168.1.188:1883` (bridges to .99) |
+| MQTT secondary | OPi Zero 2W #4 | `192.168.1.99:1883` (bridges to .188) |
 
 ## Pending / TODO
 
@@ -128,3 +129,8 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 - N150 #3: WinRM credentials (wrong password on file)
 - ✅ Authelia → PostgreSQL: postgres.yaml added, configmap+deployment updated, replicas:2 — pending password generation + git push (2026-07-03)
 - ✅ Shared NFS storage between n150-1/n150-2: /srv/libvirt-shared, libvirt-shared pool active on both nodes, SSH key exchange complete — VM live migration ready (2026-07-03)
+- ✅ Monitoring stack (Prometheus, Grafana, Alertmanager, Loki) migrated from odroid-nas to n150-1 (2026-07-04)
+- ✅ immich-library PV: hostPath+nodeAffinity → NFS ReadWriteMany; immich-server now schedules on any node (2026-07-04)
+- ✅ lldap migrated from ldap-1 KVM VM (192.168.1.70) to k3s Deployment in lldap namespace; ldap-1 VM stopped (2026-07-04)
+- ✅ MQTT HA: opi-zero2w-4 (.99) deployed as secondary broker bridging all topics to/from opi-zero2w-2 (.188); M5Stack firmware has automatic failover (2026-07-04)
+- ✅ update-hosts.yml: drain/uncordon step added to h4-core reboot play (tagged reboot_h4,never) (2026-07-04)

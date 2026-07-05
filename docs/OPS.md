@@ -605,6 +605,28 @@ sudo systemctl start "actions.runner.*"
 H4 is the k3s server and the NAS. A reboot briefly drops NAS services (smbd/nfs)
 and requires that no workloads have H4 as their only scheduling option.
 
+**Preferred — automated drain/reboot/uncordon via Ansible:**
+
+```bash
+cd ansible
+# Dry-run first:
+ansible-playbook -i inventory/hosts.yml playbooks/update-hosts.yml \
+  --tags reboot_h4 --check --vault-password-file .vault_pass
+
+# Real run (only proceeds if /var/run/reboot-required exists):
+ansible-playbook -i inventory/hosts.yml playbooks/update-hosts.yml \
+  --tags reboot_h4 --vault-password-file .vault_pass
+
+# Force a reboot even without the flag:
+ansible-playbook -i inventory/hosts.yml playbooks/update-hosts.yml \
+  --tags reboot_h4 -e force_reboot=true --vault-password-file .vault_pass
+```
+
+The play: drains `odroid-nas` (ignoring DaemonSets, deleting emptyDir data, 120s
+timeout) → reboots → waits up to 300s for the node to rejoin as Ready → uncordons.
+
+**Manual procedure (fallback):**
+
 ### 1. Confirm backups are current
 
 ```bash
