@@ -14,6 +14,11 @@
 #   ansible-playbook playbooks/update-hosts.yml -l standalone    # rpi5, octopi, etc.
 #   ansible-playbook playbooks/update-hosts.yml --check          # dry-run
 #
+#   # Maintenance window reboot of h4-core (drain → reboot → uncordon):
+#   ansible-playbook playbooks/update-hosts.yml --tags reboot_h4
+#   # Force reboot even if /var/run/reboot-required is absent:
+#   ansible-playbook playbooks/update-hosts.yml --tags reboot_h4 -e force_reboot=true
+#
 # NOTE: this playbook requires LAN SSH access. Run from H4 or a self-hosted runner.
 #   On H4: ansible-playbook -i inventory/hosts.yml playbooks/update-hosts.yml \
 #             --vault-password-file .vault_pass
@@ -61,6 +66,74 @@
         msg: >
           {{ inventory_hostname }}: packages changed={{ apt_result.changed }},
           reboot_required={{ reboot_flag.stat.exists }}.
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# 1b. h4-core MAINTENANCE REBOOT — drain → reboot → uncordon.
+#     Tagged 'never' so it is skipped in normal runs.
+#     Invoke explicitly: --tags reboot_h4
+#     NAS services (smbd/nfs) unavailable during reboot (~2 min).
+#     Pods with local-path PVCs on h4-core (e.g. immich-postgres) will restart
+#     automatically after uncordon.
+# ──────────────────────────────────────────────────────────────────────────────
+- name: Reboot h4-core — drain/reboot/uncordon
+  hosts: h4-core
+  become: true
+  gather_facts: false
+  tags: [reboot_h4, never]   # 'never' skips this play unless --tags reboot_h4
+
+  vars:
+    node_name: odroid-nas
+    reboot_timeout: 300
+
+  tasks:
+    - name: Check reboot-required flag
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot_flag
+
+    - name: ABORT — reboot not required (use -e force_reboot=true to override)
+      ansible.builtin.fail:
+        msg: >
+          /var/run/reboot-required not present — kernel/libc not updated.
+          Re-run with -e force_reboot=true to reboot anyway.
+      when:
+        - not reboot_flag.stat.exists
+        - not (force_reboot | default(false) | bool)
+
+    - name: Drain {{ node_name }} — evict workloads, cordon node
+      ansible.builtin.command: >
+        kubectl drain {{ node_name }}
+          --ignore-daemonsets
+          --delete-emptydir-data
+          --timeout=120s
+      changed_when: true
+
+    - name: Reboot h4-core
+      ansible.builtin.reboot:
+        reboot_timeout: "{{ reboot_timeout }}"
+        msg: "Maintenance reboot of h4-core (odroid-nas)"
+
+    - name: Wait for {{ node_name }} to rejoin as Ready
+      ansible.builtin.command: >
+        kubectl wait node/{{ node_name }}
+          --for=condition=Ready
+          --timeout=300s
+      changed_when: false
+      retries: 5
+      delay: 15
+      register: wait_result
+      until: wait_result.rc == 0
+
+    - name: Uncordon {{ node_name }}
+      ansible.builtin.command: kubectl uncordon {{ node_name }}
+      changed_when: true
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >
+          h4-core ({{ node_name }}) rebooted successfully and is back in service.
+          Check NAS mounts: smbstatus, showmount -e localhost.
 
 
 # ──────────────────────────────────────────────────────────────────────────────
