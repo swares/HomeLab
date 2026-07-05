@@ -142,9 +142,11 @@ node resolve Ingress names without relying on the host's `systemd-resolved`.
 
 ## Identity & SSO
 
-**lldap** (`ldap-1` VM on n150-1, `192.168.1.70:3890`) is the LDAP directory — a
-lightweight read-optimised server with a simple web UI at port 17170. It holds lab users
-and groups.
+**lldap** runs as a k3s Deployment in the `lldap` namespace (`lldap.apps.lab.home.arpa`,
+LDAP port 3890 via ClusterIP service). It is the LDAP directory — a lightweight
+read-optimised server with a web UI at port 17170. It holds lab users and groups.
+SQLite data is on a `local-path` PVC; secrets come from Vault via ExternalSecret.
+The previous `ldap-1` KVM VM on n150-1 (`192.168.1.70`) has been decommissioned.
 
 **Authelia** runs in k3s (`authelia.apps.lab.home.arpa`) as an OIDC provider backed by
 lldap. It gates SSO for apps that support OIDC but not LDAP directly (Immich). The OIDC
@@ -160,13 +162,17 @@ The H4 is the only box that can carry a real control plane plus storage, so it s
 core. The other hardware has defined supporting roles:
 
 - **n150-1 / n150-2** (`192.168.1.42` / `192.168.1.21`) — dual role: k3s server nodes
-  (embedded etcd quorum) + KVM hypervisors (Ubuntu 24.04). Host `ldap-1` VM (lldap).
+  (embedded etcd quorum) + KVM hypervisors (Ubuntu 24.04). `ldap-1` VM decommissioned;
+  lldap now runs in the cluster.
 - **Orange Pi 5 Pro ×2 (8C/16 GB/NPU)** — k3s agents; opi5pro-1/2 run Ollama inference.
 - **RPi 5** (`192.168.1.128`) — HashiCorp Vault.
 - **RPi 4B** (`192.168.1.116`) — DNS secondary (Pi-hole v6, Debian Bookworm).
 - **octopi (RPi 3B #2)** (`192.168.1.148`) — DNS primary (Pi-hole, Bookworm flash pending).
 - **OPi Zero 2W #1** (`192.168.1.184`) — DNS tertiary / fallback (dnsmasq).
-- **opi-zero2w-2** (`192.168.1.188`) — MQTT broker (Mosquitto).
+- **opi-zero2w-2** (`192.168.1.188`) — MQTT primary broker (Mosquitto); bridges all topics
+  to opi-zero2w-4 for HA.
+- **opi-zero2w-4** (`192.168.1.99`) — MQTT secondary broker (Mosquitto); bridges all topics
+  to opi-zero2w-2. M5Stack fails over here automatically if the primary is unreachable.
 - **xu3-1** (`192.168.1.64`) — build agent.
 - **M5Stack + OPi NPUs** — edge inference endpoints, not cluster nodes.
 

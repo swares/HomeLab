@@ -63,7 +63,8 @@ CoreDNS handles `*.apps.lab.home.arpa` inside the cluster automatically via the
     kubectl get applications -n argocd    # all Synced/Healthy
     systemctl status backup-nas.timer backup-etcd.timer
     ssh swares@192.168.1.128 systemctl status backup-vault.timer   # rpi5
-    ssh swares@192.168.1.70  systemctl status backup-lldap.timer   # ldap-1
+    # backup-lldap.timer — lldap is now a k3s Deployment; backup is via Immich DB CronJob pattern
+    # (ldap-1 VM decommissioned 2026-07-04; timer no longer applies)
 
 ---
 
@@ -85,7 +86,7 @@ Never `kubectl apply` directly against main — it drifts and ArgoCD reverts it.
 | `backup-nas` | daily 01:30 | restic of `/srv/nas` + `/mnt/cold-8t/VMs` + `/mnt/cold-8t/immich` → cold-8t, then `restic copy` → cold-sec + offsite | none |
 | `backup-etcd` | daily | k3s SQLite state → `/mnt/cold-8t/k3s-etcd-snapshots/`, 7 copies retained | none |
 | `backup-vault` | daily 02:30 | Vault raft snapshot → `/mnt/cold-8t/vault-snapshots/`, 30-day retention | none |
-| `backup-lldap` | daily 02:45 | lldap SQLite → `/mnt/cold-8t/lldap-snapshots/`, 30-day retention | ~2s (lldap stop/start) |
+| `backup-lldap` | ~~daily 02:45~~ | ~~lldap SQLite on ldap-1 VM~~ — **ldap-1 decommissioned**; lldap now in k3s; add a k8s CronJob to back up the PVC SQLite | — |
 | Immich DB dump | daily 01:30 | `pg_dump` via k8s CronJob → `/mnt/cold-8t/immich/backups/` (captured by restic above) | none |
 
 Check:
