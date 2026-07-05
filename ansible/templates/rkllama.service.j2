@@ -1,0 +1,22 @@
+# Ansible-managed — RKLLama NPU inference server (Rockchip RK3588S)
+[Unit]
+Description=RKLLama NPU inference server
+After=network.target
+# The RKNPU kernel module must be loaded before this starts; it usually is by default on Armbian.
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/rkllama
+ExecStart=/opt/rkllama/venv/bin/python server.py
+Restart=always
+RestartSec=10
+# Expose on all interfaces so LiteLLM ExternalName service can reach it.
+Environment=RKLLAMA_HOST=0.0.0.0
+Environment=RKLLAMA_PORT=8080
+Environment=RKLLAMA_MODELS_DIR=/opt/rkllama/models
+# Give the NPU time to initialise on first load of a model.
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target

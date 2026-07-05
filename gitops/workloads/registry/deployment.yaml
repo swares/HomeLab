@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zot
+  namespace: registry
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate    # single-writer; local-path PVC is not RWX
+  selector:
+    matchLabels: { app: zot }
+  template:
+    metadata:
+      labels: { app: zot }
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: odroid-nas    # pin to H4; local-path PVC follows the pod
+      # Zot runs as root in its official image; no runAsNonRoot here.
+      # Revisit if a non-root Zot image is published.
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: zot
+          # renovate: datasource=docker depName=ghcr.io/project-zot/zot
+          image: ghcr.io/project-zot/zot:v2.1.1
+          args: ["serve", "/etc/zot/config.json"]
+          ports:
+            - containerPort: 5000
+          securityContext:
+            allowPrivilegeEscalation: false
+          volumeMounts:
+            - name: config
+              mountPath: /etc/zot
+            - name: data
+              mountPath: /var/lib/registry
+          readinessProbe:
+            httpGet: { path: /v2/, port: 5000 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /v2/, port: 5000 }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+          resources:
+            requests:
+              memory: 128Mi
+              cpu: "100m"
+            limits:
+              memory: 512Mi
+              cpu: "500m"
+      volumes:
+        - name: config
+          configMap: { name: zot-config }
+        - name: data
+          persistentVolumeClaim: { claimName: zot-data }

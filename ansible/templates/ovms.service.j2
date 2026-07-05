@@ -1,0 +1,24 @@
+# Ansible-managed — OpenVINO Model Server (Intel iGPU, /dev/dri)
+[Unit]
+Description=OpenVINO Model Server
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+ExecStartPre=-/usr/bin/docker rm -f ovms
+ExecStart=/usr/bin/docker run --rm --name ovms \
+  --device /dev/dri \
+  -p 8000:8000 \
+  -v /opt/ovms/models:/models:ro \
+  openvino/model_server:latest \
+  --config_path /models/config.json \
+  --rest_port 8000
+ExecStop=/usr/bin/docker stop ovms
+Restart=on-failure
+RestartSec=15
+# Allow time for Docker image pull on first start.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
