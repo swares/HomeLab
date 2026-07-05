@@ -5,6 +5,7 @@ metadata:
   namespace: lldap
 spec:
   replicas: 1
+  minReadySeconds: 30
   strategy:
     type: Recreate             # SQLite is single-writer; never run two replicas concurrently
   selector:
@@ -47,8 +48,6 @@ spec:
               value: "3890"
             - name: LLDAP_HTTP_PORT
               value: "17170"
-            - name: LLDAP_FORCE_RESET_ADMIN_PASSWORD
-              value: "true"
           volumeMounts:
             - name: data
               mountPath: /data
