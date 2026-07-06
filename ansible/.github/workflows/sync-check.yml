@@ -1,0 +1,30 @@
+# Runs after every merge to main.
+# Waits for ArgoCD to sync and probes ingress endpoints.
+# On failure: automatically reverts HEAD and pushes so ArgoCD selfHeal restores the previous state.
+#
+# Required repository secrets:
+#   KUBECONFIG_B64      base64-encoded kubeconfig
+#   ARGOCD_AUTH_TOKEN   ArgoCD API token
+#   ARGOCD_SERVER       e.g. argocd.apps.lab.home.arpa
+#   GIT_PUSH_TOKEN      GitHub PAT with repo write scope (for rollback push)
+
+name: Sync & health check
+
+on:
+  push:
+    branches: [main]
+
+# NOTE: ArgoCD sync check requires LAN access — GitHub hosted runners cannot reach
+# argocd.apps.lab.home.arpa. ArgoCD's own selfHeal + health status is the source
+# of truth. Run validate-rollout.sh manually from H4 after significant changes:
+#   bash scripts/validate-rollout.sh
+jobs:
+  sync-check:
+    name: Post-merge notice
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merged to main
+        run: |
+          echo "Merged to main — ArgoCD will reconcile within ~30s."
+          echo "Check health at https://argocd.apps.lab.home.arpa"
+          echo "Or run: bash scripts/validate-rollout.sh from H4"

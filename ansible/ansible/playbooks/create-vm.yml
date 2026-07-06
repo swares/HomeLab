@@ -1,0 +1,112 @@
+---
+# create-vm.yml — Provision a KVM VM from Ubuntu 24.04 cloud image.
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/create-vm.yml \
+#     -l n150-1 \
+#     -e "vm_name=ldap-1 vm_ram_mb=4096 vm_vcpus=2 vm_disk_gb=20" \
+#     --vault-password-file .vault_pass --ask-become-pass
+
+- name: Create KVM VM from cloud image
+  hosts: kvm_hosts
+  become: true
+  gather_facts: false
+
+  vars:
+    vm_name: ldap-1
+    vm_ram_mb: 4096
+    vm_vcpus: 2
+    vm_disk_gb: 20
+    vm_bridge: br0
+    images_dir: /var/lib/libvirt/images
+    base_image: "{{ images_dir }}/ubuntu-24.04-cloud.img"
+    vm_disk: "{{ images_dir }}/{{ vm_name }}.qcow2"
+    vm_cloudinit: "{{ images_dir }}/{{ vm_name }}-cloudinit.iso"
+    ssh_pubkey: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
+
+  tasks:
+    - name: Check if VM already exists
+      ansible.builtin.command: virsh dominfo {{ vm_name }}
+      register: vm_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Abort if VM already exists
+      ansible.builtin.fail:
+        msg: "VM {{ vm_name }} already exists — delete it first with: virsh destroy {{ vm_name }} && virsh undefine {{ vm_name }} --remove-all-storage"
+      when: vm_exists.rc == 0
+
+    - name: Create VM disk from base image
+      ansible.builtin.command: >
+        qemu-img create -f qcow2 -F qcow2 -b {{ base_image }} {{ vm_disk }} {{ vm_disk_gb }}G
+      args:
+        creates: "{{ vm_disk }}"
+
+    - name: Create cloud-init meta-data
+      ansible.builtin.copy:
+        dest: /tmp/{{ vm_name }}-meta-data
+        mode: '0644'
+        content: |
+          instance-id: {{ vm_name }}
+          local-hostname: {{ vm_name }}
+
+    - name: Create cloud-init user-data
+      ansible.builtin.copy:
+        dest: /tmp/{{ vm_name }}-user-data
+        mode: '0644'
+        content: |
+          #cloud-config
+          hostname: {{ vm_name }}
+          users:
+            - name: swares
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              groups: [sudo]
+              shell: /bin/bash
+              ssh_authorized_keys:
+                - {{ ssh_pubkey }}
+          packages:
+            - qemu-guest-agent
+            - curl
+          runcmd:
+            - systemctl enable --now qemu-guest-agent
+          timezone: America/Chicago
+
+    - name: Build cloud-init ISO
+      ansible.builtin.command: >
+        cloud-localds {{ vm_cloudinit }}
+        /tmp/{{ vm_name }}-user-data
+        /tmp/{{ vm_name }}-meta-data
+
+    - name: Install VM
+      ansible.builtin.command: >
+        virt-install
+          --name {{ vm_name }}
+          --ram {{ vm_ram_mb }}
+          --vcpus {{ vm_vcpus }}
+          --os-variant ubuntu24.04
+          --disk {{ vm_disk }},format=qcow2,bus=virtio
+          --disk {{ vm_cloudinit }},device=cdrom
+          --network bridge={{ vm_bridge }},model=virtio
+          --graphics none
+          --noautoconsole
+          --import
+          --autostart
+      register: virt_install
+
+    - name: Wait for VM to boot
+      ansible.builtin.pause:
+        seconds: 30
+
+    - name: Get VM IP
+      ansible.builtin.command: >
+        virsh domifaddr {{ vm_name }} --source agent
+      register: vm_ip
+      retries: 10
+      delay: 10
+      until: vm_ip.rc == 0 and '192.168' in vm_ip.stdout
+      changed_when: false
+      failed_when: false
+
+    - name: Show VM IP
+      ansible.builtin.debug:
+        msg: "{{ vm_ip.stdout_lines }}"

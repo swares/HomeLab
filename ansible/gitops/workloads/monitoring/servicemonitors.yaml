@@ -1,0 +1,35 @@
+---
+# Scrape Immich server metrics
+# Immich exposes Prometheus metrics at /metrics on its main port (2283)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: immich
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [immich]
+  selector:
+    matchLabels:
+      app: immich-server
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+---
+# Scrape LiteLLM gateway metrics
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: litellm
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [ai-gateway]
+  selector:
+    matchLabels:
+      app: litellm
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

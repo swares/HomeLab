@@ -1,0 +1,74 @@
+---
+# Deploy prometheus-node-exporter on non-cluster Linux hosts.
+# Cluster nodes (h4-core, opi5pro-1/2, rpi5, xu3-1) get node_exporter
+# via the kube-prometheus-stack DaemonSet — exclude them from this playbook.
+#
+# Supported OS families:
+#   Debian    — ldap-1, n150-1, n150-2, octopi-dns  (apt)
+#   Archlinux — opi-zero2w-{1,2,4}                  (pacman)
+#
+# Run:
+#   ansible-playbook -i inventory/hosts.yml playbooks/node-exporter.yml
+#
+- name: Install and enable node_exporter on non-cluster hosts
+  hosts: node_exporter
+  become: true
+
+  pre_tasks:
+    # Debian only: minimal images (e.g. Armbian) may lack python3-apt
+    - name: Bootstrap python3-apt (Debian hosts, required by apt module)
+      ansible.builtin.raw: dpkg -s python3-apt &>/dev/null || apt-get install -y python3-apt
+      changed_when: false
+      when: ansible_os_family == 'Debian'
+
+  tasks:
+    - name: Install prometheus-node-exporter (Debian)
+      ansible.builtin.apt:
+        name: prometheus-node-exporter
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      when: ansible_os_family == 'Debian'
+
+    - name: Install prometheus-node-exporter (Arch)
+      community.general.pacman:
+        name: prometheus-node-exporter
+        state: present
+        update_cache: true
+      when: ansible_os_family == 'Archlinux'
+
+    # Arch package service unit runs as User=prometheus-node-exporter which
+    # doesn't exist on minimal installs — create it as a locked system account.
+    # Arch package service unit runs as User=node_exporter / Group=node_exporter
+    # which don't exist on minimal installs — create group first, then user.
+    - name: Create node_exporter group (Arch)
+      ansible.builtin.group:
+        name: node_exporter
+        system: true
+      when: ansible_os_family == 'Archlinux'
+
+    - name: Create node_exporter system user (Arch)
+      ansible.builtin.user:
+        name: node_exporter
+        group: node_exporter
+        system: true
+        shell: /sbin/nologin
+        create_home: false
+        comment: Prometheus node exporter
+      when: ansible_os_family == 'Archlinux'
+
+    - name: Enable and start node_exporter
+      ansible.builtin.systemd:
+        name: prometheus-node-exporter
+        enabled: true
+        state: restarted
+
+    - name: Allow node_exporter port through ufw (Debian, if active)
+      community.general.ufw:
+        rule: allow
+        port: "9100"
+        proto: tcp
+        src: 192.168.1.0/24
+        comment: Prometheus node_exporter
+      when: ansible_os_family == 'Debian'
+      ignore_errors: true

@@ -1,0 +1,282 @@
+---
+# Alertmanager → M5Stack Core Framework webhook adapter.
+#
+# Alertmanager's built-in webhook receiver posts its own JSON schema.
+# This adapter translates each alert into the M5Stack inject format:
+#   POST /api/alerts/inject  { slug, key, value, severity }
+#
+# Mapping:
+#   slug     ← instance label last octet → "h{n}" or "homelab" (≤11 chars)
+#   key      ← alertname[:15]
+#   value    ← 1 (firing) | 0 (resolved)
+#   severity ← critical→critical  warning→warn  info→info
+#
+# Prerequisites (do these before ArgoCD syncs):
+#   vault kv put secret/lab/m5stack api-key=<WEBHOOK_INJECT_API_KEY>
+#   # then set M5STACK_URL below to your device's actual HTTPS endpoint
+#
+# Alertmanager is configured in gitops/apps/monitoring.yaml to send all
+# non-Watchdog/InfoInhibitor alerts to:
+#   http://m5stack-adapter.monitoring.svc.cluster.local:8080/webhook
+
+# ── Script ConfigMap ──────────────────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: m5stack-adapter-script
+  namespace: monitoring
+data:
+  adapter.py: |
+    #!/usr/bin/env python3
+    """
+    Alertmanager → M5Stack Core Framework webhook adapter.
+
+    ENV:
+      M5STACK_URL     - e.g. https://192.168.1.x/api/alerts/inject
+      M5STACK_API_KEY - value of the X-Api-Key header
+      LISTEN_PORT     - default 8080
+    """
+    import json
+    import logging
+    import os
+    import ssl
+    import urllib.request
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    from socketserver import ThreadingMixIn
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
+    log = logging.getLogger(__name__)
+
+    M5STACK_URL     = os.environ["M5STACK_URL"]
+    M5STACK_API_KEY = os.environ["M5STACK_API_KEY"]
+    LISTEN_PORT     = int(os.environ.get("LISTEN_PORT", "8080"))
+
+    SEVERITY_MAP = {
+        "critical": "critical",
+        "warning":  "warn",
+        "warn":     "warn",
+        "info":     "info",
+        "none":     "info",
+    }
+
+    # M5Stack uses a self-signed TLS cert — skip verification
+    _ssl_ctx = ssl.create_default_context()
+    _ssl_ctx.check_hostname = False
+    _ssl_ctx.verify_mode    = ssl.CERT_NONE
+
+
+    def _slug(labels: dict) -> str:
+        """Derive a ≤11-char slug from alert labels."""
+        inst = labels.get("instance", "")
+        if inst:
+            host = inst.split(":")[0]
+            parts = host.split(".")
+            if parts[-1].isdigit():          # IP → "h<last-octet>"
+                return ("h" + parts[-1])[:11]
+            return parts[0][:11]             # hostname → first segment
+        return "homelab"
+
+
+    class _Handler(BaseHTTPRequestHandler):
+
+        def do_GET(self):
+            if self.path == "/healthz":
+                self._send(200, b'{"ok":true}')
+            else:
+                self._send(404, b'{"error":"not found"}')
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body   = self.rfile.read(length)
+            try:
+                payload = json.loads(body)
+            except json.JSONDecodeError:
+                self._send(400, b'{"error":"bad json"}')
+                return
+
+            errors = 0
+            for alert in payload.get("alerts", []):
+                if not self._forward(alert):
+                    errors += 1
+
+            if errors:
+                self._send(207, f'{{"ok":false,"errors":{errors}}}'.encode())
+            else:
+                self._send(200, b'{"ok":true}')
+
+        def _send(self, code: int, body: bytes):
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _forward(self, alert: dict) -> bool:
+            labels    = alert.get("labels", {})
+            status    = alert.get("status", "firing")
+            alertname = labels.get("alertname", "unknown")
+            severity  = labels.get("severity", "warning")
+
+            m5 = {
+                "slug":     _slug(labels),
+                "key":      alertname[:15],
+                "value":    1 if status == "firing" else 0,
+                "severity": SEVERITY_MAP.get(severity, "warn"),
+            }
+
+            req = urllib.request.Request(
+                M5STACK_URL,
+                data=json.dumps(m5).encode(),
+                headers={
+                    "Content-Type": "application/json",
+                    "X-Api-Key":    M5STACK_API_KEY,
+                },
+                method="POST",
+            )
+            try:
+                with urllib.request.urlopen(req, context=_ssl_ctx, timeout=5) as resp:
+                    log.info("OK  %s → %s/%s=%d (%s): %s",
+                             alertname, m5["slug"], m5["key"],
+                             m5["value"], m5["severity"],
+                             resp.read().decode().strip())
+                return True
+            except Exception as exc:
+                log.error("ERR %s: %s", alertname, exc)
+                return False
+
+        def log_message(self, fmt, *args):  # silence default access log
+            pass
+
+
+    class _Server(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+
+
+    if __name__ == "__main__":
+        srv = _Server(("0.0.0.0", LISTEN_PORT), _Handler)
+        log.info("Listening :%d  →  %s", LISTEN_PORT, M5STACK_URL)
+        srv.serve_forever()
+
+---
+# ── Runtime config (non-secret) ───────────────────────────────────────────────
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: m5stack-adapter-config
+  namespace: monitoring
+data:
+  M5STACK_URL: "https://192.168.1.71/api/alerts/inject"
+
+---
+# ── ExternalSecret — API key from Vault ───────────────────────────────────────
+# Seed with: vault kv put secret/lab/m5stack api-key=<WEBHOOK_INJECT_API_KEY>
+apiVersion: external-secrets.io/v1beta1
+kind: ExternalSecret
+metadata:
+  name: m5stack-adapter-secret
+  namespace: monitoring
+spec:
+  refreshInterval: 1h
+  secretStoreRef:
+    name: vault-backend
+    kind: ClusterSecretStore
+  target:
+    name: m5stack-adapter-secret
+    creationPolicy: Owner
+  data:
+    - secretKey: api-key
+      remoteRef:
+        key: secret/lab/m5stack
+        property: api-key
+
+---
+# ── Deployment ────────────────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: m5stack-adapter
+  namespace: monitoring
+  labels:
+    app: m5stack-adapter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: m5stack-adapter
+  template:
+    metadata:
+      labels:
+        app: m5stack-adapter
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: odroid-nas
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+      containers:
+        - name: adapter
+          image: python:3.12-slim
+          command: ["python", "/app/adapter.py"]
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: M5STACK_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: m5stack-adapter-config
+                  key: M5STACK_URL
+            - name: M5STACK_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: m5stack-adapter-secret
+                  key: api-key
+          volumeMounts:
+            - name: script
+              mountPath: /app
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 15
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+      volumes:
+        - name: script
+          configMap:
+            name: m5stack-adapter-script
+
+---
+# ── Service ───────────────────────────────────────────────────────────────────
+apiVersion: v1
+kind: Service
+metadata:
+  name: m5stack-adapter
+  namespace: monitoring
+  labels:
+    app: m5stack-adapter
+spec:
+  selector:
+    app: m5stack-adapter
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

@@ -1,0 +1,508 @@
+---
+# Install AI inference runtimes as host services.
+# These need vendor drivers and device access so they run on the metal.
+#
+# Plays:
+#   1. RKLLama on opi5pro-1 + opi5pro-2  (RK3588S NPU, serves :8080 Ollama-compat API)
+#   2. OpenVINO Model Server on ovms group (Intel iGPU, serves :8000 OpenAI-compat REST)
+#   3. Orchestrator on opi5pro-1          (Tier 3 — spawns Claude Code for hard turns)
+#
+# Prerequisites (manual / one-time per node):
+#   RKLLama: RKNPU kernel driver + librkllmrt must match the .rkllm model's RKLLM version.
+#            Confirm versions against the board vendor wiki before running.
+#            Drop converted .rkllm models into /opt/rkllama/models/ after this playbook.
+#   OVMS:    /opt/ovms/models/config.json must exist with real model entries.
+#            See ansible/files/ovms/config.json.example for the expected format.
+#   Orchestrator: /etc/orchestrator.env must be created manually on the host containing:
+#            ANTHROPIC_API_KEY=sk-ant-...
+#            SERVE_BEARER=<random token>   (also set as ROUTER_BEARER on the M5Stack)
+#
+# Usage: make ai-nodes
+#        make ai-nodes LIMIT=opi5pro-1     (single node)
+
+# ── Play 1: RKLLama ──────────────────────────────────────────────────────────
+- name: RKLLama NPU inference server (opi5pro-1 + opi5pro-2)
+  hosts: k3s_agents
+  become: true
+
+  vars:
+    rkllama_repo: https://github.com/NotPunchnox/rkllama.git
+    rkllama_version: main    # pin a release tag once stable; must match .rkllm RKLLM version
+    rkllama_dir: /opt/rkllama
+
+  tasks:
+    - name: Remind — confirm RKNPU driver + librkllmrt version against vendor wiki
+      ansible.builtin.debug:
+        msg: >
+          Ensure the RKNPU kernel driver and librkllmrt on {{ inventory_hostname }} match
+          the RKLLM version used when converting your .rkllm models. Mismatches cause silent
+          failures or crashes. Check the board vendor wiki before proceeding.
+
+    - name: Install system prerequisites (apt — Debian/Armbian)
+      ansible.builtin.apt:
+        name: [git, python3, python3-pip, python3-venv]
+        state: present
+        update_cache: true
+      when: ansible_os_family == 'Debian'
+
+    - name: Install system prerequisites (pacman — Arch/Manjaro)
+      community.general.pacman:
+        name: [git, python3, python-pip, gcc]    # gcc needed for numpy source build on Python 3.14+
+        state: present
+        update_cache: true
+      when: ansible_os_family == 'Archlinux'
+
+    - name: Clone RKLLama
+      ansible.builtin.git:
+        repo: "{{ rkllama_repo }}"
+        dest: "{{ rkllama_dir }}"
+        version: "{{ rkllama_version }}"
+        update: true
+
+    - name: Create Python venv for RKLLama
+      ansible.builtin.command:
+        cmd: python3 -m venv "{{ rkllama_dir }}/venv"
+        creates: "{{ rkllama_dir }}/venv/bin/python"
+
+    - name: Find requirements file (name varies across RKLLama versions)
+      ansible.builtin.find:
+        paths: "{{ rkllama_dir }}"
+        patterns: "requirements*.txt"
+        recurse: false
+      register: _rkllama_reqs
+
+    - name: Upgrade pip in venv (old pip misparses URL-format deps in pyproject.toml)
+      ansible.builtin.pip:
+        name: pip
+        state: latest
+        virtualenv: "{{ rkllama_dir }}/venv"
+
+    - name: Install RKLLama Python dependencies from requirements file
+      ansible.builtin.pip:
+        requirements: "{{ _rkllama_reqs.files[0].path }}"
+        virtualenv: "{{ rkllama_dir }}/venv"
+        state: present
+      when: _rkllama_reqs.files | length > 0
+
+    # Install the rkllama package itself (editable, --no-deps) so that
+    # `import rkllama` resolves correctly without adding PYTHONPATH.
+    # --no-deps skips torch==2.8.0 (not available on aarch64 PyPI) and the
+    # heavy audio/video stack (whisper, piper-tts, diffusers, etc.) which
+    # aren't needed for text inference.
+    - name: Install RKLLama package (editable, --no-deps)
+      ansible.builtin.command:
+        cmd: "{{ rkllama_dir }}/venv/bin/pip install -e {{ rkllama_dir }} --no-deps --quiet"
+      changed_when: true   # re-run on each play to pick up git updates
+
+    # Install the runtime deps needed for text inference + vision (cv2 is imported at module
+    # level in format_utils.py so cannot be skipped even for pure text inference).
+    # Skipped: torch (not on aarch64 PyPI), openai-whisper (needs torch),
+    #          piper-tts (complex native TTS deps), webrtcvad (audio VAD).
+    - name: Install RKLLama runtime deps
+      ansible.builtin.pip:
+        name:
+          - "Flask==2.3.2"
+          - "flask-cors==6.0.1"
+          - "requests==2.31.0"
+          - "huggingface_hub==0.35.1"
+          - "python-dotenv==1.1.1"
+          - "transformers==4.57.6"
+          - "pydantic>=2.7"           # unpinned — pydantic-core 2.11.9 won't compile on Python 3.14
+          - "psutil==7.1.0"
+          - "pillow==11.3.0"
+          - "numpy>=1.24"             # unpinned — 1.26.4 has no cp314 wheel
+          - "opencv-python-headless"  # cv2 — imported at module level in format_utils.py
+          - "diffusers>=0.30"         # may be imported in image pipeline modules
+          - "soundfile"
+          - "pydub"
+        virtualenv: "{{ rkllama_dir }}/venv"
+        state: present
+
+    # Flask 2.3.x uses pkgutil.get_loader which was removed in Python 3.14.
+    # Upgrade to Flask 3.x on Arch. State: latest so it overwrites the pinned 2.3.2.
+    - name: Upgrade Flask to 3.x for Python 3.14 compatibility (Arch only)
+      ansible.builtin.pip:
+        name: "Flask>=3.0"
+        virtualenv: "{{ rkllama_dir }}/venv"
+        state: latest
+      when: ansible_os_family == 'Archlinux'
+
+    # On Arch/Python 3.14 pydantic-core must be compiled with ABI3 forward compat.
+    # This is a no-op on Debian (pip already installed a pre-built wheel above).
+    - name: Ensure pydantic-core is compiled with Python 3.14 ABI3 compat (Arch only)
+      ansible.builtin.command:
+        cmd: "{{ rkllama_dir }}/venv/bin/pip install 'pydantic>=2.7' --no-binary pydantic-core --quiet"
+      environment:
+        PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+      when: ansible_os_family == 'Archlinux'
+      ignore_errors: true    # non-fatal — service can still start if pydantic resolves another way
+
+    # Install the bundled rknn-toolkit-lite2 wheel that matches the host Python version.
+    # Wheels for cp39/310/311/312 are shipped in src/rkllama/lib/.
+    - name: Find rknn-toolkit-lite2 wheel for this Python version
+      ansible.builtin.find:
+        paths: "{{ rkllama_dir }}/src/rkllama/lib"
+        patterns: "rknn_toolkit_lite2-*-cp{{ ansible_python.version.major }}{{ ansible_python.version.minor }}-*.whl"
+      register: _rknn_wheel
+
+    - name: Install rknn-toolkit-lite2 wheel
+      ansible.builtin.pip:
+        name: "{{ _rknn_wheel.files[0].path }}"
+        virtualenv: "{{ rkllama_dir }}/venv"
+        state: present
+      when: _rknn_wheel.files | length > 0
+      ignore_errors: true    # non-fatal — only needed for RKNN vision models, not LLM inference
+
+    - name: Warn if no matching rknn-toolkit-lite2 wheel found
+      ansible.builtin.debug:
+        msg: >
+          No rknn_toolkit_lite2 wheel found for Python
+          {{ ansible_python.version.major }}.{{ ansible_python.version.minor }} —
+          NPU inference will fail. Supported: cp39/310/311/312.
+      when: _rknn_wheel.files | length == 0
+
+    - name: Create models directory (writable by ansible user for scp)
+      ansible.builtin.file:
+        path: "{{ rkllama_dir }}/models"
+        state: directory
+        owner: "{{ ansible_user }}"
+        mode: "0755"
+
+    - name: Deploy RKLLama systemd service
+      ansible.builtin.template:
+        src: ../templates/rkllama.service.j2
+        dest: /etc/systemd/system/rkllama.service
+        mode: "0644"
+      notify: restart rkllama
+
+    - name: Enable + start RKLLama
+      ansible.builtin.systemd:
+        name: rkllama
+        daemon_reload: true
+        enabled: true
+        state: started
+
+  handlers:
+    - name: restart rkllama
+      ansible.builtin.systemd:
+        name: rkllama
+        state: restarted
+
+# ── Play 2: OpenVINO Model Server ─────────────────────────────────────────────
+- name: OpenVINO Model Server (Intel iGPU — h4-core, n150-1, n150-2)
+  hosts: ovms
+  become: true
+
+  tasks:
+    - name: Install Docker prerequisites
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+        state: present
+        update_cache: true
+
+    - name: Add Docker GPG key
+      ansible.builtin.apt_key:
+        url: https://download.docker.com/linux/ubuntu/gpg
+        keyring: /etc/apt/keyrings/docker.gpg
+        state: present
+
+    - name: Add Docker apt repository
+      ansible.builtin.apt_repository:
+        repo: >
+          deb [arch={{ 'amd64' if ansible_architecture == 'x86_64' else ansible_architecture }}
+          signed-by=/etc/apt/keyrings/docker.gpg]
+          https://download.docker.com/linux/ubuntu
+          {{ ansible_distribution_release }} stable
+        filename: docker
+        state: present
+
+    - name: Install Docker CE
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+        state: present
+        update_cache: true
+
+    - name: Enable + start Docker
+      ansible.builtin.systemd:
+        name: docker
+        enabled: true
+        state: started
+
+    - name: Add ansible user to docker group
+      ansible.builtin.user:
+        name: "{{ ansible_user }}"
+        groups: docker
+        append: true
+
+    # Ubuntu 22.04 (jammy) and 24.04 (noble) use different Intel repo URLs and keys.
+    - name: Add Intel graphics GPG key (jammy)
+      ansible.builtin.shell: |
+        wget -qO - https://repositories.intel.com/graphics/intel-graphics.key | \
+          gpg --dearmor -o /usr/share/keyrings/intel-graphics.gpg
+      args:
+        creates: /usr/share/keyrings/intel-graphics.gpg
+      when: ansible_distribution_release == 'jammy'
+
+    - name: Add Intel GPU GPG key (noble)
+      ansible.builtin.shell: |
+        wget -qO /usr/share/keyrings/intel-gpu-noble.asc \
+          https://repositories.intel.com/gpu/ubuntu/gpg-pubkey-apt.asc
+      args:
+        creates: /usr/share/keyrings/intel-gpu-noble.asc
+      when: ansible_distribution_release == 'noble'
+
+    - name: Add Intel graphics apt repository (jammy — arc component)
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/graphics/ubuntu jammy arc"
+        filename: intel-graphics
+        state: present
+      when: ansible_distribution_release == 'jammy'
+      ignore_errors: true
+      register: intel_repo_jammy
+
+    - name: Add Intel GPU apt repository (noble — unified component)
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-gpu-noble.asc] https://repositories.intel.com/gpu/ubuntu noble unified"
+        filename: intel-gpu-noble
+        state: present
+      when: ansible_distribution_release == 'noble'
+      ignore_errors: true    # non-fatal — OVMS falls back to CPU
+      register: intel_repo_noble
+
+    - name: Install Intel GPU compute runtime (required for OVMS to use /dev/dri)
+      ansible.builtin.apt:
+        name:
+          - intel-opencl-icd
+          - intel-level-zero-gpu
+          - level-zero
+        state: present
+        update_cache: true
+      ignore_errors: true    # non-fatal — OVMS falls back to CPU if GPU runtime absent
+      register: intel_gpu_install
+
+    - name: Warn if Intel GPU runtime install had issues
+      ansible.builtin.debug:
+        msg: "Intel GPU runtime install had errors — check package names for {{ ansible_distribution }} {{ ansible_distribution_version }}. OVMS will fall back to CPU."
+      when: intel_gpu_install is failed
+
+    - name: Create OVMS models directory
+      ansible.builtin.file:
+        path: /opt/ovms/models
+        state: directory
+        mode: "0755"
+
+    - name: Deploy placeholder OVMS config.json (edit to add real models)
+      ansible.builtin.copy:
+        dest: /opt/ovms/models/config.json
+        mode: "0644"
+        force: false    # don't overwrite if the operator has added real model entries
+        content: |
+          {
+            "model_config_list": [
+              {
+                "config": {
+                  "name": "bge-small",
+                  "base_path": "/models/bge-small",
+                  "target_device": "GPU"
+                }
+              }
+            ]
+          }
+          // TODO: download and convert bge-small to OpenVINO IR format, place in
+          // /opt/ovms/models/bge-small/. See OVMS docs for model preparation steps.
+
+    - name: Deploy OVMS systemd service
+      ansible.builtin.template:
+        src: ../templates/ovms.service.j2
+        dest: /etc/systemd/system/ovms.service
+        mode: "0644"
+      notify: restart ovms
+
+    - name: Enable + start OVMS
+      ansible.builtin.systemd:
+        name: ovms
+        daemon_reload: true
+        enabled: true
+        state: started
+
+    - name: Pull OVMS Docker image
+      ansible.builtin.command: docker pull openvino/model_server:latest
+      changed_when: true
+      ignore_errors: true    # non-fatal; systemd will pull on first start if missing
+
+  handlers:
+    - name: restart ovms
+      ansible.builtin.systemd:
+        name: ovms
+        state: restarted
+
+# ── Play 3: Tier-3 orchestrator (opi5pro-1) ──────────────────────────────────
+- name: AI escalation orchestrator — Tier 3 (opi5pro-1)
+  hosts: orchestrator
+  become: true
+
+  vars:
+    framework_repo: "https://github.com/swares/My_M5Stack_Core_Framework.git"
+    framework_dir: /opt/m5stack-framework
+
+  pre_tasks:
+    - name: Confirm framework_repo is set
+      ansible.builtin.debug:
+        msg: "Cloning framework from {{ framework_repo }}"
+
+  tasks:
+    - name: Install Node.js LTS — Debian/Armbian path
+      block:
+        - name: Download NodeSource setup script
+          ansible.builtin.get_url:
+            url: https://deb.nodesource.com/setup_lts.x
+            dest: /tmp/nodesource_setup.sh
+            mode: "0755"
+        - name: Run NodeSource setup
+          ansible.builtin.command: bash /tmp/nodesource_setup.sh
+          changed_when: true
+        - name: Install nodejs (apt)
+          ansible.builtin.apt:
+            name: nodejs
+            state: present
+            update_cache: true
+      when: ansible_os_family == 'Debian'
+
+    - name: Install Node.js LTS — Arch/Manjaro path
+      community.general.pacman:
+        name: [nodejs, npm]
+        state: present
+        update_cache: true
+      when: ansible_os_family == 'Archlinux'
+
+    - name: Confirm Node.js version
+      ansible.builtin.command: node --version
+      register: node_ver
+      changed_when: false
+
+    - name: Show Node.js version
+      ansible.builtin.debug:
+        msg: "Node.js: {{ node_ver.stdout }}"
+
+    - name: Install Claude Code CLI (ARM64 supported)
+      community.general.npm:
+        name: "@anthropic-ai/claude-code"
+        global: true
+        state: present
+      register: claude_install
+
+    - name: Confirm claude binary is on PATH
+      ansible.builtin.command: claude --version
+      register: claude_ver
+      changed_when: false
+      failed_when: false    # non-fatal — binary location may vary
+
+    - name: Show Claude Code version
+      ansible.builtin.debug:
+        msg: "{{ claude_ver.stdout if claude_ver.rc == 0 else 'claude not found on PATH — check npm global bin location' }}"
+
+    - name: Install Python dependencies for orchestrator (apt — Debian)
+      ansible.builtin.apt:
+        name: [python3, python3-pip, python3-venv]
+        state: present
+        update_cache: true
+      when: ansible_os_family == 'Debian'
+
+    - name: Install Python dependencies for orchestrator (pacman — Arch)
+      community.general.pacman:
+        name: [python, python-pip]
+        state: present
+        update_cache: true
+      when: ansible_os_family == 'Archlinux'
+
+    - name: Check if framework dir already exists (pre-populated via rsync)
+      ansible.builtin.stat:
+        path: "{{ framework_dir }}/scripts/orchestrator.py"
+      register: _framework_stat
+
+    - name: Clone M5Stack framework repo (skipped if already rsync'd)
+      # SSH URL requires a deploy key; HTTPS requires outbound internet on the OPi.
+      # If neither is available, rsync the scripts/ dir manually first:
+      #   rsync -av /path/to/m5stack-framework/scripts/ swares@opi5pro-1:/opt/m5stack-framework/scripts/
+      ansible.builtin.git:
+        repo: "{{ framework_repo }}"
+        dest: "{{ framework_dir }}"
+        version: main
+        update: true
+        accept_hostkey: true
+      when: not _framework_stat.stat.exists
+      async: 120
+      poll: 10
+
+    - name: Create venv for orchestrator
+      ansible.builtin.command:
+        cmd: python3 -m venv "{{ framework_dir }}/venv"
+        creates: "{{ framework_dir }}/venv/bin/python"
+
+    - name: Install orchestrator Python dependencies
+      ansible.builtin.pip:
+        name:
+          - requests
+          - httpx
+        virtualenv: "{{ framework_dir }}/venv"
+        state: present
+
+    - name: Create WORKDIR
+      ansible.builtin.file:
+        path: "{{ orchestrator_workdir }}"
+        state: directory
+        owner: "{{ ansible_user }}"
+        mode: "0750"
+
+    - name: Generate self-signed TLS cert for orchestrator (if not present)
+      ansible.builtin.shell: |
+        mkdir -p /etc/orchestrator-tls
+        openssl req -x509 -newkey rsa:4096 -keyout /etc/orchestrator-tls/key.pem \
+          -out /etc/orchestrator-tls/cert.pem -days 3650 -nodes \
+          -subj "/CN={{ ansible_hostname }}.lab.home.arpa"
+      args:
+        creates: /etc/orchestrator-tls/cert.pem
+
+    - name: Ensure /etc/orchestrator.env exists (touch; operator must populate)
+      ansible.builtin.copy:
+        dest: /etc/orchestrator.env
+        content: |
+          # Populate before starting orchestrator — do NOT commit this file.
+          # ANTHROPIC_API_KEY=sk-ant-...
+          # SERVE_BEARER=<random token matching ROUTER_BEARER on the M5Stack>
+        owner: root
+        mode: "0600"
+        force: false    # don't overwrite if already populated
+
+    - name: Deploy orchestrator systemd service
+      ansible.builtin.template:
+        src: ../templates/orchestrator.service.j2
+        dest: /etc/systemd/system/orchestrator.service
+        mode: "0644"
+      notify: restart orchestrator
+
+    - name: Enable + start orchestrator
+      ansible.builtin.systemd:
+        name: orchestrator
+        daemon_reload: true
+        enabled: true
+        state: started
+
+    - name: Remind — populate /etc/orchestrator.env before service will function
+      ansible.builtin.debug:
+        msg: >
+          Service is enabled but will refuse to serve until /etc/orchestrator.env on
+          {{ inventory_hostname }} contains ANTHROPIC_API_KEY and SERVE_BEARER.
+          After filling it in: sudo systemctl restart orchestrator
+
+  handlers:
+    - name: restart orchestrator
+      ansible.builtin.systemd:
+        name: orchestrator
+        state: restarted

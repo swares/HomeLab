@@ -1,0 +1,18 @@
+# Ansible-managed lab broker. Point the M5Stack framework at {{ ansible_host }}:1883.
+listener 1883 0.0.0.0
+allow_anonymous {{ 'true' if mqtt_allow_anonymous else 'false' }}
+persistence true
+persistence_location /var/lib/mosquitto/
+{% if mqtt_bridge_peer is defined %}
+
+# HA bridge — bidirectional sync with peer broker at {{ mqtt_bridge_peer }}.
+# All topics are mirrored at QoS 1. If this broker loses the peer it retries
+# every 5 s; local publishers and subscribers are unaffected during the outage.
+connection bridge-ha
+address {{ mqtt_bridge_peer }}:1883
+topic # both 1
+try_private false
+start_type automatic
+restart_timeout 5
+cleansession false
+{% endif %}

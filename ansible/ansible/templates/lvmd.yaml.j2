@@ -1,0 +1,13 @@
+# /etc/microshift/lvmd.yaml  (rendered by Ansible)
+# Maps the LVMS (TopoLVM) CSI to the NVMe volume group.
+socket-name: /run/lvmd/lvmd.socket
+device-classes:
+  - name: nvme
+    volume-group: {{ microshift_vg }}
+    spare-gb: 10
+    default: true
+# Optional second class on the RAID mirror for bulk/redundant PVs (uncomment to use):
+#  - name: bulk
+#    volume-group: vg_bulk
+#    spare-gb: 10
+#    default: false

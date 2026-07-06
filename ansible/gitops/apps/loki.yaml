@@ -1,0 +1,89 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: loki
+    # renovate: datasource=helm registryUrl=https://grafana.github.io/helm-charts depName=loki
+    targetRevision: 6.7.4
+    helm:
+      valuesObject:
+        # Single-binary (monolithic) mode — one pod does everything.
+        # Right-sized for a homelab; scale up to distributed mode if needed.
+        deploymentMode: SingleBinary
+
+        loki:
+          auth_enabled: false          # single tenant, no auth overhead
+          commonConfig:
+            replication_factor: 1
+          storage:
+            type: filesystem
+          schemaConfig:
+            configs:
+              - from: "2024-01-01"
+                store: tsdb
+                object_store: filesystem
+                schema: v13
+                index:
+                  prefix: index_
+                  period: 24h
+          limits_config:
+            retention_period: 30d    # keep logs for 30 days (same as metrics)
+            ingestion_rate_mb: 16
+            ingestion_burst_size_mb: 32
+
+        singleBinary:
+          replicas: 1
+          nodeSelector:
+            kubernetes.io/hostname: n150-1
+          persistence:
+            enabled: true
+            storageClass: local-path
+            size: 20Gi
+
+        # Expose Loki via Traefik so non-cluster hosts can push logs
+        gateway:
+          enabled: true
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            hosts:
+              - host: loki.apps.lab.home.arpa
+                paths:
+                  - path: /
+                    pathType: Prefix
+
+        # Disable distributed-mode components (not used in SingleBinary)
+        backend:
+          replicas: 0
+        read:
+          replicas: 0
+        write:
+          replicas: 0
+
+        # No object storage needed — using local filesystem
+        minio:
+          enabled: false
+
+        # Disable built-in Grafana (using existing kube-prometheus-stack Grafana)
+        grafana:
+          enabled: false
+
+        # Disable built-in Prometheus (using existing kube-prometheus-stack)
+        prometheus:
+          enabled: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

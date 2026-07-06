@@ -1,0 +1,24 @@
+# The single Application you apply by hand once. It watches gitops/apps/, where each
+# file is itself an Application. Add a workload = add a file there and merge. Done.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: root
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:swares/HomeLab.git
+    targetRevision: main
+    path: gitops/apps
+    directory:
+      recurse: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: true       # delete resources removed from git
+      selfHeal: true    # revert out-of-band drift back to git
+    syncOptions:
+      - CreateNamespace=true

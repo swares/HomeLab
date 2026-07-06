@@ -1,0 +1,106 @@
+---
+# Daily lldap SQLite backup: ldap-1 VM → H4 cold tier (/mnt/cold-8t/lldap-snapshots/).
+#
+# lldap stores all users, groups, and memberships in a single SQLite DB.
+# The service is stopped briefly for a consistent copy (~2s downtime).
+# SSH key setup (root@ldap-1 → swares@h4) is handled by this playbook.
+#
+- name: Configure lldap SQLite backups
+  hosts: lldap
+  become: true
+  vars:
+    lldap_service: lldap
+    lldap_data_dir: /var/lib/lldap
+    h4_host: "192.168.1.160"
+    h4_user: "swares"
+    snapshot_dest_path: "/mnt/cold-8t/lldap-snapshots"
+    snapshot_retain_days: 30
+    ssh_key_path: /root/.ssh/lldap-backup
+
+  tasks:
+    - name: Ensure snapshot destination directory exists on H4
+      delegate_to: h4-core
+      ansible.builtin.file:
+        path: "{{ snapshot_dest_path }}"
+        state: directory
+        mode: "0750"
+        owner: swares
+        group: swares
+
+    - name: Generate SSH keypair for lldap-backup on ldap-1
+      ansible.builtin.shell:
+        cmd: ssh-keygen -t ed25519 -f {{ ssh_key_path }} -N '' -C lldap-backup@ldap-1
+        creates: "{{ ssh_key_path }}"
+
+    - name: Read lldap-backup public key
+      ansible.builtin.slurp:
+        src: "{{ ssh_key_path }}.pub"
+      register: lldap_backup_pubkey
+
+    - name: Authorize lldap-backup key on H4
+      delegate_to: h4-core
+      ansible.posix.authorized_key:
+        user: "{{ h4_user }}"
+        key: "{{ lldap_backup_pubkey.content | b64decode | trim }}"
+        comment: lldap-backup@ldap-1
+
+    - name: Deploy lldap snapshot script
+      ansible.builtin.copy:
+        dest: /usr/local/bin/lldap-snapshot.sh
+        mode: "0750"
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+          DATA_DIR="{{ lldap_data_dir }}"
+          SNAP_DIR=/tmp/lldap-snapshots
+          mkdir -p "$SNAP_DIR"
+          SNAP="$SNAP_DIR/lldap-$(date +%Y%m%d-%H%M%S).db"
+          systemctl stop {{ lldap_service }}
+          cp "$DATA_DIR/users.db" "$SNAP"
+          systemctl start {{ lldap_service }}
+          rsync -az -e "ssh -i {{ ssh_key_path }} -o StrictHostKeyChecking=accept-new" \
+            "$SNAP" "{{ h4_user }}@{{ h4_host }}:{{ snapshot_dest_path }}/"
+          rm -f "$SNAP"
+          ssh -i "{{ ssh_key_path }}" "{{ h4_user }}@{{ h4_host }}" \
+            "find {{ snapshot_dest_path }} -name 'lldap-*.db' -mtime +{{ snapshot_retain_days }} -delete"
+
+    - name: Deploy backup-lldap systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/backup-lldap.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=lldap SQLite snapshot to H4 cold tier
+          After=network.target {{ lldap_service }}.service
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/lldap-snapshot.sh
+          StandardOutput=journal
+          StandardError=journal
+
+    - name: Deploy backup-lldap systemd timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/backup-lldap.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Daily lldap SQLite snapshot
+
+          [Timer]
+          OnCalendar=*-*-* 02:45:00
+          RandomizedDelaySec=300
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start lldap backup timer
+      ansible.builtin.systemd:
+        name: backup-lldap.timer
+        enabled: true
+        state: started

@@ -1,0 +1,119 @@
+<svg viewBox="0 0 1280 1020" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+  <defs>
+    <style>
+      .bg{fill:#0d1117;} .panel{fill:#11161d;stroke:#2b3440;stroke-width:1.2;}
+      .title{fill:#e6edf3;font-size:27px;font-weight:700;letter-spacing:1px;}
+      .sub{fill:#8b949e;font-size:13px;}
+      .ph{fill:#e6edf3;font-size:16px;font-weight:700;}
+      .cap{fill:#6e7681;font-size:10px;letter-spacing:2px;font-weight:700;}
+      .lbl{fill:#c9d1d9;font-size:12px;} .spec{fill:#8b949e;font-size:11px;}
+      .big{fill:#e6edf3;font-size:24px;font-weight:700;}
+      .free{fill:#34d399;} .resv{fill:#3a4250;} .pow{fill:#f59e0b;} .npu{fill:#34d399;} .ov{fill:#f59e0b;}
+      .chip{fill:#1c2128;stroke:#30363d;stroke-width:1;}
+      .vt{fill:#0d1117;font-size:11px;font-weight:700;}
+    </style>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1280" height="1020"/>
+  <text class="title" x="40" y="48">Capability — three lenses</text>
+  <text class="sub" x="42" y="70">Allocatable vs raw · estimated power · NPU-vs-OpenVINO throughput</text>
+
+  <!-- PANEL A: allocatable -->
+  <g transform="translate(40,90)">
+    <rect class="panel" x="0" y="0" width="1200" height="222" rx="12"/>
+    <text class="ph" x="20" y="32">1 · Allocatable vs raw</text>
+    <text class="spec" x="220" y="32">free for new work after carving out storage, services, the TV VM, and host overhead</text>
+
+    <!-- cores bar -->
+    <text class="cap" x="20" y="66">CPU CORES</text>
+    <rect class="free" x="120" y="52" width="345" height="26" rx="4"/>
+    <rect class="resv" x="465" y="52" width="354" height="26" rx="4"/>
+    <text class="vt" x="250" y="69">39 free</text>
+    <text class="lbl" x="600" y="69" fill="#8b949e">~40 reserved</text>
+    <text class="big" x="840" y="73">39<tspan class="spec" font-size="13"> / 79</tspan></text>
+
+    <!-- ram bar -->
+    <text class="cap" x="20" y="118">RAM (GB)</text>
+    <rect class="free" x="120" y="104" width="323" height="26" rx="4"/>
+    <rect class="resv" x="443" y="104" width="376" height="26" rx="4"/>
+    <text class="vt" x="245" y="121">~84 free</text>
+    <text class="lbl" x="560" y="121" fill="#8b949e">~96 reserved</text>
+    <text class="big" x="840" y="125">84<tspan class="spec" font-size="13"> / 182</tspan></text>
+
+    <!-- accelerators line -->
+    <text class="cap" x="20" y="162">ACCELERATORS</text>
+    <text class="lbl" x="120" y="165">NPU <tspan class="free">18 TOPS</tspan> fully free  ·  Intel iGPU <tspan class="pow">~48–80 EU</tspan> (24 EU → TV VM)</text>
+
+    <!-- reserved chips -->
+    <text class="cap" x="20" y="198">RESERVED =</text>
+    <text class="spec" x="120" y="201">H4 (8C/64GB/32EU → NAS/AI) · infra services (~24C/20GB) · TV VM (2C/4GB/24EU) · host overhead (~3C/6GB)</text>
+    <text class="spec" x="120" y="216" fill="#6e7681">Allocatable breakdown: x86 VMs ~7 vCPU/38GB · ARM AI 16C/32GB/12TOPS · k3s agents 16C/14GB</text>
+  </g>
+
+  <!-- PANEL B: power -->
+  <g transform="translate(40,330)">
+    <rect class="panel" x="0" y="0" width="1200" height="300" rx="12"/>
+    <text class="ph" x="20" y="32">2 · Power — estimated, always-on</text>
+    <text class="spec" x="330" y="32">typical 24/7 draw (estimate — measure to confirm)</text>
+
+    <!-- bars: scale 66W -> 600px (9.09 px/W) -->
+    <g transform="translate(150,52)" font-size="11">
+      <text class="lbl" x="-130" y="14">x86 (H4+N150×3)</text><rect class="pow" x="0" y="2" width="600" height="16" rx="3"/><text class="spec" x="610" y="14">~66 W</text>
+      <text class="lbl" x="-130" y="44">ARM infra</text><rect class="pow" x="0" y="32" width="173" height="16" rx="3"/><text class="spec" x="183" y="44">~19 W</text>
+      <text class="lbl" x="-130" y="74">ARM AI (OPi 5 Pro ×2)</text><rect class="pow" x="0" y="62" width="145" height="16" rx="3"/><text class="spec" x="155" y="74">~16 W (peak ~30)</text>
+      <text class="lbl" x="-130" y="104">Network (switch)</text><rect class="pow" x="0" y="92" width="109" height="16" rx="3"/><text class="spec" x="119" y="104">~12 W</text>
+      <text class="lbl" x="-130" y="134">ARM agents (Zero 2W ×4)</text><rect class="pow" x="0" y="122" width="55" height="16" rx="3"/><text class="spec" x="65" y="134">~6 W</text>
+      <text class="lbl" x="-130" y="164">Micro + edge</text><rect class="pow" x="0" y="152" width="41" height="16" rx="3"/><text class="spec" x="51" y="164">~4.5 W</text>
+    </g>
+
+    <!-- totals -->
+    <g transform="translate(820,70)">
+      <rect class="chip" x="0" y="0" width="350" height="170" rx="10"/>
+      <text class="cap" x="18" y="30">TOTAL (typical)</text>
+      <text class="big" x="18" y="64" fill="#f59e0b">~124 W</text>
+      <text class="spec" x="18" y="92">≈ 1,090 kWh / year</text>
+      <text class="spec" x="18" y="112">≈ $150 / yr @ $0.14/kWh</text>
+      <text class="spec" x="18" y="138" fill="#6e7681">peaks ~150–180 W under full</text>
+      <text class="spec" x="18" y="154" fill="#6e7681">AI/VM load · NPU adds only 2–3 W</text>
+    </g>
+    <text class="spec" x="20" y="280" fill="#6e7681">The HDDs + the H4 dominate the budget; the living-room N150 is "on for the TV anyway."</text>
+  </g>
+
+  <!-- PANEL C: throughput -->
+  <g transform="translate(40,648)">
+    <rect class="panel" x="0" y="0" width="1200" height="330" rx="12"/>
+    <text class="ph" x="20" y="32">3 · Throughput sizing — complementary, not additive</text>
+
+    <!-- NPU column -->
+    <g transform="translate(20,52)">
+      <rect class="chip" x="0" y="0" width="575" height="200" rx="10"/>
+      <rect class="npu" x="0" y="0" width="5" height="200" rx="2"/>
+      <text class="ph" x="18" y="28" fill="#34d399" font-size="14">NPU — 18 TOPS (the LLM + vision tier)</text>
+      <text class="lbl" x="18" y="56">per OPi 5 Pro (RK3588S · RKLLM, grounded):</text>
+      <text class="spec" x="32" y="80">• LLM decode: 3B ≈ 7–8.5 tok/s · 1–2B ≈ 10–15 tok/s</text>
+      <text class="spec" x="32" y="102">• prefill ≈ 130 tok/s (prompt processing is fast)</text>
+      <text class="spec" x="32" y="124">• vision INT8: YOLOv5s ~54 FPS · ResNet18 ~244 FPS</text>
+      <text class="spec" x="18" y="152">2 boards → ~2 LLM streams, or LLM + vision split</text>
+      <text class="spec" x="18" y="174">M5Stack (AX630C): ~3–4 tok/s — edge/voice only</text>
+      <text class="spec" x="18" y="192" fill="#6e7681">6 TOPS is INT8 peak; FP16 ≈ 0.5 TFLOPS → quantize</text>
+    </g>
+
+    <!-- OpenVINO column -->
+    <g transform="translate(605,52)">
+      <rect class="chip" x="0" y="0" width="575" height="200" rx="10"/>
+      <rect class="ov" x="0" y="0" width="5" height="200" rx="2"/>
+      <text class="ph" x="18" y="28" fill="#f59e0b" font-size="14">Intel iGPU — 104 EU (embeddings/STT/vision)</text>
+      <text class="lbl" x="18" y="56">OpenVINO on the x86 iGPUs (ballpark):</text>
+      <text class="spec" x="32" y="80">• Whisper STT: faster-than-realtime (base/small)</text>
+      <text class="spec" x="32" y="102">• embeddings (bge-small): ~hundreds / sec</text>
+      <text class="spec" x="32" y="124">• vision / OCR (small models): real-time</text>
+      <text class="spec" x="32" y="146">• LLM decode: weak — not the tool</text>
+      <text class="spec" x="18" y="178" fill="#6e7681">Pairs with the H4 (32 EU) + N150 iGPUs (24 EU ea)</text>
+    </g>
+
+    <!-- planning rule -->
+    <g transform="translate(20,266)">
+      <rect class="chip" x="0" y="0" width="1160" height="48" rx="10"/>
+      <text class="lbl" x="18" y="29"><tspan class="cap">RULE  </tspan> LLM + vision → NPU  ·  embeddings / STT / OCR → Intel iGPU (OpenVINO)  ·  sized for private, always-on, agentic/background — not many fast interactive users.</text>
+    </g>
+  </g>
+</svg>

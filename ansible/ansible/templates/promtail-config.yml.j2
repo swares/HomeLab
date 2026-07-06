@@ -1,0 +1,47 @@
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  filename: /var/lib/promtail/positions.yaml
+
+clients:
+  - url: http://loki.apps.lab.home.arpa/loki/api/v1/push
+    # Back-pressure: drop logs if Loki is unreachable for >30s rather than OOMing
+    backoff_config:
+      min_period: 500ms
+      max_period: 30s
+      max_retries: 10
+
+scrape_configs:
+  # ---- systemd journal (all units) ----
+  - job_name: journal
+    journal:
+      max_age: 12h
+      json: false
+      labels:
+        job: journal
+        host: {{ inventory_hostname }}
+    relabel_configs:
+      - source_labels: [__journal__systemd_unit]
+        target_label: unit
+      - source_labels: [__journal__hostname]
+        target_label: hostname
+      - source_labels: [__journal_priority_keyword]
+        target_label: level
+
+  # ---- /var/log/syslog or /var/log/messages (distro-dependent) ----
+  - job_name: syslog
+    static_configs:
+      - targets: [localhost]
+        labels:
+          job: syslog
+          host: {{ inventory_hostname }}
+          __path__: /var/log/{syslog,messages}
+    pipeline_stages:
+      - regex:
+          expression: '^(?P<timestamp>\w+\s+\d+\s+\d+:\d+:\d+)\s+(?P<hostname>\S+)\s+(?P<unit>\S+?)(\[\d+\])?:\s+(?P<message>.*)'
+      - labels:
+          unit:
+          hostname:

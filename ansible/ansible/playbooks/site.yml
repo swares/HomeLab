@@ -1,0 +1,12 @@
+---
+# Top-level orchestration. Run a stage at a time the first time through:
+#   ansible-playbook playbooks/storage.yml
+#   ansible-playbook playbooks/microshift.yml
+#   ansible-playbook playbooks/backup.yml
+#   ansible-playbook playbooks/argocd.yml
+# ...or everything at once once you trust it:
+#   ansible-playbook playbooks/site.yml
+- import_playbook: storage.yml
+- import_playbook: microshift.yml
+- import_playbook: backup.yml
+- import_playbook: argocd.yml

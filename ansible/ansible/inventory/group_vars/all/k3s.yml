@@ -1,0 +1,7 @@
+---
+# k3s version pin — Renovate bumps this automatically via the regex manager in renovate.json.
+# Used by ansible/playbooks/update-non-apt.yml for both server and agent upgrades.
+# Servers must be upgraded before agents; the playbook enforces that order.
+#
+# renovate: datasource=github-releases depName=rancher/k3s
+k3s_version: "v1.36.2+k3s1"

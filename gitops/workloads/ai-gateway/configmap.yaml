@@ -6,6 +6,23 @@ data:
     # Map friendly model names -> backends. Confirm each backend's API path/port against
     # its docs (RKLLama API shape and OVMS OpenAI endpoint vary by version).
     model_list:
+      # ── NPU-native path (RKLLama, RK3588S NPU) ──────────────────────────────
+      # Prerequisites: run 'make ai-nodes' to install RKLLama on both OPis, then
+      # drop converted .rkllm models into /opt/rkllama/models/ on each board.
+      # Model name must match the loaded .rkllm filename (check 'rkllama list' on the host).
+      # Reaches the OPis via ExternalName services (rkllama-opi1/2 in ai-backends).
+      # MIGRATION: once RKLLama is healthy, rename chat-npu → chat and remove the
+      # Ollama entries below (or keep them as chat-cpu for CPU-only fallback).
+      - model_name: chat-npu
+        litellm_params:
+          model: ollama/qwen2.5:3b    # confirm name matches loaded model
+          api_base: http://rkllama-opi1:8080
+      - model_name: chat-npu
+        litellm_params:
+          model: ollama/qwen2.5:3b
+          api_base: http://rkllama-opi2:8080
+
+      # ── CPU fallback (Ollama in-cluster, no NPU) ─────────────────────────────
       # Ollama on opi5pro-1 — pinned via nodeSelector kubernetes.io/hostname=opi5pro-1
       # Pull models: kubectl exec -n ai-gateway deploy/ollama -- ollama pull qwen2.5:3b
       - model_name: chat

@@ -1,0 +1,187 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: monitoring
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    # renovate: datasource=helm registryUrl=https://prometheus-community.github.io/helm-charts depName=kube-prometheus-stack
+    targetRevision: 72.6.2
+    helm:
+      valuesObject:
+        # ---- Global ----
+        fullnameOverride: kps
+
+        # ---- Grafana ----
+        grafana:
+          enabled: true
+          adminUser: admin
+          # Password injected from Vault via ExternalSecret (grafana-admin-secret)
+          admin:
+            existingSecret: grafana-admin-secret
+            userKey: admin-user
+            passwordKey: admin-password
+          persistence:
+            enabled: true
+            storageClassName: local-path
+            size: 5Gi
+          nodeSelector:
+            kubernetes.io/hostname: n150-1
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            hosts:
+              - grafana.apps.lab.home.arpa
+            paths:
+              - /
+          sidecar:
+            dashboards:
+              enabled: true          # auto-import dashboards from ConfigMaps
+            datasources:
+              enabled: true
+          grafana.ini:
+            server:
+              root_url: "http://grafana.apps.lab.home.arpa"
+
+        # ---- Prometheus ----
+        prometheus:
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            hosts:
+              - prometheus.apps.lab.home.arpa
+            paths:
+              - /
+          prometheusSpec:
+            retention: 30d
+            retentionSize: "40GB"
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: local-path
+                  accessModes: [ReadWriteOnce]
+                  resources:
+                    requests:
+                      storage: 50Gi
+            nodeSelector:
+              kubernetes.io/hostname: n150-1
+            # Scrape all namespaces
+            podMonitorNamespaceSelector: {}
+            serviceMonitorNamespaceSelector: {}
+            ruleNamespaceSelector: {}
+            # Static scrape targets — non-cluster hosts running apt node_exporter
+            additionalScrapeConfigs:
+              - job_name: node-exporter-external
+                # n150-1 and n150-2 are now k3s server nodes — their node-exporter
+                # runs as a DaemonSet pod and is scraped via ServiceMonitor.
+                # Keeping them here caused port 9100 conflicts with the DaemonSet.
+                static_configs:
+                  - targets:
+                      - 192.168.1.70:9100   # ldap-1 (lldap VM)
+                      - 192.168.1.148:9100  # octopi (DNS primary)
+                      - 192.168.1.184:9100  # opi-zero2w-1 (DNS secondary)
+                      - 192.168.1.188:9100  # opi-zero2w-2 (MQTT)
+                      - 192.168.1.99:9100   # opi-zero2w-4
+                relabel_configs:
+                  - source_labels: [__address__]
+                    regex: '([^:]+):\d+'
+                    target_label: instance
+              - job_name: libvirt
+                static_configs:
+                  - targets:
+                      - 192.168.1.42:9177   # n150-1 (KVM host)
+                      - 192.168.1.21:9177   # n150-2 (KVM host)
+
+        # ---- Alertmanager ----
+        alertmanager:
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            hosts:
+              - alertmanager.apps.lab.home.arpa
+            paths:
+              - /
+          alertmanagerSpec:
+            nodeSelector:
+              kubernetes.io/hostname: n150-1
+            storage:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: local-path
+                  accessModes: [ReadWriteOnce]
+                  resources:
+                    requests:
+                      storage: 2Gi
+          # Routing: all real alerts → m5stack-adapter webhook.
+          # Watchdog and InfoInhibitor go to the null receiver (expected noise).
+          config:
+            global:
+              resolve_timeout: 5m
+            inhibit_rules:
+              - source_matchers:
+                  - alertname = "InfoInhibitor"
+                target_matchers:
+                  - severity = "info"
+            route:
+              group_by: ['alertname', 'namespace']
+              group_wait: 30s
+              group_interval: 5m
+              repeat_interval: 4h
+              receiver: 'null'
+              routes:
+                - matchers:
+                    - alertname =~ "InfoInhibitor|Watchdog"
+                  receiver: 'null'
+                - receiver: m5stack
+            receivers:
+              - name: 'null'
+              - name: m5stack
+                webhook_configs:
+                  - url: 'http://m5stack-adapter.monitoring.svc.cluster.local:8080/webhook'
+                    send_resolved: true
+
+        # ---- Node exporter — runs on all nodes ----
+        prometheus-node-exporter:
+          tolerations:
+            - operator: Exists   # scrape inference nodes too
+          extraArgs:
+            # Enable systemd collector so backup timer metrics are available
+            # (used by LabBackupNasSilent / LabBackupEtcdSilent alert rules)
+            - --collector.systemd
+            - --collector.systemd.unit-include=(backup-nas|backup-etcd)\.(service|timer)
+
+        # ---- kube-state-metrics ----
+        kube-state-metrics:
+          nodeSelector:
+            kubernetes.io/hostname: n150-1
+
+        # ---- Admission webhooks — disabled (homelab; TLS secret bootstrap unreliable on k3s) ----
+        prometheusOperator:
+          admissionWebhooks:
+            enabled: false
+          tls:
+            enabled: false
+
+        # ---- k3s doesn't expose kube-controller-manager / scheduler on standard ports ----
+        kubeControllerManager:
+          enabled: false
+        kubeScheduler:
+          enabled: false
+        kubeEtcd:
+          enabled: false
+        kubeProxy:
+          enabled: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true   # required for large CRDs
