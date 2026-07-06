@@ -1,6 +1,7 @@
 # Convenience targets. All Ansible runs target the host(s) in inventory/hosts.yml.
 .PHONY: help check storage microshift backup argocd all dns ai-nodes vault ldap mqtt k3s-vms \
-        k3s-registry update-containers update-vms bake-image validate-rollout ansible-deps bootstrap
+        k3s-registry update-containers update-vms bake-image validate-rollout ansible-deps bootstrap \
+        push-m5stack
 
 # Use the venv if present, fall back to whatever is on PATH.
 VENV          ?= /opt/ansible
@@ -85,3 +86,23 @@ check-vault:       ## Verify Vault seal status (safe to run anytime)
 
 bake-image:        ## Bake a fresh patched Ubuntu Noble Proxmox template via Packer
 	cd packer && packer init . && packer build -var-file=proxmox.pkrvars.hcl ubuntu-noble.pkr.hcl
+
+# ── Image push (Zot rejects Docker schema v2; push via OCI layout + crane) ────
+CRANE         ?= /tmp/crane
+REGISTRY      ?= registry.apps.lab.home.arpa
+M5STACK_DIR   ?= /tmp/My_M5Stack_Core_Framework/scripts
+M5STACK_TAG   ?= 0.1.0
+
+push-m5stack:  ## Build + push m5stack-adapter image to lab registry (OCI format via crane)
+	@command -v docker > /dev/null 2>&1 || (echo "docker not found"; exit 1)
+	@[ -x $(CRANE) ] || (curl -sL https://github.com/google/go-containerregistry/releases/download/v0.20.6/go-containerregistry_Linux_x86_64.tar.gz | tar xz -C /tmp crane && chmod +x $(CRANE))
+	rm -rf /tmp/m5stack-oci /tmp/m5stack-oci.tar
+	mkdir -p /tmp/m5stack-oci
+	cd $(M5STACK_DIR) && docker buildx build \
+	  --platform linux/amd64 \
+	  --output type=oci,dest=/tmp/m5stack-oci.tar \
+	  --provenance=false \
+	  -f openai_adapter/Dockerfile .
+	tar -xf /tmp/m5stack-oci.tar -C /tmp/m5stack-oci
+	$(CRANE) push --insecure /tmp/m5stack-oci \
+	  $(REGISTRY)/m5stack-adapter:$(M5STACK_TAG)

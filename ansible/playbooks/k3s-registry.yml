@@ -46,8 +46,10 @@
         state: restarted
 
 - name: Configure Docker on build nodes to push to lab registry
-  hosts: xu3-1
+  hosts: xu3-1:h4-core
   become: true
+  any_errors_fatal: false
+  ignore_unreachable: true   # xu3-1 may have Python < 3.6; non-blocking for registry config
   vars:
     registry_host: registry.apps.lab.home.arpa
 
