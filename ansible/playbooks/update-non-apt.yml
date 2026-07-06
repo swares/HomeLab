@@ -44,7 +44,9 @@
       ansible.builtin.command: /usr/local/bin/pihole status
       register: pihole_status
       changed_when: false
-      failed_when: "'Active' not in pihole_status.stdout"
+      failed_when: >-
+        pihole_status.rc != 0 or
+        ('FTL is listening' not in pihole_status.stdout and 'Active' not in pihole_status.stdout)
       when: pihole_bin.stat.exists
 
     - name: Show output
