@@ -1,7 +1,5 @@
 ---
 # xu3-1 — Odroid XU3/XU4 build agent (192.168.1.64)
-# The board ships with Python 2 as /usr/bin/python; ansible-core requires Python 3.
-# Python 3.5 is the highest available (Ubuntu 16.04 era board).
-# ansible-core requires Python 3.8+, so this host cannot be fully managed by Ansible.
-# Workaround: configure manually or install Python 3.8+ via deadsnakes PPA.
-ansible_python_interpreter: /usr/bin/python3.5
+# Ubuntu 16.04 armhf — system Python is 3.5; deadsnakes PPA has no armhf builds.
+# Python 3.11 compiled from source via make altinstall → /usr/local/bin/python3.11
+ansible_python_interpreter: /usr/local/bin/python3.11
