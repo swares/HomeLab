@@ -21,4 +21,3 @@ LAB-URLS.md
 .terraform.lock.hcl
 terraform.tfvars
 crash.log
-actions-runner/
