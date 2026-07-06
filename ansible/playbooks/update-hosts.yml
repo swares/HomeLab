@@ -145,6 +145,7 @@
   serial: 1
   become: true
   gather_facts: true
+  ignore_unreachable: true
   tags: [k3s_agents, k3s]
 
   vars:
