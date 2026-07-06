@@ -1,0 +1,174 @@
+---
+# Lab-specific Prometheus alerting rules.
+#
+# What's NOT here (already covered by kube-prometheus-stack built-ins):
+#   - Disk space:     NodeFilesystemAlmostOutOfSpace (warn@85%, crit@97%)
+#                     NodeFilesystemSpaceFillingUp (predictive)
+#   - RAID:           NodeRAIDDegraded, NodeRAIDDiskFailure
+#   - Pod health:     KubePodCrashLooping, KubePodNotReady
+#   - k3s node:       KubeNodeNotReady, KubeNodeUnreachable
+#
+# What IS here (gaps not covered by built-ins):
+#   - External (non-cluster) host down
+#   - Backup timer silence  [needs --collector.systemd on node_exporter — see NOTE below]
+#   - VM in crashed state
+#   - ArgoCD app out-of-sync / degraded
+#
+# NOTE — backup silence detection:
+#   Requires enabling the systemd collector on the H4's node_exporter DaemonSet:
+#
+#     prometheus-node-exporter:
+#       extraArgs:
+#         - --collector.systemd
+#         - --collector.systemd.unit-whitelist=(backup-nas|backup-etcd).timer
+#
+#   Add that to gitops/apps/monitoring.yaml under prometheus-node-exporter and
+#   the rules below will start firing.  Until then they silently produce no data.
+#
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: lab-alerts
+  namespace: monitoring
+  labels:
+    # Picked up by prometheus-operator (ruleNamespaceSelector: {} in prometheusSpec)
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+
+    # -----------------------------------------------------------------------
+    # External hosts (non-cluster static scrape targets)
+    # -----------------------------------------------------------------------
+    - name: lab.external-hosts
+      rules:
+        - alert: LabExternalHostDown
+          expr: up{job="node-exporter-external"} == 0
+          for: 3m
+          labels:
+            severity: critical
+          annotations:
+            summary: "External host {{ $labels.instance }} is down"
+            description: >
+              node_exporter on {{ $labels.instance }} has been unreachable for
+              more than 3 minutes.  Check power, network, and service status.
+
+    # -----------------------------------------------------------------------
+    # Backup timers — requires --collector.systemd on the H4 DaemonSet pod
+    # -----------------------------------------------------------------------
+    - name: lab.backups
+      rules:
+        - alert: LabBackupNasSilent
+          # Fires when backup-nas.timer last ran more than 25 hours ago.
+          # absent() fires if the metric doesn't exist (collector not enabled).
+          expr: |
+            (
+              time() - node_systemd_timer_last_trigger_time_seconds{
+                name="backup-nas.timer",
+                instance=~"192\\.168\\.1\\.160.*"
+              }
+            ) > 90000
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "backup-nas has not run in >25 hours"
+            description: >
+              The backup-nas.timer on the H4 last triggered more than 25 hours
+              ago.  Check journalctl -u backup-nas.service on the H4.
+
+        - alert: LabBackupEtcdSilent
+          expr: |
+            (
+              time() - node_systemd_timer_last_trigger_time_seconds{
+                name="backup-etcd.timer",
+                instance=~"192\\.168\\.1\\.160.*"
+              }
+            ) > 90000
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "backup-etcd has not run in >25 hours"
+            description: >
+              The backup-etcd.timer on the H4 last triggered more than 25 hours
+              ago.  Check journalctl -u backup-etcd.service on the H4.
+
+        - alert: LabBackupNasFailed
+          # Catches a failed service exit even without the systemd collector,
+          # as long as node_systemd_unit_state is available.
+          expr: |
+            node_systemd_unit_state{
+              name="backup-nas.service",
+              state="failed",
+              instance=~"192\\.168\\.1\\.160.*"
+            } == 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "backup-nas.service is in failed state"
+            description: >
+              backup-nas.service on the H4 has exited with a failure.
+              Run: journalctl -u backup-nas.service -n 50
+
+    # -----------------------------------------------------------------------
+    # KVM / libvirt VMs
+    # -----------------------------------------------------------------------
+    - name: lab.vms
+      rules:
+        - alert: LabVMCrashed
+          # libvirt state codes: 6=crashed
+          expr: libvirt_domain_state_code == 6
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "VM {{ $labels.domain }} has crashed"
+            description: >
+              The libvirt domain {{ $labels.domain }} on {{ $labels.instance }}
+              is in crashed state (code 6).  Inspect with:
+              virsh list --all && virsh dominfo {{ $labels.domain }}
+
+        - alert: LabVMUnexpectedShutoff
+          # State 5=shut off.  Fires only for VMs that should always be running.
+          # Adjust the domain filter to match your always-on VMs.
+          expr: |
+            libvirt_domain_state_code{domain=~"ldap-1"} == 5
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "VM {{ $labels.domain }} is unexpectedly shut off"
+            description: >
+              {{ $labels.domain }} has been shut off for more than 5 minutes.
+              If this was intentional, silence this alert.
+
+    # -----------------------------------------------------------------------
+    # ArgoCD sync health
+    # -----------------------------------------------------------------------
+    - name: lab.argocd
+      rules:
+        - alert: LabArgoCDAppOutOfSync
+          expr: |
+            argocd_app_info{sync_status!="Synced"} == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ArgoCD app {{ $labels.name }} is out of sync"
+            description: >
+              {{ $labels.name }} has been in sync_status={{ $labels.sync_status }}
+              for more than 15 minutes.  Check: argocd app get {{ $labels.name }}
+
+        - alert: LabArgoCDAppDegraded
+          expr: |
+            argocd_app_info{health_status!~"Healthy|Progressing"} == 1
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "ArgoCD app {{ $labels.name }} is degraded"
+            description: >
+              {{ $labels.name }} health is {{ $labels.health_status }}.
+              Check: argocd app get {{ $labels.name }}

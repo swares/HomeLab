@@ -1,0 +1,214 @@
+<svg viewBox="0 0 1240 1040" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+  <defs>
+    <style>
+      .bg      { fill:#0d1117; }
+      .panel   { fill:#161b22; stroke:#2b3440; stroke-width:1.2; }
+      .core    { fill:#1a1113; stroke:#ff4d4d; stroke-width:1.8; }
+      .group   { fill:none; stroke:#3a4555; stroke-width:1.2; stroke-dasharray:5 5; }
+      .title   { fill:#e6edf3; font-size:30px; font-weight:700; letter-spacing:1px; }
+      .sub     { fill:#8b949e; font-size:13px; }
+      .name    { fill:#e6edf3; font-size:14px; font-weight:700; }
+      .spec    { fill:#8b949e; font-size:11px; }
+      .tag     { fill:#6e7681; font-size:10px; letter-spacing:1px; }
+      .red     { fill:#ff6b6b; }
+      .arm     { fill:#2dd4bf; }
+      .hot     { fill:#f59e0b; }
+      .cold    { fill:#3b82f6; }
+      .git     { fill:#a78bfa; }
+      .trace   { stroke:#30363d; stroke-width:1.6; fill:none; }
+      .trace-g { stroke:#a78bfa; stroke-width:1.6; fill:none; stroke-dasharray:4 4; }
+      .lbl     { fill:#8b949e; font-size:10px; }
+      .lblw    { fill:#c9d1d9; font-size:11px; font-weight:700; }
+    </style>
+  </defs>
+
+  <rect class="bg" x="0" y="0" width="1240" height="1040"/>
+  <text class="title" x="40" y="56">HOME LAB · DevOps Topology</text>
+  <text class="sub" x="42" y="78">Hardware2 · MicroShift core + Orange Pi 5 Pro ARM fleet · 10.136.151.0/24</text>
+
+  <!-- Legend -->
+  <g transform="translate(905,34)">
+    <circle class="red"  cx="0"  cy="0" r="5"/><text class="lbl" x="10" y="4">x86 core / cluster</text>
+    <circle class="arm"  cx="0"  cy="18" r="5"/><text class="lbl" x="10" y="22">ARM fleet</text>
+    <circle class="hot"  cx="160" cy="0" r="5"/><text class="lbl" x="170" y="4">hot storage</text>
+    <circle class="cold" cx="160" cy="18" r="5"/><text class="lbl" x="170" y="22">cold storage</text>
+    <circle class="git"  cx="160" cy="36" r="5"/><text class="lbl" x="170" y="40">GitOps</text>
+    <circle cx="0" cy="36" r="5" fill="#34d399"/><text class="lbl" x="10" y="40">link LED = healthy</text>
+  </g>
+
+  <!-- NETWORK -->
+  <g transform="translate(70,120)">
+    <rect class="panel" x="0" y="0" width="150" height="58" rx="10"/>
+    <text class="name" x="14" y="26">WAN / DSL</text>
+    <text class="spec" x="14" y="44">internet uplink</text>
+  </g>
+  <g transform="translate(500,116)">
+    <rect class="panel" x="0" y="0" width="240" height="66" rx="10"/>
+    <circle cx="18" cy="20" r="5" fill="#34d399"/>
+    <text class="name" x="32" y="24">2.5GbE LAN</text>
+    <text class="spec" x="18" y="44">10.136.151.0/24 · switch TBD in map</text>
+    <text class="tag"  x="18" y="58">BACKBONE</text>
+  </g>
+  <path class="trace" d="M220 149 L500 149"/>
+
+  <!-- DNS (now unassigned) -->
+  <g transform="translate(70,250)">
+    <rect class="panel" x="0" y="0" width="200" height="120" rx="10"/>
+    <rect class="arm" x="0" y="0" width="5" height="120" rx="2"/>
+    <circle cx="22" cy="24" r="5" fill="#fbbf24"/>
+    <text class="name" x="34" y="28">DNS · TBD</text>
+    <text class="spec" x="16" y="50">host unassigned in map</text>
+    <text class="lblw" x="16" y="74">api + *.apps → .64</text>
+    <text class="spec" x="16" y="94">old Pi-hole Zero now</text>
+    <text class="spec" x="16" y="110">runs Grafana — pick a host</text>
+  </g>
+  <path class="trace" d="M620 182 L620 210 L170 210 L170 250"/>
+
+  <!-- Edge AI -->
+  <g transform="translate(970,250)">
+    <rect class="panel" x="0" y="0" width="200" height="120" rx="10"/>
+    <rect class="arm" x="0" y="0" width="5" height="120" rx="2"/>
+    <circle cx="22" cy="24" r="5" fill="#fbbf24"/>
+    <text class="name" x="34" y="28">Edge AI</text>
+    <text class="spec" x="16" y="50">M5Stack LLM · ESP32-S3</text>
+    <text class="spec" x="16" y="68">NPU ~6 TFLOPS</text>
+    <text class="spec" x="16" y="92">+ OPi 5 Pro NPUs (6 TOPS ×2)</text>
+    <text class="tag"  x="16" y="110">CALLED BY WORKLOADS</text>
+  </g>
+  <path class="trace" d="M620 182 L620 210 L1070 210 L1070 250"/>
+
+  <!-- N150 x86 mini PCs (new, not in map) -->
+  <g transform="translate(905,408)">
+    <rect class="panel" x="0" y="0" width="265" height="120" rx="10"/>
+    <rect class="red" x="0" y="0" width="5" height="120" rx="2"/>
+    <circle cx="22" cy="24" r="5" fill="#34d399"/>
+    <text class="name" x="34" y="28">Intel N150 ×2 (new)</text>
+    <text class="spec" x="16" y="50">4C/4T · 16 GB · 512 GB M.2</text>
+    <text class="spec" x="16" y="68">24-EU iGPU · no NPU</text>
+    <text class="tag"  x="16" y="92">x86 k3s NODES /</text>
+    <text class="spec" x="16" y="110">OpenVINO iGPU inference</text>
+  </g>
+
+  <!-- H4 CORE -->
+  <g transform="translate(360,250)">
+    <rect class="core" x="0" y="0" width="520" height="300" rx="14"/>
+    <rect class="red" x="0" y="0" width="6" height="300" rx="3"/>
+    <circle cx="28" cy="30" r="6" fill="#34d399"/>
+    <text class="name" x="44" y="34" font-size="16">Odroid-H4 Ultra — NAS + MicroShift core</text>
+    <text class="spec" x="20" y="56">i3-N305 · 8C/8T · 64 GB · 2× 2.5GbE · .64 · boot: 256 GB eMMC</text>
+
+    <g transform="translate(20,74)">
+      <rect class="panel" x="0" y="0" width="300" height="208" rx="10"/>
+      <text class="tag" x="14" y="20">HOST OS (eMMC) — CentOS Stream 9 / RHEL 9</text>
+      <rect x="14" y="30" width="272" height="34" rx="7" fill="#11331f" stroke="#1f7a4d"/>
+      <circle cx="30" cy="47" r="4" fill="#34d399"/>
+      <text class="spec" x="42" y="51" fill="#c9d1d9">NAS services · smbd / nfs (off-limits)</text>
+      <rect x="14" y="72" width="272" height="124" rx="7" fill="#1a1113" stroke="#ff4d4d" stroke-width="1.2"/>
+      <text class="name" x="26" y="92" font-size="12">microshift.service (systemd)</text>
+      <text class="spec" x="26" y="112">• CRI-O + OVN-Kubernetes</text>
+      <text class="spec" x="26" y="130">• embedded etcd  (on NVMe)</text>
+      <text class="spec" x="26" y="148">• built-in router → Routes</text>
+      <text class="spec" x="26" y="166">• LVMS CSI → PV provisioning</text>
+      <text class="spec" x="26" y="184">• Argo CD (in-cluster)</text>
+    </g>
+
+    <g transform="translate(336,74)">
+      <rect x="0" y="0" width="164" height="100" rx="10" fill="#1f1605" stroke="#f59e0b" stroke-width="1.2"/>
+      <rect class="hot" x="0" y="0" width="5" height="100" rx="2"/>
+      <text class="name" x="16" y="24" font-size="12">HOT · NVMe</text>
+      <text class="spec" x="16" y="44">4 TB US75</text>
+      <text class="spec" x="16" y="62">(~Gen3 ×4)</text>
+      <text class="spec" x="16" y="82">etcd · PVs · NAS</text>
+
+      <rect x="0" y="112" width="164" height="96" rx="10" fill="#0c1a2e" stroke="#3b82f6" stroke-width="1.2"/>
+      <rect class="cold" x="0" y="112" width="5" height="96" rx="2"/>
+      <text class="name" x="16" y="136" font-size="12">COLD · 2 disks</text>
+      <text class="spec" x="16" y="156">8 TB restic primary</text>
+      <text class="spec" x="16" y="174">6 TB restic copy</text>
+      <text class="spec" x="16" y="192" fill="#ff8a8a">mismatched — no RAID</text>
+    </g>
+  </g>
+  <path class="trace" d="M620 182 L620 250"/>
+
+  <!-- GitOps loop -->
+  <g transform="translate(360,576)">
+    <path class="trace-g" d="M260 -26 L260 14"/>
+    <rect x="0" y="14" width="520" height="56" rx="10" fill="#15111f" stroke="#a78bfa" stroke-width="1.2"/>
+    <text class="lblw" x="18" y="38" fill="#c4b5fd">GitOps loop</text>
+    <text class="spec" x="18" y="58">Claude edits → PR → git (main) → Argo sync · selfHeal=on → cluster reconciles</text>
+  </g>
+
+  <!-- Consumers -->
+  <g transform="translate(905,560)">
+    <rect class="panel" x="0" y="0" width="265" height="86" rx="10"/>
+    <text class="tag" x="16" y="24">CONSUMERS</text>
+    <text class="spec" x="16" y="46">Phones · tablets · Chromebooks · PS5</text>
+    <text class="lbl"  x="16" y="68">→ DNS, NAS shares, cluster services</text>
+  </g>
+
+  <!-- PHASE 2: ARM k3s + infra -->
+  <g transform="translate(70,680)">
+    <rect class="group" x="0" y="0" width="1100" height="150" rx="14"/>
+    <text class="tag" x="18" y="26" fill="#2dd4bf">PHASE 2 · ARM k3s CLUSTER + INFRA SERVICES</text>
+    <!-- OPi5Pro#1 -->
+    <g transform="translate(20,42)">
+      <rect class="panel" x="0" y="0" width="250" height="96" rx="10"/><rect class="arm" x="0" y="0" width="5" height="96" rx="2"/>
+      <circle cx="22" cy="22" r="5" fill="#34d399"/><text class="name" x="34" y="26">Orange Pi 5 Pro #1</text>
+      <text class="spec" x="16" y="48">8C · 16 GB · NVMe · NPU 6 TOPS · .83</text>
+      <text class="tag"  x="16" y="70">k3s SERVER</text><text class="spec" x="16" y="86">Apps / Containers / VMs</text>
+    </g>
+    <!-- OPi5Pro#2 -->
+    <g transform="translate(290,42)">
+      <rect class="panel" x="0" y="0" width="250" height="96" rx="10"/><rect class="arm" x="0" y="0" width="5" height="96" rx="2"/>
+      <circle cx="22" cy="22" r="5" fill="#34d399"/><text class="name" x="34" y="26">Orange Pi 5 Pro #2</text>
+      <text class="spec" x="16" y="48">8C · 16 GB · NVMe · NPU 6 TOPS · .97</text>
+      <text class="tag"  x="16" y="70">k3s SERVER</text><text class="spec" x="16" y="86">GitLab · OpenTelemetry</text>
+    </g>
+    <!-- RPi5 -->
+    <g transform="translate(560,42)">
+      <rect class="panel" x="0" y="0" width="250" height="96" rx="10"/><rect class="arm" x="0" y="0" width="5" height="96" rx="2"/>
+      <circle cx="22" cy="22" r="5" fill="#34d399"/><text class="name" x="34" y="26">RPi 5</text>
+      <text class="spec" x="16" y="48">4C · 8 GB · .67</text>
+      <text class="tag"  x="16" y="70">k3s AGENT</text><text class="spec" x="16" y="86">Vault (secrets)</text>
+    </g>
+    <!-- RPi4B -->
+    <g transform="translate(830,42)">
+      <rect class="panel" x="0" y="0" width="250" height="96" rx="10"/><rect class="arm" x="0" y="0" width="5" height="96" rx="2"/>
+      <circle cx="22" cy="22" r="5" fill="#34d399"/><text class="name" x="34" y="26">RPi 4B</text>
+      <text class="spec" x="16" y="48">4C · 8 GB · .99</text>
+      <text class="tag"  x="16" y="70">k3s AGENT</text><text class="spec" x="16" y="86">OpenLDAP (directory)</text>
+    </g>
+  </g>
+
+  <!-- MICRO + single-purpose -->
+  <g transform="translate(70,850)">
+    <rect class="group" x="0" y="0" width="1100" height="150" rx="14"/>
+    <text class="tag" x="18" y="26" fill="#2dd4bf">MICRO + SINGLE-PURPOSE NODES</text>
+    <g transform="translate(20,42)">
+      <rect class="panel" x="0" y="0" width="250" height="96" rx="10"/><rect class="arm" x="0" y="0" width="5" height="96" rx="2"/>
+      <circle cx="22" cy="22" r="5" fill="#34d399"/><text class="name" x="34" y="26">OPi Zero 2W ×4</text>
+      <text class="spec" x="16" y="48">H618 4C · 4 GB · standalone WiFi5</text>
+      <text class="tag"  x="16" y="70">k3s AGENTS</text><text class="spec" x="16" y="86">ClusterHAT failed · SD-only, stateless</text>
+    </g>
+    <g transform="translate(290,42)">
+      <rect class="panel" x="0" y="0" width="250" height="96" rx="10"/><rect class="arm" x="0" y="0" width="5" height="96" rx="2"/>
+      <circle cx="22" cy="22" r="5" fill="#34d399"/><text class="name" x="34" y="26">RPi 3B #2</text>
+      <text class="spec" x="16" y="48">4C · 1 GB · .59</text>
+      <text class="tag"  x="16" y="70">OCTOPI</text><text class="spec" x="16" y="86">→ 3D printers ×2</text>
+    </g>
+    <g transform="translate(560,42)">
+      <rect class="panel" x="0" y="0" width="250" height="96" rx="10"/><rect class="arm" x="0" y="0" width="5" height="96" rx="2"/>
+      <circle cx="22" cy="22" r="5" fill="#fbbf24"/><text class="name" x="34" y="26">Odroid-XU3  ⚠</text>
+      <text class="spec" x="16" y="48">8C · 2 GB · eMMC · .51</text>
+      <text class="tag"  x="16" y="70">BUILD AGENT</text><text class="spec" x="16" y="86">flagged unstable — verify</text>
+    </g>
+    <g transform="translate(830,42)">
+      <rect class="panel" x="0" y="0" width="250" height="96" rx="10"/><rect class="arm" x="0" y="0" width="5" height="96" rx="2"/>
+      <circle cx="22" cy="22" r="5" fill="#34d399"/><text class="name" x="34" y="26">Zero 2 W ×4</text>
+      <text class="spec" x="16" y="48">4C · 512 MB · WiFi5</text>
+      <text class="tag"  x="16" y="70">LIGHT APPS</text><text class="spec" x="16" y="86">replacing Zero W in ClusterHAT</text>
+    </g>
+  </g>
+
+  <text class="lbl" x="40" y="1028">Logical view · IPs from the Hardware2 map (10.136.151.x) · see HARDWARE.md · credentials in the map must be rotated</text>
+</svg>

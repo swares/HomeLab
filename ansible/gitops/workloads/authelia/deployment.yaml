@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: authelia
+  namespace: authelia
+spec:
+  replicas: 2
+  minReadySeconds: 30
+  selector:
+    matchLabels:
+      app: authelia
+  template:
+    metadata:
+      labels:
+        app: authelia
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: authelia
+          image: ghcr.io/authelia/authelia:4.39
+          command: ["authelia"]
+          args:
+            - --config
+            - /config/configuration.yml
+            - --config.experimental.filters
+            - template
+          env:
+            - name: AUTHELIA_JWT_SECRET_FILE
+              value: /authelia-secrets/jwt_secret
+            - name: AUTHELIA_SESSION_SECRET_FILE
+              value: /authelia-secrets/session_secret
+            - name: AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE
+              value: /authelia-secrets/storage_encryption_key
+            - name: AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE
+              value: /authelia-secrets/oidc_hmac_secret
+            - name: AUTHELIA_AUTHENTICATION_BACKEND_LDAP_PASSWORD_FILE
+              value: /authelia-secrets/ldap_password
+            - name: AUTHELIA_STORAGE_POSTGRES_PASSWORD_FILE
+              value: /authelia-secrets/storage_pg_password
+          ports:
+            - containerPort: 9091
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: secrets
+              mountPath: /authelia-secrets
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 9091
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 9091
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: config
+          configMap:
+            name: authelia-config
+        - name: secrets
+          secret:
+            secretName: authelia-secrets

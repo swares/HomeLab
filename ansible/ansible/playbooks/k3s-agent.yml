@@ -1,0 +1,79 @@
+---
+# Join a physical host to the existing k3s cluster on H4 as an agent.
+# Reads the node token directly from h4-core (ansible_connection: local).
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/k3s-agent.yml \
+#     --vault-password-file .vault_pass -l opi5pro-2
+#
+# After joining, label the node:
+#   kubectl label node <nodename> role=inference
+- name: Join k3s agent to existing cluster
+  hosts: "{{ target | default('opi5pro-2') }}"
+  become: true
+
+  vars:
+    k3s_server_url: "https://192.168.1.200:6443"   # kube-vip VIP — survives any single server node failure
+    k3s_version: "{{ lookup('vars', 'k3s_version', default='v1.31.4+k3s1') }}"
+
+  pre_tasks:
+    - name: Read node token from h4-core
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: _k3s_token_raw
+      delegate_to: h4-core
+      become: true
+      no_log: true
+
+    - name: Set k3s token fact
+      ansible.builtin.set_fact:
+        k3s_token: "{{ _k3s_token_raw.content | b64decode | trim }}"
+      no_log: true
+
+  tasks:
+    - name: Install dependencies
+      ansible.builtin.apt:
+        name: [curl, iptables, nfs-common]
+        state: present
+        update_cache: true
+
+    - name: Write k3s agent install script
+      ansible.builtin.copy:
+        dest: /tmp/k3s-agent-install.sh
+        mode: "0700"
+        content: |
+          #!/bin/bash
+          set -e
+          export INSTALL_K3S_VERSION="{{ k3s_version }}"
+          export K3S_URL="{{ k3s_server_url }}"
+          export K3S_TOKEN="{{ k3s_token }}"
+          curl -sfL https://get.k3s.io | sh -s - agent --node-label role=inference
+      no_log: true
+
+    - name: Install k3s agent (runs script, up to 5 min)
+      ansible.builtin.shell:
+        cmd: /tmp/k3s-agent-install.sh
+        creates: /usr/local/bin/k3s
+      async: 300
+      poll: 15
+
+    - name: Enable and start k3s-agent
+      ansible.builtin.systemd:
+        name: k3s-agent
+        enabled: true
+        state: started
+
+    - name: Wait for node to appear in cluster
+      ansible.builtin.command:
+        cmd: kubectl get node {{ ansible_hostname }} --no-headers
+      delegate_to: h4-core
+      become: false
+      register: node_ready
+      until: "'Ready' in node_ready.stdout"
+      retries: 20
+      delay: 10
+      changed_when: false
+
+    - name: Show node status
+      ansible.builtin.debug:
+        msg: "{{ node_ready.stdout }}"

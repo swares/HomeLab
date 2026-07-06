@@ -1,0 +1,11 @@
+---
+vault_addr: "http://127.0.0.1:8200"
+
+# Path to the file containing unseal keys (one per line).
+# Populate MANUALLY after `vault operator init` — never commit this file to git.
+# File must be root:root 0400.
+vault_unseal_keys_file: /etc/vault.d/unseal-keys
+
+# Number of keys required to unseal (must match the threshold set at init time).
+# Default Vault init uses threshold=3 out of 5 shares.
+vault_unseal_threshold: 3

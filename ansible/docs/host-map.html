@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Host Map — what each box runs</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#11161d; --chip:#161b22; --border:#2b3440; --chipborder:#262d36;
+    --fg:#e6edf3; --muted:#8b949e; --dim:#6e7681;
+    --x86:#ff6b6b; --ai:#34d399; --agent:#2dd4bf; --infra:#3b82f6;
+    --micro:#8b949e; --edge:#a78bfa; --cluster:#f59e0b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+       font-family:ui-monospace,SFMono-Regular,Menlo,monospace;padding:28px}
+  h1{font-size:24px;margin:0 0 4px;letter-spacing:.5px}
+  .sub{color:var(--muted);font-size:13px;margin:0 0 18px}
+  .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;
+           background:var(--panel);border:1px solid var(--border);border-radius:12px;
+           padding:12px 14px;margin-bottom:8px}
+  .toolbar .lab{color:var(--dim);font-size:11px;letter-spacing:2px;font-weight:700;margin-right:4px}
+  .pill{display:inline-flex;align-items:center;gap:7px;cursor:pointer;user-select:none;
+        border:1px solid var(--chipborder);background:var(--chip);color:var(--fg);
+        border-radius:999px;padding:6px 12px;font-size:12px;transition:.12s}
+  .pill .sw{width:12px;height:12px;border-radius:3px}
+  .pill.off{opacity:.32;filter:grayscale(.5)}
+  .pill:hover{border-color:var(--muted)}
+  .btn{cursor:pointer;border:1px solid var(--chipborder);background:#1c2128;color:var(--fg);
+       border-radius:8px;padding:6px 12px;font-size:12px}
+  .btn:hover{border-color:var(--muted)}
+  .count{color:var(--dim);font-size:11px;margin:10px 2px 16px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:16px}
+  .card{position:relative;background:var(--panel);border:1px solid var(--border);
+        border-radius:12px;padding:16px 16px 16px 20px}
+  .card .tab{position:absolute;left:0;top:0;bottom:0;width:6px;border-radius:4px}
+  .card .top{display:flex;justify-content:space-between;align-items:baseline;gap:8px}
+  .card h2{font-size:15px;margin:0;font-weight:700}
+  .card .ip{color:var(--dim);font-size:10px;white-space:nowrap}
+  .card .specs{color:var(--muted);font-size:10.5px;margin:3px 0 10px}
+  .card .note{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:1px;
+              color:#0d1117;background:var(--cluster);border-radius:4px;padding:1px 6px;margin-left:6px}
+  ul{list-style:none;margin:0;padding:0}
+  li{font-size:11px;color:#9aa5b1;padding:3px 0 3px 14px;position:relative}
+  li:before{content:"›";position:absolute;left:0;color:var(--dim)}
+  .card.hidden{display:none}
+</style>
+</head>
+<body>
+  <h1>Host Map — what each box runs</h1>
+  <p class="sub">One card per physical host. Toggle a class to filter; colour = hardware class. Good for spotting overloaded nodes.</p>
+
+  <div class="toolbar" id="toolbar"><span class="lab">FILTER</span></div>
+  <div style="margin:8px 0 0"><span class="btn" id="all">Select all</span>
+       <span class="btn" id="clear">Clear</span></div>
+  <div class="count" id="count"></div>
+
+  <div class="grid" id="grid"></div>
+
+<script>
+const CLASSES = {
+  x86:    {label:"x86 (Proxmox / NAS)",  color:"var(--x86)"},
+  ai:     {label:"ARM AI (OPi 5 Pro)",   color:"var(--ai)"},
+  agent:  {label:"ARM agents (Zero 2W)", color:"var(--agent)"},
+  infra:  {label:"ARM infra (RPi)",      color:"var(--infra)"},
+  edge:   {label:"edge (M5Stack)",       color:"var(--edge)"},
+  cluster:{label:"in-cluster / logical", color:"var(--cluster)"},
+  micro:  {label:"micro / retire",       color:"var(--micro)"},
+};
+
+// host -> everything it runs. qty = physical units the card represents.
+const HOSTS = [
+ {name:"Odroid-H4", ip:"192.168.1.160", cls:"x86", qty:1,
+  specs:"i3-N305 · 8C/8T · 64 GB · 32 EU · 4TB NVMe + 8TB md1 + 5.45TB md0",
+  svc:["NAS (NFS / SMB)","MinIO — S3 object store","restic (md1 → secondary + offsite)",
+       "shared NFS → Proxmox VMs","OpenVINO — embeddings / STT / vision",
+       "Immich (photos) — server · Postgres · ML (CPU; OpenVINO/rknn optional)","OpenNebula (installed, optional)"]},
+ {name:"N150 #1", ip:"10.136.151.71", cls:"x86", qty:1,
+  specs:"Intel N150 · 4C/4T · 16 GB · 24 EU",
+  svc:["Proxmox VE node","OpenVINO iGPU inference (opt.)"]},
+ {name:"N150 #2", ip:"10.136.151.72", cls:"x86", qty:1,
+  specs:"Intel N150 · 4C/4T · 16 GB · 24 EU",
+  svc:["Proxmox VE node","OpenVINO iGPU inference (opt.)"]},
+ {name:"N150 #3", ip:"TBD", cls:"x86", qty:1,
+  specs:"Intel N150 · 4C/4T · 16 GB · 24 EU · living-room",
+  svc:["Proxmox VE node","TV / browse VM (cores+disk+iGPU passthrough)"]},
+ {name:"OPi 5 Pro #1", ip:"10.136.151.83", cls:"ai", qty:1,
+  specs:"RK3588S · 8C · 16 GB · 6 TOPS NPU · Mali-G610",
+  svc:["RKLLama — NPU LLM serving","bare-metal k3s server","Claude Code orchestrator (Tier 3)"]},
+ {name:"OPi 5 Pro #2", ip:"10.136.151.97", cls:"ai", qty:1,
+  specs:"RK3588S · 8C · 16 GB · 6 TOPS NPU · Mali-G610",
+  svc:["RKLLama — NPU LLM serving","bare-metal k3s server","OpenTelemetry collector",
+       "(GitLab moved to a Proxmox VM)"]},
+ {name:"OPi Zero 2W ×4", ip:"TBD", cls:"agent", qty:4,
+  specs:"H618 · 4C · 4 GB · Mali-G31 · WiFi5 (pool)",
+  svc:["k3s agent pool (stateless)","node / metric exporters","one = DNS secondary","one = Mosquitto MQTT broker"]},
+ {name:"RPi 5", ip:"10.136.151.67", cls:"infra", qty:1,
+  specs:"Cortex-A76 · 4C · 8 GB",
+  svc:["Vault — secrets / PKI","(k3s agent capable)"]},
+ {name:"RPi 4B", ip:"10.136.151.99", cls:"infra", qty:1,
+  specs:"Cortex-A72 · 4C · 8 GB",
+  svc:["OpenLDAP — directory","(k3s agent capable)"]},
+ {name:"RPi 3B #1 ⚠", ip:"10.136.151.73", cls:"micro", qty:1,
+  specs:"Cortex-A53 · 4C · 1 GB · on-board power fault",
+  svc:["low-voltage even on 5V/5A PSU","retire / RMA — not load-bearing"]},
+ {name:"RPi 3B #2", ip:"10.136.151.59", cls:"infra", qty:1,
+  specs:"Cortex-A53 · 4C · 1 GB · wired",
+  svc:["DNS — Pi-hole (primary, wired)","(3D printer offline — host reused)"]},
+ {name:"Odroid-XU3 ⚠", ip:"10.136.151.51", cls:"infra", qty:1,
+  specs:"Exynos5422 · 8C · 2 GB · flagged flaky",
+  svc:["build agent / light pods"]},
+ {name:"RPi Zero W ×3", ip:"TBD", cls:"micro", qty:3,
+  specs:"ARMv6 1C · 512 MB · 32-bit · WiFi",
+  svc:["ultra-light tasks only","retirement-grade (1 DOA)"]},
+ {name:"M5Stack", ip:"USB / edge", cls:"edge", qty:1,
+  specs:"ESP32-S3 · AX630C ~6 TOPS",
+  svc:["escalation router (front-end)","edge AI / voice"]},
+ {name:"HostMon", ip:"LAN (proxy/VLAN)", cls:"edge", qty:1,
+  specs:"Waveshare ESP32-S3-Touch-LCD-4.3 · 8 MB PSRAM",
+  svc:["black-box probes: ping/DNS/port/HTTP/SSL/trace","fleet health on 4.3\" LCD","webhook alerts → lab relay","HTTP-only — front with reverse proxy"]},
+ {name:"in-cluster / logical", ip:"k3s", cls:"cluster", qty:0,
+  specs:"pods — float across cluster nodes",
+  svc:["Argo CD (GitOps)","LiteLLM gateway + m5stack-adapter","Prometheus · Grafana · Loki · Tempo",
+       "CI runners · multi-arch buildx","platform k3s (in Proxmox VMs)",
+       "GitLab (Proxmox VM — moved off OPi 5 Pro #2)",
+       "provisioning: cloud-init + Ansible · PlatformIO/OTA (no MAAS)"]},
+];
+
+const active = new Set(Object.keys(CLASSES));
+const DEVTOTAL = HOSTS.reduce((a,h)=>a+h.qty,0);
+
+const toolbar = document.getElementById("toolbar");
+for (const [key,meta] of Object.entries(CLASSES)){
+  const pill = document.createElement("span");
+  pill.className="pill"; pill.dataset.cls=key;
+  pill.innerHTML = `<span class="sw" style="background:${meta.color}"></span>${meta.label}`;
+  pill.onclick = () => { active.has(key) ? active.delete(key) : active.add(key); render(); };
+  toolbar.appendChild(pill);
+}
+document.getElementById("all").onclick   = () => { Object.keys(CLASSES).forEach(k=>active.add(k)); render(); };
+document.getElementById("clear").onclick = () => { active.clear(); render(); };
+
+const grid = document.getElementById("grid");
+HOSTS.forEach(h=>{
+  const card = document.createElement("div"); card.className="card"; card.dataset.cls=h.cls; card.dataset.qty=h.qty;
+  const note = h.note ? `<span class="note">${h.note}</span>` : "";
+  card.innerHTML =
+    `<span class="tab" style="background:var(--${h.cls})"></span>`+
+    `<div class="top"><h2></h2><span class="ip"></span></div>`+
+    `<div class="specs"></div><ul></ul>`;
+  card.querySelector("h2").textContent = h.name;
+  if(h.note){ card.querySelector("h2").insertAdjacentHTML("beforeend", note); }
+  card.querySelector(".ip").textContent = h.ip;
+  card.querySelector(".specs").textContent = h.specs;
+  const ul = card.querySelector("ul");
+  h.svc.forEach(s=>{ const li=document.createElement("li"); li.textContent=s; ul.appendChild(li); });
+  grid.appendChild(card);
+});
+
+function render(){
+  document.querySelectorAll(".pill").forEach(p=>p.classList.toggle("off", !active.has(p.dataset.cls)));
+  let shownCards=0, shownDev=0;
+  document.querySelectorAll(".card").forEach(card=>{
+    const on = active.has(card.dataset.cls);
+    card.classList.toggle("hidden", !on);
+    if(on){ shownCards++; shownDev += parseInt(card.dataset.qty,10); }
+  });
+  document.getElementById("count").textContent =
+    `showing ${shownCards} cards · ${shownDev} of ${DEVTOTAL} devices`;
+}
+render();
+</script>
+</body>
+</html>

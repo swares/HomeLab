@@ -47,7 +47,7 @@
 
     - name: Install system prerequisites (pacman — Arch/Manjaro)
       community.general.pacman:
-        name: [git, python3, python-pip]
+        name: [git, python3, python-pip, gcc]    # gcc needed for numpy source build on Python 3.14+
         state: present
         update_cache: true
       when: ansible_os_family == 'Archlinux'
@@ -84,20 +84,82 @@
         state: present
       when: _rkllama_reqs.files | length > 0
 
-    # No requirements.txt — install runtime deps directly and skip torch.
-    # RKLLama's NPU inference calls the RKLLM C library; torch is only needed for
-    # model conversion (which happens on the H4, not on the OPis).
-    - name: Install RKLLama runtime deps (no requirements.txt; skipping torch — not needed for NPU inference)
+    # Install the rkllama package itself (editable, --no-deps) so that
+    # `import rkllama` resolves correctly without adding PYTHONPATH.
+    # --no-deps skips torch==2.8.0 (not available on aarch64 PyPI) and the
+    # heavy audio/video stack (whisper, piper-tts, diffusers, etc.) which
+    # aren't needed for text inference.
+    - name: Install RKLLama package (editable, --no-deps)
+      ansible.builtin.command:
+        cmd: "{{ rkllama_dir }}/venv/bin/pip install -e {{ rkllama_dir }} --no-deps --quiet"
+      changed_when: true   # re-run on each play to pick up git updates
+
+    # Install the runtime deps needed for text inference + vision (cv2 is imported at module
+    # level in format_utils.py so cannot be skipped even for pure text inference).
+    # Skipped: torch (not on aarch64 PyPI), openai-whisper (needs torch),
+    #          piper-tts (complex native TTS deps), webrtcvad (audio VAD).
+    - name: Install RKLLama runtime deps
       ansible.builtin.pip:
         name:
-          - "flask>=2.3"
-          - "requests>=2.31"
-          - "huggingface-hub>=0.20"
-          - "python-dotenv>=1.0"
-          - "transformers>=4.40"
+          - "Flask==2.3.2"
+          - "flask-cors==6.0.1"
+          - "requests==2.31.0"
+          - "huggingface_hub==0.35.1"
+          - "python-dotenv==1.1.1"
+          - "transformers==4.57.6"
+          - "pydantic>=2.7"           # unpinned — pydantic-core 2.11.9 won't compile on Python 3.14
+          - "psutil==7.1.0"
+          - "pillow==11.3.0"
+          - "numpy>=1.24"             # unpinned — 1.26.4 has no cp314 wheel
+          - "opencv-python-headless"  # cv2 — imported at module level in format_utils.py
+          - "diffusers>=0.30"         # may be imported in image pipeline modules
+          - "soundfile"
+          - "pydub"
         virtualenv: "{{ rkllama_dir }}/venv"
         state: present
-      when: _rkllama_reqs.files | length == 0
+
+    # Flask 2.3.x uses pkgutil.get_loader which was removed in Python 3.14.
+    # Upgrade to Flask 3.x on Arch. State: latest so it overwrites the pinned 2.3.2.
+    - name: Upgrade Flask to 3.x for Python 3.14 compatibility (Arch only)
+      ansible.builtin.pip:
+        name: "Flask>=3.0"
+        virtualenv: "{{ rkllama_dir }}/venv"
+        state: latest
+      when: ansible_os_family == 'Archlinux'
+
+    # On Arch/Python 3.14 pydantic-core must be compiled with ABI3 forward compat.
+    # This is a no-op on Debian (pip already installed a pre-built wheel above).
+    - name: Ensure pydantic-core is compiled with Python 3.14 ABI3 compat (Arch only)
+      ansible.builtin.command:
+        cmd: "{{ rkllama_dir }}/venv/bin/pip install 'pydantic>=2.7' --no-binary pydantic-core --quiet"
+      environment:
+        PYO3_USE_ABI3_FORWARD_COMPATIBILITY: "1"
+      when: ansible_os_family == 'Archlinux'
+      ignore_errors: true    # non-fatal — service can still start if pydantic resolves another way
+
+    # Install the bundled rknn-toolkit-lite2 wheel that matches the host Python version.
+    # Wheels for cp39/310/311/312 are shipped in src/rkllama/lib/.
+    - name: Find rknn-toolkit-lite2 wheel for this Python version
+      ansible.builtin.find:
+        paths: "{{ rkllama_dir }}/src/rkllama/lib"
+        patterns: "rknn_toolkit_lite2-*-cp{{ ansible_python.version.major }}{{ ansible_python.version.minor }}-*.whl"
+      register: _rknn_wheel
+
+    - name: Install rknn-toolkit-lite2 wheel
+      ansible.builtin.pip:
+        name: "{{ _rknn_wheel.files[0].path }}"
+        virtualenv: "{{ rkllama_dir }}/venv"
+        state: present
+      when: _rknn_wheel.files | length > 0
+      ignore_errors: true    # non-fatal — only needed for RKNN vision models, not LLM inference
+
+    - name: Warn if no matching rknn-toolkit-lite2 wheel found
+      ansible.builtin.debug:
+        msg: >
+          No rknn_toolkit_lite2 wheel found for Python
+          {{ ansible_python.version.major }}.{{ ansible_python.version.minor }} —
+          NPU inference will fail. Supported: cp39/310/311/312.
+      when: _rknn_wheel.files | length == 0
 
     - name: Create models directory (writable by ansible user for scp)
       ansible.builtin.file:

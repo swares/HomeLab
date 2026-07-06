@@ -1,0 +1,23 @@
+# Copy to terraform.tfvars and fill in. Keep terraform.tfvars OUT of git (see .gitignore).
+proxmox_endpoint  = "https://10.136.151.71:8006/"
+proxmox_api_token = "tofu@pve!tf=00000000-0000-0000-0000-000000000000"
+proxmox_ssh_user  = "root"
+
+# Use the shared NFS datastore (exported by the H4) so images/disks are visible cluster-wide.
+iso_datastore = "nfs-h4"
+vm_datastore  = "nfs-h4"
+template_node = "pve-n150-1"
+
+gateway     = "10.136.151.1"
+dns_servers = ["10.136.151.1"] # set to your DNS host once assigned
+
+ssh_keys = [
+  "ssh-ed25519 AAAA... you@workstation",
+]
+
+# Optional: override the default k3s pool, pin static IPs, add dev/sandbox VMs, etc.
+# vms = {
+#   k3s-server-1 = { node = "pve-n150-1", cores = 2, memory = 6144, disk_size = 40, ip = "10.136.151.30/24", tags = ["k3s","server"] }
+#   k3s-agent-1  = { node = "pve-n150-2", cores = 2, memory = 4096, disk_size = 30, ip = "10.136.151.31/24", tags = ["k3s","agent"] }
+#   k3s-agent-2  = { node = "pve-n150-3", cores = 2, memory = 4096, disk_size = 30, ip = "10.136.151.32/24", tags = ["k3s","agent"] }
+# }

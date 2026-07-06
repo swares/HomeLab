@@ -1,0 +1,106 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "gitAuthor": "Renovate Bot <renovate@lab.home.arpa>",
+
+  "kubernetes": {
+    "fileMatch": ["^gitops/workloads/.+\\.ya?ml$"]
+  },
+
+  "regexManagers": [
+    {
+      "description": "k3s version pin in Ansible group_vars — comment-driven, matches '# renovate: datasource=github-releases depName=rancher/k3s'",
+      "fileMatch": ["^ansible/inventory/group_vars/all/k3s\\.yml$"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)\\nk3s_version: \"(?<currentValue>[^\"]+)\""
+      ],
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver-coerced"
+    },
+    {
+      "description": "Restic binary version if pinned in an Ansible vars file",
+      "fileMatch": ["^ansible/inventory/group_vars/.+\\.yml$"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)\\n\\w+_version: \"(?<currentValue>[^\"]+)\""
+      ],
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver-coerced"
+    }
+  ],
+
+  "packageRules": [
+    {
+      "description": "Skip private local registry — Renovate cannot reach registry.lab.home.arpa",
+      "matchPackagePatterns": ["^registry\\.lab\\.home\\.arpa/"],
+      "enabled": false
+    },
+    {
+      "description": "Group all Immich components — they must move together to stay compatible",
+      "matchPackagePatterns": ["^ghcr\\.io/immich-app/"],
+      "groupName": "Immich stack",
+      "groupSlug": "immich",
+      "schedule": ["before 4am on Monday"],
+      "automerge": false,
+      "labels": ["renovate", "immich"]
+    },
+    {
+      "description": "Auto-merge patch-level updates for everything except Immich (handled above)",
+      "matchUpdateTypes": ["patch"],
+      "excludePackagePatterns": ["^ghcr\\.io/immich-app/"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true,
+      "labels": ["renovate", "automerge"]
+    },
+    {
+      "description": "Minor updates: open PR, require human review",
+      "matchUpdateTypes": ["minor"],
+      "automerge": false,
+      "labels": ["renovate", "minor-update"]
+    },
+    {
+      "description": "Major updates: open PR, add prominent label",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["renovate", "major-update", "needs-review"]
+    },
+    {
+      "description": "Digest pins (floating tags → digest): auto-merge immediately",
+      "matchUpdateTypes": ["pin"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true,
+      "labels": ["renovate", "pin"]
+    },
+    {
+      "description": "k3s releases — never auto-merge; k3s upgrades require the Ansible drain cycle",
+      "matchDepNames": ["rancher/k3s"],
+      "automerge": false,
+      "labels": ["renovate", "k3s", "needs-review"]
+    },
+    {
+      "description": "Pi-hole — no Renovate tracking (uses pihole -up internally); placeholder to suppress noise",
+      "matchDepNames": ["pi-hole/pi-hole"],
+      "enabled": false
+    }
+  ],
+
+  "prCreation": "immediate",
+  "prHourlyLimit": 4,
+  "prConcurrentLimit": 8,
+  "rebaseWhen": "conflicted",
+  "commitMessagePrefix": "chore(deps): ",
+  "commitMessageAction": "update",
+
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["security", "renovate"]
+  },
+
+  "schedule": ["after 2am and before 6am"],
+  "timezone": "America/Chicago",
+
+  "labels": ["renovate"],
+  "assignees": ["swares"],
+  "reviewers": ["swares"]
+}

@@ -1,0 +1,106 @@
+<svg viewBox="0 0 1240 780" xmlns="http://www.w3.org/2000/svg" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+  <defs>
+    <style>
+      .bg{fill:#0d1117;} .panel{fill:#161b22;stroke:#2b3440;stroke-width:1.2;}
+      .title{fill:#e6edf3;font-size:27px;font-weight:700;letter-spacing:1px;}
+      .sub{fill:#8b949e;font-size:13px;} .name{fill:#e6edf3;font-size:14px;font-weight:700;}
+      .spec{fill:#8b949e;font-size:11px;} .tag{fill:#6e7681;font-size:10px;letter-spacing:1px;}
+      .router{fill:#1f1605;stroke:#fbbf24;stroke-width:2;}
+      .local{fill:#102a1c;stroke:#34d399;stroke-width:1.6;}
+      .api{fill:#0c1a2e;stroke:#3b82f6;stroke-width:1.6;}
+      .code{fill:#1a1113;stroke:#ff6b6b;stroke-width:1.6;}
+      .flow{stroke:#8b949e;stroke-width:1.8;fill:none;} .flbl{fill:#c9d1d9;font-size:11px;font-weight:700;}
+      .warn{fill:#ff8a8a;font-size:10px;}
+    </style>
+    <marker id="a" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8b949e"/></marker>
+  </defs>
+  <rect class="bg" x="0" y="0" width="1240" height="780"/>
+  <text class="title" x="40" y="50">Escalation Router — 3-tier local-first AI</text>
+  <text class="sub" x="42" y="72">Built into the framework: NetDevice_Router + NetDevice_ClaudeAPI + orchestrator.py · one chat surface</text>
+
+  <!-- chat surface -->
+  <g transform="translate(40,150)">
+    <rect class="panel" x="0" y="0" width="170" height="110" rx="10"/>
+    <text class="name" x="14" y="28">Chat surface</text>
+    <text class="spec" x="14" y="50">voice / dashboard /</text>
+    <text class="spec" x="14" y="68">/api/route/set?ask=</text>
+    <text class="tag"  x="14" y="94">user never sees the tier</text>
+  </g>
+  <path class="flow" d="M210 205 L260 205" marker-end="url(#a)"/>
+
+  <!-- ROUTER -->
+  <g transform="translate(260,120)">
+    <rect class="router" x="0" y="0" width="300" height="320" rx="12"/>
+    <rect x="0" y="0" width="6" height="320" rx="3" fill="#fbbf24"/>
+    <text class="name" x="20" y="30" fill="#fcd34d">Router (on Core or Pi)</text>
+    <text class="spec" x="20" y="52">classifies every turn on-device</text>
+    <rect x="20" y="68" width="262" height="74" rx="8" fill="#0d1117" stroke="#3a4555"/>
+    <text class="name" x="32" y="90" font-size="12">1 · prefilter (fast, blunt)</text>
+    <text class="spec" x="32" y="110">keywords / "/" paths / .ext</text>
+    <text class="spec" x="32" y="128">decisive hit → skip step 2</text>
+    <rect x="20" y="152" width="262" height="88" rx="8" fill="#0d1117" stroke="#3a4555"/>
+    <text class="name" x="32" y="174" font-size="12">2 · LLM tie-breaker (optional)</text>
+    <text class="spec" x="32" y="194">ambiguous middle → ONE yes/no</text>
+    <text class="spec" x="32" y="212">on the local 0.5B model:</text>
+    <text class="spec" x="32" y="230">"needs a coding/agent? YES/NO"</text>
+    <text class="tag"  x="20" y="266">ROUTER_LLM_TIEBREAK</text>
+    <text class="spec" x="20" y="288">YES → escalate · NO → local.</text>
+    <text class="spec" x="20" y="306">Not answer-voting — a routing call.</text>
+  </g>
+
+  <!-- TIER 1 local -->
+  <g transform="translate(640,90)">
+    <rect class="local" x="0" y="0" width="540" height="96" rx="10"/><rect x="0" y="0" width="5" height="96" rx="2" fill="#34d399"/>
+    <text class="name" x="18" y="28">Tier 1 · LOCAL (on-device NPU)</text>
+    <text class="spec" x="18" y="50">M5Stack Module LLM (AX630C) and/or RKLLama on OPi 5 Pro (RK3588S)</text>
+    <text class="spec" x="18" y="70">trivial chat · tone / memory / formatting · fast · cheap · private</text>
+    <text class="tag"  x="18" y="88">route_taken = "local"</text>
+  </g>
+  <!-- TIER 2 api -->
+  <g transform="translate(640,206)">
+    <rect class="api" x="0" y="0" width="540" height="96" rx="10"/><rect x="0" y="0" width="5" height="96" rx="2" fill="#3b82f6"/>
+    <text class="name" x="18" y="28">Tier 2 · CLAUDE API (the model)</text>
+    <text class="spec" x="18" y="50">NetDevice_ClaudeAPI → Messages API · claude-haiku-4-5 · text in/out, no tools</text>
+    <text class="spec" x="18" y="70">smart text needing NO repo: explain / summarise / draft / translate</text>
+    <text class="tag"  x="18" y="88">route_taken = "direct_api"  ·  key lives on the Pi by default</text>
+  </g>
+  <!-- TIER 3 claude code -->
+  <g transform="translate(640,322)">
+    <rect class="code" x="0" y="0" width="540" height="118" rx="10"/><rect x="0" y="0" width="5" height="118" rx="2" fill="#ff6b6b"/>
+    <text class="name" x="18" y="28">Tier 3 · CLAUDE CODE (the agent)</text>
+    <text class="spec" x="18" y="50">Pi orchestrator (orchestrator.py --serve) spawns: claude -p … --output-format stream-json</text>
+    <text class="spec" x="18" y="70">shell · filesystem · git · in WORKDIR · streams SSE back to the router</text>
+    <text class="spec" x="18" y="90">hard / coding / multi-file / "run this" turns</text>
+    <text class="tag"  x="18" y="110">route_taken = "escalated"  ·  device → Pi → Claude Code (Core holds no key)</text>
+  </g>
+
+  <!-- routed edges -->
+  <path class="flow" d="M560 180 C 600 138, 610 138, 640 138" marker-end="url(#a)"/>
+  <path class="flow" d="M560 250 C 600 254, 610 254, 640 254" marker-end="url(#a)"/>
+  <path class="flow" d="M560 320 C 600 381, 610 381, 640 381" marker-end="url(#a)"/>
+  <text class="flbl" x="575" y="150">trivial</text>
+  <text class="flbl" x="572" y="246">smart text</text>
+  <text class="flbl" x="578" y="398">hard</text>
+
+  <!-- accounting + governance -->
+  <g transform="translate(40,500)">
+    <rect class="panel" x="0" y="0" width="560" height="120" rx="10"/>
+    <text class="tag" x="16" y="26">ACCOUNTING</text>
+    <text class="spec" x="16" y="50">route_taken (local / direct_api / escalated) is published per turn to</text>
+    <text class="spec" x="16" y="70">the dashboard, MQTT, and the SD log — so local-vs-cloud usage shows</text>
+    <text class="spec" x="16" y="90">up in Home Assistant / Grafana for free. Tune the split with the</text>
+    <text class="spec" x="16" y="110">ROUTER_*_KEYWORDS and the tie-breaker prompt.</text>
+  </g>
+  <g transform="translate(620,500)">
+    <rect class="panel" x="0" y="0" width="560" height="120" rx="10"/>
+    <text class="tag" x="16" y="26">GOVERNANCE (Pi orchestrator)</text>
+    <text class="spec" x="16" y="50">Fail-closed: --serve refuses to start without an IP allowlist or bearer.</text>
+    <text class="spec" x="16" y="70">MAX_CONCURRENT_AGENTS cap · CLAUDE_TIMEOUT watchdog · per-request history.</text>
+    <text class="warn" x="16" y="92">Tier 3 runs Claude Code with shell+fs in WORKDIR — keep it scoped,</text>
+    <text class="warn" x="16" y="110">allowlisted, and behind TLS. The Anthropic key lives here, not on the Core.</text>
+  </g>
+
+  <text class="tag" x="40" y="660">FRONT-END M5Stack CoreS3 · BRAIN 2× Orange Pi 5 Pro (host model + orchestrator) · SPECIALIST Claude Code (headless)</text>
+  <text class="sub" x="40" y="700">Your three options = the three tiers: (1) local→Claude API = Tier 2 · (2) local→Pi+Claude Code = Tier 3 · (3) tie-breaker = the step-2 yes/no.</text>
+  <text class="sub" x="40" y="722">This complements the LiteLLM gateway: the router is the per-turn decision; the gateway is the shared OpenAI-compatible endpoint apps call.</text>
+</svg>

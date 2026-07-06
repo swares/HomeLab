@@ -1,0 +1,19 @@
+[Unit]
+Description=restic backup of live NAS data (8TB primary) + copy to 6TB secondary
+RequiresMountsFor={{ cold_primary_mount }} {{ cold_secondary_mount }} {{ nas_mount }}
+
+[Service]
+Type=oneshot
+Environment=RESTIC_REPOSITORY={{ restic_repo }}
+Environment=RESTIC_PASSWORD_FILE={{ restic_password_file }}
+# Initialize the primary repo once if needed, then back up.
+ExecStartPre=-/usr/bin/restic init
+ExecStart=/usr/bin/restic backup {{ nas_mount }} {{ cold_primary_mount }}/VMs \
+  {{ cold_primary_mount }}/immich \
+  --tag nas --host {{ inventory_hostname }}
+# Retention is policy-driven and lives HERE only — never run forget/prune by hand.
+ExecStartPost=/usr/bin/restic forget --prune \
+  --keep-daily 7 --keep-weekly 4 --keep-monthly 6
+# Redundancy: replicate the primary repo to the 6TB disk (two-disk safety, no RAID needed).
+# restic copy treats --repo2 as fully independent, so it needs its own password source.
+ExecStartPost=-/usr/bin/restic copy --repo2 {{ restic_copy_repo }} --password-file2 {{ restic_password_file }}

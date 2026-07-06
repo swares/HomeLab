@@ -1,0 +1,23 @@
+# Secrets -- never commit
+ansible/.vault_pass
+ansible/files/pull-secret.json
+ansible/files/*.secret
+**/*.key
+**/*.pem
+kubeconfig
+.kube/
+
+# Local reference docs (not for git)
+LAB-URLS.md
+
+# Local state
+*.retry
+.DS_Store
+
+# terraform / opentofu
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+crash.log

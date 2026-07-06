@@ -1,0 +1,60 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(oc get:*)",
+      "Bash(oc describe:*)",
+      "Bash(oc logs:*)",
+      "Bash(oc project:*)",
+      "Bash(kubectl get:*)",
+      "Bash(kubectl describe:*)",
+      "Bash(kubectl logs:*)",
+      "Bash(helm list:*)",
+      "Bash(argocd app list:*)",
+      "Bash(argocd app get:*)",
+      "Bash(ansible-playbook:* --check*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(systemctl status:*)",
+      "Bash(restic snapshots:*)",
+      "Bash(mdadm --detail:*)",
+      "Bash(lsblk:*)",
+      "Bash(df:*)"
+    ],
+    "ask": [
+      "Bash(oc apply:*)",
+      "Bash(oc delete:*)",
+      "Bash(oc adm:*)",
+      "Bash(helm install:*)",
+      "Bash(helm upgrade:*)",
+      "Bash(argocd app sync:*)",
+      "Bash(ansible-playbook:*)",
+      "Bash(git push:*)",
+      "Bash(lvextend:*)",
+      "Bash(lvcreate:*)"
+    ],
+    "deny": [
+      "Bash(lvremove:*)",
+      "Bash(lvreduce:*)",
+      "Bash(vgremove:*)",
+      "Bash(pvremove:*)",
+      "Bash(mkfs:*)",
+      "Bash(wipefs:*)",
+      "Bash(mdadm --stop:*)",
+      "Bash(mdadm --fail:*)",
+      "Bash(mdadm --remove:*)",
+      "Bash(mdadm --zero-superblock:*)",
+      "Bash(restic forget:*)",
+      "Bash(restic prune:*)",
+      "Bash(oc delete project:*)",
+      "Bash(oc delete namespace:*)",
+      "Bash(oc adm policy add-scc-to-user privileged:*)",
+      "Bash(oc adm policy add-scc-to-user anyuid:*)",
+      "Bash(systemctl stop smbd:*)",
+      "Bash(systemctl stop nfs-server:*)",
+      "Bash(systemctl disable backup-nas:*)",
+      "Bash(systemctl disable backup-etcd:*)",
+      "Bash(rm -rf:*)"
+    ]
+  }
+}
