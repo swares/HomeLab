@@ -1,4 +1,0 @@
----
-# xu3-1 — Odroid XU3/XU4 build agent (192.168.1.64)
-# The board ships with Python 2 as /usr/bin/python; ansible-core requires Python 3.
-ansible_python_interpreter: /usr/bin/python3

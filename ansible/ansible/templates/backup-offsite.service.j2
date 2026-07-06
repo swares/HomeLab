@@ -1,9 +1,0 @@
-[Unit]
-Description=restic copy of the primary repo to OFFSITE (3-2-1)
-After=backup-nas.service
-
-[Service]
-Type=oneshot
-# Creds (RESTIC_PASSWORD_FILE, B2_ACCOUNT_ID/KEY or rclone env) come from /etc/restic/offsite.env
-EnvironmentFile=-/etc/restic/offsite.env
-ExecStart=/bin/bash -c 'test -n "{{ restic_offsite_repo }}" || { echo "no offsite repo configured; skipping"; exit 0; }; restic -r {{ restic_repo }} copy --repo2 {{ restic_offsite_repo }}'

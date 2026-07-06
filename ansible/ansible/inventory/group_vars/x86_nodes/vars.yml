@@ -1,1 +1,0 @@
-ansible_password: "{{ windows_ansible_password }}"
