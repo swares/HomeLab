@@ -2,7 +2,7 @@
 # Each job is independent; failures don't block others.
 #
 # Runner strategy:
-#   - Ansible jobs (check-vault, update-pihole, apt-upgrade) run on the self-hosted
+#   - Ansible jobs (check-vault, update-pihole, apt-upgrade, apply-zswap) run on the self-hosted
 #     runner on H4 so they have LAN access to reach 192.168.1.x hosts.
 #     Register H4: ansible-playbook playbooks/github-runner.yml -e runner_token=<token>
 #   - lab-health-check also runs on self-hosted (needs kubectl + LAN DNS)
@@ -27,7 +27,10 @@ jobs:
     name: Vault seal check
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
+
+      - name: Show checked-out commit
+        run: git log --oneline -3
 
       - name: Write Ansible vault password
         run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
@@ -48,7 +51,10 @@ jobs:
     name: Update Pi-hole
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
+
+      - name: Show checked-out commit
+        run: git log --oneline -3
 
       - name: Write Ansible vault password
         run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
@@ -69,7 +75,10 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     if: vars.SKIP_VM_UPDATES != 'true'
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
+
+      - name: Show checked-out commit
+        run: git log --oneline -3
 
       - name: Write Ansible vault password
         run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
@@ -99,20 +108,17 @@ jobs:
         if: always()
         run: rm -f ansible/.vault_pass
 
-
-  zswap-config:
-    name: zswap configuration
+  apply-zswap:
+    name: Apply zswap config
     runs-on: [self-hosted, Linux, X64]
-    needs: [apt-upgrade]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
       - name: Write Ansible vault password
         run: echo "${{ secrets.ANSIBLE_VAULT_PASS }}" > ansible/.vault_pass && chmod 600 ansible/.vault_pass
 
       - name: Apply zswap config
         run: |
-          ANSIBLE_ROLES_PATH=/home/swares/lab/homelab/homelab/ansible/roles \
           ansible-playbook -i ansible/inventory/hosts.yml \
             ansible/playbooks/zswap.yml \
             --vault-password-file ansible/.vault_pass
@@ -124,19 +130,18 @@ jobs:
   lab-health-check:
     name: Lab health check
     runs-on: [self-hosted, Linux, X64]
-    needs: [apt-upgrade]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
       - name: Set up kubeconfig
         run: |
           mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > /tmp/lab-kubeconfig
-          chmod 600 /tmp/lab-kubeconfig
+          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
 
       - name: Run lab-check.sh
-        run: KUBECONFIG=/tmp/lab-kubeconfig bash scripts/lab-check.sh || true   # informational — don't fail the workflow
+        run: bash scripts/lab-check.sh || true   # informational — don't fail the workflow
 
       - name: Clean up kubeconfig
         if: always()
-        run: rm -f /tmp/lab-kubeconfig
+        run: rm -f ~/.kube/config
