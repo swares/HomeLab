@@ -158,7 +158,7 @@
         kubectl drain {{ inventory_hostname }}
           --ignore-daemonsets
           --delete-emptydir-data
-          --timeout=120s
+          --timeout=300s
       delegate_to: "{{ k3s_control_host }}"
       changed_when: true
 

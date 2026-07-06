@@ -1,0 +1,10 @@
+# Scale CoreDNS to 2 replicas so one copy survives a node drain.
+# k3s deploys CoreDNS via its embedded Helm controller; HelmChartConfig patches the values.
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: coredns
+  namespace: kube-system
+spec:
+  valuesContent: |-
+    replicaCount: 2
