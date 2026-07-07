@@ -19,7 +19,7 @@ metadata:
   name: ollama
   namespace: ai-gateway
 spec:
-  replicas: 1
+  replicas: 0    # opi5pro-1 offline — re-enable when board returns
   selector:
     matchLabels: { app: ollama }
   template:
