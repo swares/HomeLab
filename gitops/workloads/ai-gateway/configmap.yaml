@@ -17,10 +17,11 @@ data:
         litellm_params:
           model: ollama/Qwen3-4B_W8A8_RK3588
           api_base: http://rkllama-opi2:8080
-      - model_name: chat
-        litellm_params:
-          model: ollama/Qwen3-4B_W8A8_RK3588
-          api_base: http://rkllama-opi1:8080
+      # opi5pro-1 offline — re-enable when board returns
+      # - model_name: chat
+      #   litellm_params:
+      #     model: ollama/Qwen3-4B_W8A8_RK3588
+      #     api_base: http://rkllama-opi1:8080
 
       # ── CPU fallback (Ollama in-cluster, no NPU) — uncomment if NPU path degrades ──
       # - model_name: chat-cpu
