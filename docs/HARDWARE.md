@@ -24,7 +24,7 @@ Last verified: 2026-06-29.
 | **Odroid-XU3 #1** | Exynos5422 8C | 2 GB | `192.168.1.64` | — | Build agent (Python <3.8 — excluded from Ansible auto-updates) |
 | **Orange Pi Zero 2W #1** | H618 A53 4C | 4 GB | — | `192.168.1.184` | DNS secondary (dnsmasq) |
 | **Orange Pi Zero 2W #2** | H618 A53 4C | 4 GB | — | `192.168.1.188` | MQTT broker (Mosquitto) |
-| **Orange Pi Zero 2W #3** | H618 A53 4C | 4 GB | — | TBD | Unassigned |
+| **Orange Pi Zero 2W #3** | H618 A53 4C | 4 GB | — | `192.168.1.217` | DNS secondary · Armbian Trixie (Debian 13) |
 | **Orange Pi Zero 2W #4** | H618 A53 4C | 4 GB | — | `192.168.1.99` | Unassigned |
 | **M5Stack LLM** | ESP32-S3 | — | — | USB | Edge AI inference |
 | **HostMon** | ESP32-S3 (Waveshare 4.3") | 8 MB PSRAM | LAN | — | Host prober + status panel |
@@ -52,6 +52,7 @@ Last verified: 2026-06-29.
 | RPi 3B #2 (WiFi) | `B8:27:EB:B2:16:26` | Avoid |
 | OPi Zero 2W #1 | `20:1A:F8:6B:D8:CB` | DNS secondary |
 | OPi Zero 2W #2 | `E0:22:90:6E:5E:3A` | MQTT |
+| OPi Zero 2W #3 | `5C:B3:9F:3B:63:27` | WiFi 2.4G · `192.168.1.217` |
 | OPi Zero 2W #4 | `38:BD:01:3B:8A:30` | — |
 | XU3 #1 | `00:1E:06:61:7A:39` | 1 Gbps wired |
 | HostMon (Waveshare ESP32-S3) | `DC:DA:0C:48:AB:D0` | 1 Gbps wired · `192.168.1.82` |
