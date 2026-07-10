@@ -27,7 +27,7 @@ spec:
       labels: { app: ollama }
     spec:
       nodeSelector:
-        role: inference        # pins to opi5pro-1
+        kubernetes.io/hostname: opi5pro-1
       tolerations:
         - key: node.kubernetes.io/not-ready
           operator: Exists
