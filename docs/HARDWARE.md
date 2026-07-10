@@ -18,7 +18,7 @@ Last verified: 2026-07-10.
 | **N150 mini PC #2** | Intel N150 4C x86 | 16 GB | `192.168.1.21` (br0) | — | KVM hypervisor · Ubuntu 24.04 |
 | **N150 mini PC #3 (HTPC)** | Intel N150 4C x86 | 16 GB | — | `192.168.1.176` | Living-room HTPC |
 | **RPi 5** | Cortex-A76 4C | 8 GB | `192.168.1.128` | `192.168.1.124` (avoid) | HashiCorp Vault |
-| **RPi 4B** | Cortex-A72 4C | 8 GB | `192.168.1.116` | — | DNS secondary (Pi-hole v6) |
+| **RPi 4B** | Cortex-A72 4C | 8 GB | `192.168.1.116` | — | Home Assistant host (Debian 12 Bookworm) |
 | **RPi 3B #2** | Cortex-A53 4C | 1 GB | `192.168.1.148` | `192.168.1.152` (avoid) | DNS primary (Pi-hole pending — needs Bookworm flash) |
 | **RPi 3B #1** | Cortex-A53 4C | 1 GB | — | — | ⚠ on-board power fault — retired |
 | **Odroid-XU3 #1** | Exynos5422 8C | 2 GB | `192.168.1.64` | — | Build agent (Python <3.8 — excluded from Ansible auto-updates) |
@@ -112,7 +112,7 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 | HashiCorp Vault | RPi 5 | `http://192.168.1.128:8200` |
 | DNS primary | RPi 3B #2 | `192.168.1.148` (Pi-hole pending) |
 | DNS secondary | OPi Zero 2W #1 | `192.168.1.184` (dnsmasq fallback) |
-| DNS secondary | RPi 4B | `192.168.1.116` (Pi-hole v6) |
+| Home Assistant | k3s (any node) | `https://ha.apps.lab.home.arpa` |
 | MQTT primary | OPi Zero 2W #2 | `192.168.1.188:1883` (bridges to .99) |
 | MQTT secondary | OPi Zero 2W #4 | `192.168.1.99:1883` (bridges to .188) |
 
