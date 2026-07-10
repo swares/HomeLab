@@ -21,11 +21,11 @@ data:
           model: ollama/Qwen3-4B_W8A8_RK3588
           api_base: http://rkllama-opi2:8080
 
-      # ── CPU fallback (Ollama in-cluster, no NPU) — uncomment if NPU path degrades ──
-      # - model_name: chat-cpu
-      #   litellm_params: { model: ollama/qwen2.5:3b, api_base: "http://ollama:11434" }
-      # - model_name: chat-cpu
-      #   litellm_params: { model: ollama/qwen2.5:3b, api_base: "http://ollama-2:11434" }
+      # ── CPU fallback (Ollama in-cluster, ARM CPU — NPU unavailable until driver 0.9.7) ──
+      - model_name: chat-cpu
+        litellm_params: { model: ollama/qwen2.5:7b, api_base: "http://ollama:11434" }
+      - model_name: chat-cpu
+        litellm_params: { model: ollama/qwen2.5:7b, api_base: "http://ollama-2:11434" }
       # Intel iGPU embeddings/vision via OpenVINO Model Server (OpenAI-compatible).
       - model_name: embeddings
         litellm_params:
