@@ -15,7 +15,7 @@
 #            See ansible/files/ovms/config.json.example for the expected format.
 #   Orchestrator: /etc/orchestrator.env must be created manually on the host containing:
 #            ANTHROPIC_API_KEY=sk-ant-...
-#            SERVE_BEARER=<random token>   (also set as ROUTER_BEARER on the M5Stack)
+#            ROUTER_BEARER=<random token>   (also set as ROUTER_BEARER on the M5Stack)
 #
 # Usage: make ai-nodes
 #        make ai-nodes LIMIT=opi5pro-1     (single node)
@@ -445,12 +445,12 @@
         cmd: python3 -m venv "{{ framework_dir }}/venv"
         creates: "{{ framework_dir }}/venv/bin/python"
 
-    - name: Install orchestrator Python dependencies
+    - name: Install orchestrator Python dependencies (system — service uses /usr/bin/python3)
       ansible.builtin.pip:
         name:
           - requests
           - httpx
-        virtualenv: "{{ framework_dir }}/venv"
+        extra_args: "--break-system-packages"
         state: present
 
     - name: Create WORKDIR
@@ -469,13 +469,21 @@
       args:
         creates: /etc/orchestrator-tls/cert.pem
 
+    - name: Patch orchestrator script — SERVE_PORT reads from environment
+      # Survives git pulls: re-applied after every clone/update.
+      # Needed because the upstream script hardcodes SERVE_PORT=8080 (same as RKLLama).
+      ansible.builtin.lineinfile:
+        path: "{{ framework_dir }}/scripts/orchestrator.py"
+        regexp: '^SERVE_PORT\s*='
+        line: 'SERVE_PORT   = int(os.environ.get("SERVE_PORT", "8080"))'
+
     - name: Ensure /etc/orchestrator.env exists (touch; operator must populate)
       ansible.builtin.copy:
         dest: /etc/orchestrator.env
         content: |
           # Populate before starting orchestrator — do NOT commit this file.
           # ANTHROPIC_API_KEY=sk-ant-...
-          # SERVE_BEARER=<random token matching ROUTER_BEARER on the M5Stack>
+          # ROUTER_BEARER=<random token matching ROUTER_BEARER on the M5Stack>
         owner: root
         mode: "0600"
         force: false    # don't overwrite if already populated
@@ -498,7 +506,7 @@
       ansible.builtin.debug:
         msg: >
           Service is enabled but will refuse to serve until /etc/orchestrator.env on
-          {{ inventory_hostname }} contains ANTHROPIC_API_KEY and SERVE_BEARER.
+          {{ inventory_hostname }} contains ANTHROPIC_API_KEY and ROUTER_BEARER.
           After filling it in: sudo systemctl restart orchestrator
 
   handlers:

@@ -1,7 +1,7 @@
 # Hardware Inventory & Roles
 
 Subnet: `192.168.1.0/24`. Gateway: `192.168.1.1`.
-Last verified: 2026-06-29.
+Last verified: 2026-07-10.
 
 > **Security:** Default passwords (`pi`/`odroid`/`root`) have been rotated on all managed
 > hosts via `ansible/playbooks/rotate-passwords.yml`. Credentials are in Ansible Vault —
@@ -12,7 +12,7 @@ Last verified: 2026-06-29.
 | Device | CPU | RAM | Wired IP | WiFi IP | Role |
 |--------|-----|-----|----------|---------|------|
 | **Odroid-H4 Ultra** | i3-N305 8C/8T x86 | 64 GB DDR5 | `192.168.1.160` | — | **Core: k3s server + NAS** |
-| **Orange Pi 5 Pro #1** | RK3588S 8C ARM | 16 GB | `192.168.1.168` | — | k3s agent · Ollama inference · Arch Linux ARM |
+| **Orange Pi 5 Pro #1** | RK3588S 8C ARM | 16 GB | `192.168.1.168` | — | k3s agent · Ollama inference · Ubuntu 22.04 (Jammy) · 476 GB NVMe |
 | **Orange Pi 5 Pro #2** | RK3588S 8C ARM | 16 GB | `192.168.1.172` | — | k3s agent · Ollama inference · Ubuntu 22.04 |
 | **N150 mini PC #1** | Intel N150 4C x86 | 16 GB | `192.168.1.42` (br0) | — | KVM hypervisor · Ubuntu 24.04 · hosts ldap-1 VM |
 | **N150 mini PC #2** | Intel N150 4C x86 | 16 GB | `192.168.1.21` (br0) | — | KVM hypervisor · Ubuntu 24.04 |
@@ -81,7 +81,7 @@ API: `https://api.lab.home.arpa:6443`.
 | `odroid-nas` | server | `192.168.1.160` | Ubuntu 22.04 | H4 Ultra; also runs NAS |
 | `n150-1` | server | `192.168.1.42` | Ubuntu 24.04 | Also KVM hypervisor (ldap-1 VM) |
 | `n150-2` | server | `192.168.1.21` | Ubuntu 24.04 | Also KVM hypervisor |
-| `opi5pro-1` | agent | `192.168.1.168` | Arch Linux ARM | `role=inference`; NVMe-backed Ollama PVC |
+| `opi5pro-1` | agent | `192.168.1.168` | Ubuntu 22.04 Jammy | `role=inference`; NVMe-backed Ollama PVC (`/mnt/nvme`) |
 | `opi5pro-2` | agent | `192.168.1.172` | Ubuntu 22.04 | `role=inference`; NVMe-backed Ollama PVC |
 
 Ingress: Traefik. DNS: `*.apps.lab.home.arpa` → `192.168.1.160`; `api.lab.home.arpa` → `192.168.1.200` (VIP).
@@ -119,6 +119,8 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 ## Pending / TODO
 
 - octopi (RPi 3B #2): flash Bookworm → run dns.yml → Pi-hole v6
+- ✅ opi5pro-1: reflashed Ubuntu 22.04 Jammy, k3s agent rejoined, NVMe remounted at /mnt/nvme, Ollama models intact (2026-07-10)
+- ✅ opi-zero2w-3: deployed as dns-4 secondary (dnsmasq, Armbian Trixie, 192.168.1.217) (2026-07-10)
 - ✅ lldap JWT secret rotated 2026-07-02
 - ✅ RPi 4B: Pi-hole v6 secondary DNS live at 192.168.1.116 (2026-07-02)
 - ✅ HA k3s: n150-1 + n150-2 joined as server nodes, kube-vip VIP 192.168.1.200 (2026-07-02)

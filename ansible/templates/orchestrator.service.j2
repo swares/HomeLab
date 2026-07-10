@@ -1,5 +1,5 @@
 # Ansible-managed — M5Stack AI escalation orchestrator (Tier 3 / Claude Code)
-# Fail-closed: won't start without CLIENT_ALLOWLIST or SERVE_BEARER set in the env file.
+# Fail-closed: won't start without CLIENT_ALLOWLIST or ROUTER_BEARER set in the env file.
 [Unit]
 Description=M5Stack AI escalation orchestrator (Tier 3)
 After=network.target
@@ -8,11 +8,12 @@ After=network.target
 Type=simple
 User={{ ansible_user }}
 WorkingDirectory={{ orchestrator_workdir }}
-# Secrets (ANTHROPIC_API_KEY, SERVE_BEARER) live in this env file — not in git.
+# Secrets (ANTHROPIC_API_KEY, ROUTER_BEARER) live in this env file — not in git.
 EnvironmentFile=/etc/orchestrator.env
 Environment=WORKDIR={{ orchestrator_workdir }}
 Environment=CLIENT_ALLOWLIST={{ orchestrator_allowlist | default('192.168.1.0/24') }}
 Environment=ORCHESTRATOR_PORT={{ orchestrator_port }}
+Environment=SERVE_PORT={{ orchestrator_port }}
 ExecStart=/usr/bin/python3 /opt/m5stack-framework/scripts/orchestrator.py --serve \
   --port {{ orchestrator_port }} \
   --tls-cert /etc/orchestrator-tls/cert.pem \
