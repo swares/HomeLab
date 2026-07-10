@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: home-assistant
+  namespace: home-assistant
+spec:
+  replicas: 1
+  revisionHistoryLimit: 2
+  selector:
+    matchLabels:
+      app: home-assistant
+  template:
+    metadata:
+      labels:
+        app: home-assistant
+    spec:
+      containers:
+        - name: home-assistant
+          image: ghcr.io/home-assistant/home-assistant:stable
+          ports:
+            - containerPort: 8123
+          env:
+            - name: TZ
+              value: America/Chicago
+          volumeMounts:
+            - name: config
+              mountPath: /config
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8123
+            initialDelaySeconds: 60
+            periodSeconds: 15
+            failureThreshold: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8123
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            failureThreshold: 3
+      initContainers:
+        - name: seed-config
+          image: busybox:1.37
+          command:
+            - sh
+            - -c
+            - |
+              if [ ! -f /config/configuration.yaml ]; then
+                cat > /config/configuration.yaml << 'EOF'
+              # Home Assistant configuration
+              # https://www.home-assistant.io/docs/configuration/
+
+              default_config:
+
+              http:
+                use_x_forwarded_for: true
+                trusted_proxies:
+                  - 10.42.0.0/16   # k3s pod CIDR (Traefik)
+                  - 127.0.0.1
+              EOF
+                echo "Seeded /config/configuration.yaml"
+              else
+                echo "/config/configuration.yaml already exists, skipping"
+              fi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: home-assistant-config
