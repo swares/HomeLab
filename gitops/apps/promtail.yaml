@@ -81,7 +81,7 @@ spec:
             readOnly: true
 
         serviceMonitor:
-          enabled: true        # scrape Promtail metrics via existing Prometheus
+          enabled: false       # disabled — service-metrics.yaml template fails on k8s 1.36 with chart 6.16.0
 
   destination:
     server: https://kubernetes.default.svc
