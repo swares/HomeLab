@@ -86,6 +86,21 @@
       debug:
         msg: "zswap enabled: {{ zswap_status.stdout }}"
 
+    # ---- inotify limits (required for Promtail DaemonSet on busy nodes) ----
+    - name: Set fs.inotify.max_user_instances
+      ansible.posix.sysctl:
+        name: fs.inotify.max_user_instances
+        value: "512"
+        sysctl_set: true
+        reload: true
+
+    - name: Set fs.inotify.max_user_watches
+      ansible.posix.sysctl:
+        name: fs.inotify.max_user_watches
+        value: "524288"
+        sysctl_set: true
+        reload: true
+
   handlers:
     - name: apply sysfs
       command: systemctl restart sysfsutils
