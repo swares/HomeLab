@@ -5,6 +5,7 @@ metadata:
   namespace: authelia
 spec:
   replicas: 2
+  revisionHistoryLimit: 2
   minReadySeconds: 30
   selector:
     matchLabels:
