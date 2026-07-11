@@ -51,7 +51,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
-| RKLLama (NPU LLM) | ✓ | opi5pro-1 (.168) | ~7–8 tok/s 3B on RK3588 NPU |
+| RKLLama (NPU LLM) | ✓ | opi5pro-1 (.168) + opi5pro-2 (.172) | DeepSeek-R1-Distill-Qwen-1.5B_w8a8_g128; driver 0.9.6 limits NPU alloc to ~2.2 GB (blocks 3B+); upgrade to 0.9.7 to unlock |
 | OpenVINO Model Server | ● | H4 + N150 iGPUs | embeddings / STT / vision |
 | LiteLLM gateway | ✓ | k3s · `ai.apps.lab.home.arpa` | unifies backends |
 | m5stack-adapter | ✓ | k3s · odroid-nas node | OpenAI shim for M5Stack; image 0.1.1 (2026-07-11); models: m5, m5-llm, m5-claude |
