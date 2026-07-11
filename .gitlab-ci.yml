@@ -2,21 +2,22 @@
 # HomeLab CI — update validation pipeline
 #
 # Stages:
-#   validate   : run on every MR — lint YAML, dry-run oc apply
-#   sync-check : run on merge to main — wait for ArgoCD sync, probe Routes
+#   validate   : run on every MR — lint YAML, dry-run kubectl apply
+#   sync-check : run on merge to main — wait for ArgoCD sync, probe Ingresses
 #   rollback   : auto-triggered on sync-check failure; manual gate for safety
 #
 # Required CI/CD variables (Settings → CI/CD → Variables):
 #   ARGOCD_SERVER       ArgoCD server address, e.g. argocd.apps.lab.home.arpa
 #   ARGOCD_AUTH_TOKEN   ArgoCD API token (mark Protected + Masked)
-#   KUBECONFIG_B64      base64-encoded kubeconfig for the MicroShift cluster
+#   KUBECONFIG_B64      base64-encoded kubeconfig for the k3s cluster
+#                       (source: /etc/rancher/k3s/k3s.yaml on h4-core, base64 -w0)
 #   GIT_PUSH_TOKEN      GitLab project token with write_repository scope (for rollback push)
 # ──────────────────────────────────────────────────────────────────────────────
 
 default:
-  image: registry.lab.home.arpa/tools/homelab-ci:latest
-  # Fallback if local registry isn't up yet — has oc, kubectl, argocd, yq, curl
-  # image: quay.io/openshift/origin-cli:4.15
+  # Lab registry image — built from Dockerfile in tools/homelab-ci/ (has kubectl, argocd, yq, curl).
+  # Falls back to bitnami/kubectl until the lab image is published.
+  image: registry.apps.lab.home.arpa/tools/homelab-ci:latest
   tags: [k8s]
   before_script:
     - echo "$KUBECONFIG_B64" | base64 -d > /tmp/kubeconfig
@@ -32,7 +33,7 @@ variables:
   APPS_DOMAIN: "apps.lab.home.arpa"
   ARGOCD_OPTS: "--server $ARGOCD_SERVER --auth-token $ARGOCD_AUTH_TOKEN --grpc-web"
   ROLLOUT_TIMEOUT: "300"    # seconds to wait for ArgoCD sync + pod readiness
-  HEALTH_TIMEOUT:  "60"     # seconds for HTTP health probes per Route
+  HEALTH_TIMEOUT:  "60"     # seconds for HTTP health probes per Ingress
 
 # ── STAGE: validate ────────────────────────────────────────────────────────────
 yaml-lint:
@@ -53,11 +54,14 @@ dry-run-apply:
   stage: validate
   script:
     - |
-      echo "==> Dry-run oc apply on every workload manifest"
+      echo "==> Dry-run kubectl apply on every workload manifest"
       FAILED=0
-      find gitops/workloads -name '*.yaml' | while read f; do
+      # Skip Helm values files and kustomization overlays — kubectl can't apply them directly
+      find gitops/workloads -name '*.yaml' \
+        ! -name 'values.yaml' \
+        ! -name 'kustomization.yaml' | while read f; do
         echo "  checking $f"
-        oc apply --dry-run=server -f "$f" || FAILED=1
+        kubectl apply --dry-run=server -f "$f" || FAILED=1
       done
       [ "$FAILED" -eq 0 ] || { echo "Dry-run failed — check output above."; exit 1; }
   rules:
@@ -65,8 +69,8 @@ dry-run-apply:
     - if: '$CI_COMMIT_BRANCH == "main"'
 
 # ── STAGE: sync-check ─────────────────────────────────────────────────────────
-# Runs only after a merge to main.  Waits for ArgoCD to reconcile and then
-# probes every HTTP Route in the cluster.
+# Runs only after a merge to main. Waits for ArgoCD to reconcile and then
+# probes every Ingress host in the cluster.
 argocd-sync-wait:
   stage: sync-check
   script:
@@ -86,8 +90,8 @@ argocd-sync-wait:
     expire_in: 7 days
 
 # ── STAGE: rollback ───────────────────────────────────────────────────────────
-# Auto-triggered when sync-check fails.  Reverts HEAD on main and pushes so
-# ArgoCD selfHeal restores the previous state.  Protected by a manual gate so
+# Auto-triggered when sync-check fails. Reverts HEAD on main and pushes so
+# ArgoCD selfHeal restores the previous state. Protected by a manual gate so
 # a human can inspect before reverting if preferred — remove `when: manual`
 # to make it fully automatic.
 auto-rollback:

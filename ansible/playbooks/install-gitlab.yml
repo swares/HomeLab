@@ -1,0 +1,145 @@
+---
+# install-gitlab.yml — Install GitLab CE (Omnibus) on gitlab-1.
+#
+# What this does:
+#   1. Add GitLab apt repository
+#   2. Install gitlab-ce package
+#   3. Write /etc/gitlab/gitlab.rb (external_url, HTTPS via lab CA cert)
+#   4. Run gitlab-ctl reconfigure
+#   5. Print the initial root password location
+#
+# Prerequisites:
+#   - gitlab-1 VM must be up (provision-gitlab-vm.yml)
+#   - DNS record gitlab.lab.home.arpa → 192.168.1.50 must resolve
+#   - cert-manager lab CA cert+key available for TLS (or let GitLab use self-signed)
+#
+# TLS strategy:
+#   GitLab Omnibus generates a self-signed cert at startup if you point external_url
+#   at https:// and do not supply certs. For the lab we leave it self-signed and
+#   configure runners + the CI pipeline to trust it via ADDITIONAL_CA_CERT_BUNDLE.
+#   To use the lab CA instead, copy cert/key to /etc/gitlab/ssl/ and set:
+#     nginx['ssl_certificate']     = "/etc/gitlab/ssl/gitlab.lab.home.arpa.crt"
+#     nginx['ssl_certificate_key'] = "/etc/gitlab/ssl/gitlab.lab.home.arpa.key"
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/install-gitlab.yml \
+#     --vault-password-file .vault_pass [--check]
+#
+# Initial root password:  sudo cat /etc/gitlab/initial_root_password
+# Web UI:  https://gitlab.lab.home.arpa  (or https://192.168.1.50 until DNS propagates)
+
+- name: Install GitLab CE on gitlab-1
+  hosts: gitlab_servers
+  become: true
+  gather_facts: true
+
+  vars:
+    gitlab_external_url:  "https://gitlab.lab.home.arpa"
+    gitlab_edition:       gitlab-ce
+    gitlab_ssh_port:      22
+    # Runner registration token — set after GitLab is up via
+    #   sudo gitlab-rails runner "puts Gitlab::CurrentSettings.runners_registration_token"
+    # Store the result in Vault at secret/lab/gitlab/runner_token and reference via ESO.
+
+  tasks:
+    # ── Repository ────────────────────────────────────────────────────────────
+    - name: Install apt prerequisites
+      ansible.builtin.apt:
+        name: [curl, ca-certificates, tzdata, perl]
+        state: present
+        update_cache: true
+
+    - name: Add GitLab apt repo script
+      ansible.builtin.get_url:
+        url: https://packages.gitlab.com/install/repositories/gitlab/gitlab-ce/script.deb.sh
+        dest: /tmp/gitlab-repo.sh
+        mode: "0755"
+        timeout: 60
+
+    - name: Run GitLab apt repo setup
+      ansible.builtin.command: bash /tmp/gitlab-repo.sh
+      args:
+        creates: /etc/apt/sources.list.d/gitlab_gitlab-ce.list
+
+    # ── Install ───────────────────────────────────────────────────────────────
+    - name: Install gitlab-ce (this takes several minutes)
+      ansible.builtin.apt:
+        name: "{{ gitlab_edition }}"
+        state: present
+        update_cache: true
+      environment:
+        EXTERNAL_URL: "{{ gitlab_external_url }}"
+      async: 900
+      poll: 15
+
+    # ── Configure ─────────────────────────────────────────────────────────────
+    - name: Write /etc/gitlab/gitlab.rb
+      ansible.builtin.copy:
+        dest: /etc/gitlab/gitlab.rb
+        mode: "0600"
+        content: |
+          # Managed by Ansible (install-gitlab.yml). Manual edits will be overwritten.
+          external_url '{{ gitlab_external_url }}'
+
+          # SSH clone port — default 22 on the VM's LAN IP
+          gitlab_rails['gitlab_shell_ssh_port'] = {{ gitlab_ssh_port }}
+
+          # LLDAP / LDAP authentication (optional — enable once lldap group is created)
+          # gitlab_rails['ldap_enabled'] = true
+          # gitlab_rails['ldap_servers'] = YAML.load <<-'EOS'
+          #   main:
+          #     label: 'Lab LDAP'
+          #     host: '192.168.1.70'
+          #     port: 3890
+          #     uid: 'uid'
+          #     bind_dn: 'uid=admin,ou=people,dc=lab,dc=home,dc=arpa'
+          #     password: 'CHANGEME'
+          #     encryption: 'plain'
+          #     base: 'dc=lab,dc=home,dc=arpa'
+          # EOS
+
+          # Prometheus monitoring — GitLab's built-in, reachable on :9090 locally
+          prometheus['enable'] = false    # use the cluster kube-prometheus-stack instead
+          alertmanager['enable'] = false
+          node_exporter['enable'] = true  # scraped by Prometheus at :9100
+
+          # Reduce memory footprint for a shared lab VM
+          puma['worker_processes'] = 2
+          sidekiq['concurrency'] = 5
+          postgresql['shared_buffers'] = "256MB"
+
+          # Registry — disabled; lab uses the in-cluster registry.apps.lab.home.arpa
+          registry['enable'] = false
+
+          # Time zone
+          gitlab_rails['time_zone'] = 'America/Chicago'
+      notify: Reconfigure GitLab
+
+    - name: Flush handlers (run reconfigure now)
+      ansible.builtin.meta: flush_handlers
+
+    # ── Verify ────────────────────────────────────────────────────────────────
+    - name: Check GitLab service status
+      ansible.builtin.command: gitlab-ctl status
+      register: _gl_status
+      changed_when: false
+      failed_when: false
+
+    - name: Show service status
+      ansible.builtin.debug:
+        msg: "{{ _gl_status.stdout_lines }}"
+
+    - name: Remind — retrieve initial root password
+      ansible.builtin.debug:
+        msg: >
+          GitLab is up at {{ gitlab_external_url }}.
+          Initial root password: sudo cat /etc/gitlab/initial_root_password
+          (file is deleted 24h after first reconfigure — change the password immediately).
+          After logging in, go to Admin → CI/CD → Runners to get the registration token,
+          then store it in Vault at secret/lab/gitlab/runner_token.
+
+  handlers:
+    - name: Reconfigure GitLab
+      ansible.builtin.command: gitlab-ctl reconfigure
+      async: 600
+      poll: 15

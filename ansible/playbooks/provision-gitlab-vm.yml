@@ -1,0 +1,165 @@
+---
+# provision-gitlab-vm.yml — Create the gitlab-1 KVM VM on n150-1.
+#
+# What this does:
+#   1. Download Ubuntu 22.04 cloud image (cached in /var/lib/libvirt/images)
+#   2. Resize a copy to 80 GB for GitLab data
+#   3. Generate cloud-init seed ISO (user-data + network-config)
+#   4. Launch the VM via virt-install with a static LAN IP (192.168.1.50)
+#   5. Wait for SSH to become available
+#
+# Prerequisites:
+#   - n150-1 must already be bootstrapped (bootstrap-kvm.yml — br0 bridge up, LV mounted)
+#   - SSH public key for swares must be present on the control node at ~/.ssh/id_ed25519.pub
+#   - ansible/.vault_pass for vault-encrypted secrets
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/provision-gitlab-vm.yml \
+#     --vault-password-file .vault_pass [--check]
+#
+# After completion, run install-gitlab.yml to install GitLab CE.
+
+- name: Provision gitlab-1 VM on n150-1
+  hosts: n150-1
+  become: true
+  gather_facts: true
+
+  vars:
+    vm_name:        gitlab-1
+    vm_vcpus:       4
+    vm_ram_mb:      8192
+    vm_disk_gb:     80
+    vm_ip:          192.168.1.50
+    vm_gw:          192.168.1.1
+    vm_dns:         192.168.1.148        # octopi Pi-hole
+    vm_mac:         "52:54:00:gl:ab:01"  # deterministic — avoids DHCP collisions
+    vm_bridge:      br0
+    image_dir:      /var/lib/libvirt/images
+    base_image_url: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
+    base_image:     "{{ image_dir }}/jammy-server-cloudimg-amd64.img"
+    vm_disk:        "{{ image_dir }}/{{ vm_name }}.qcow2"
+    seed_iso:       "{{ image_dir }}/{{ vm_name }}-seed.iso"
+    ansible_pub_key: "{{ lookup('file', '~/.ssh/id_ed25519.pub') }}"
+
+  tasks:
+    # ── Guard — skip if VM already exists ────────────────────────────────────
+    - name: Check if VM already defined
+      ansible.builtin.command: virsh dominfo {{ vm_name }}
+      register: _vm_exists
+      changed_when: false
+      failed_when: false
+
+    - name: Abort if VM already exists
+      ansible.builtin.meta: end_host
+      when: _vm_exists.rc == 0
+
+    # ── Base image ────────────────────────────────────────────────────────────
+    - name: Download Ubuntu 22.04 cloud image (cached)
+      ansible.builtin.get_url:
+        url: "{{ base_image_url }}"
+        dest: "{{ base_image }}"
+        mode: "0644"
+        timeout: 300
+      register: _img_dl
+
+    - name: Create VM disk (copy + resize)
+      ansible.builtin.shell: |
+        cp "{{ base_image }}" "{{ vm_disk }}"
+        qemu-img resize "{{ vm_disk }}" {{ vm_disk_gb }}G
+      args:
+        creates: "{{ vm_disk }}"
+
+    # ── cloud-init seed ISO ───────────────────────────────────────────────────
+    - name: Create cloud-init staging dir
+      ansible.builtin.file:
+        path: /tmp/{{ vm_name }}-seed
+        state: directory
+        mode: "0755"
+
+    - name: Write cloud-init user-data
+      ansible.builtin.copy:
+        dest: /tmp/{{ vm_name }}-seed/user-data
+        mode: "0644"
+        content: |
+          #cloud-config
+          hostname: {{ vm_name }}
+          fqdn: {{ vm_name }}.lab.home.arpa
+          users:
+            - name: swares
+              groups: [sudo, adm]
+              shell: /bin/bash
+              sudo: ALL=(ALL) NOPASSWD:ALL
+              ssh_authorized_keys:
+                - {{ ansible_pub_key }}
+          package_update: true
+          package_upgrade: true
+          packages:
+            - curl
+            - ca-certificates
+            - openssh-server
+          runcmd:
+            - systemctl enable --now ssh
+
+    - name: Write cloud-init network-config (static IP)
+      ansible.builtin.copy:
+        dest: /tmp/{{ vm_name }}-seed/network-config
+        mode: "0644"
+        content: |
+          version: 2
+          ethernets:
+            enp1s0:
+              match:
+                macaddress: "{{ vm_mac }}"
+              set-name: enp1s0
+              addresses: [{{ vm_ip }}/24]
+              gateway4: {{ vm_gw }}
+              nameservers:
+                addresses: [{{ vm_dns }}, 1.1.1.1]
+              dhcp4: false
+
+    - name: Write empty meta-data
+      ansible.builtin.copy:
+        dest: /tmp/{{ vm_name }}-seed/meta-data
+        mode: "0644"
+        content: |
+          instance-id: {{ vm_name }}
+          local-hostname: {{ vm_name }}
+
+    - name: Build cloud-init seed ISO
+      ansible.builtin.command: >
+        cloud-localds -N /tmp/{{ vm_name }}-seed/network-config
+        {{ seed_iso }}
+        /tmp/{{ vm_name }}-seed/user-data
+        /tmp/{{ vm_name }}-seed/meta-data
+      args:
+        creates: "{{ seed_iso }}"
+
+    # ── VM install ────────────────────────────────────────────────────────────
+    - name: Launch gitlab-1 VM via virt-install
+      ansible.builtin.command: >
+        virt-install
+          --name {{ vm_name }}
+          --vcpus {{ vm_vcpus }}
+          --ram {{ vm_ram_mb }}
+          --disk path={{ vm_disk }},format=qcow2,bus=virtio
+          --disk path={{ seed_iso }},device=cdrom
+          --network bridge={{ vm_bridge }},model=virtio,mac={{ vm_mac }}
+          --os-variant ubuntu22.04
+          --import
+          --noautoconsole
+          --autostart
+      args:
+        creates: /etc/libvirt/qemu/{{ vm_name }}.xml
+
+    # ── Wait for SSH ──────────────────────────────────────────────────────────
+    - name: Wait for SSH on {{ vm_ip }} (up to 5 min)
+      ansible.builtin.wait_for:
+        host: "{{ vm_ip }}"
+        port: 22
+        delay: 15
+        timeout: 300
+        state: started
+
+    - name: Confirm VM is reachable
+      ansible.builtin.debug:
+        msg: "gitlab-1 is up at {{ vm_ip }} — run install-gitlab.yml next"
