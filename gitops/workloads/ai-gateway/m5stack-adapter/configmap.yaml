@@ -4,7 +4,7 @@ metadata: { name: m5stack-adapter-env, namespace: ai-gateway }
 data:
   # Point at your device(s). Override per-model with M5_MODELS if they live on
   # different hosts (e.g. route on the Pi orchestrator, llm on the CoreS3).
-  M5_HOST: "https://m5stack.lab.home.arpa"   # 192.168.1.71 — registered in dnsmasq/lab DNS
+  M5_HOST: "http://m5stack.lab.home.arpa"    # 192.168.1.71 — HTTP only (port 80), no TLS on device
   M5_TLS_VERIFY: "false"     # device uses a self-signed cert
   M5_IDLE_TIMEOUT: "90"
   M5_MAX_TOTAL: "1800"
