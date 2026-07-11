@@ -8,32 +8,36 @@
 #   - chrony handles large clock steps (reboots, drift) more aggressively with
 #     `makestep`, which matters for LDAP cert validity and k8s token expiry.
 #
+# OS-family handling:
+#   - Debian/Ubuntu: install chrony, mask timesyncd.
+#   - Arch Linux (dns-2, opi-zero2w-1): chrony has a libnettle conflict with
+#     dnsmasq — configure systemd-timesyncd directly instead.
+#   - xu3-1 excluded: Python 2 / too old for ansible-core.
+#
 # What it does:
-#   - All hosts: install chrony, mask systemd-timesyncd, sync to public pools.
-#   - h4-core only: also serve time to 192.168.1.0/24 (allow directive).
-#   - All hosts: verify sync and report offset.
+#   - h4-core: chrony + serve time to 192.168.1.0/24.
+#   - All other Debian/Ubuntu hosts: chrony client, prefer h4-core LAN peer.
+#   - Arch hosts: timesyncd configured with h4-core + public pools.
 #
 # Usage:
 #   ansible-playbook -i inventory/hosts.yml chrony.yml --vault-password-file .vault_pass --check
 #   ansible-playbook -i inventory/hosts.yml chrony.yml --vault-password-file .vault_pass
 #   ansible-playbook -i inventory/hosts.yml chrony.yml --vault-password-file .vault_pass -l rpi5
 
-- name: Configure chrony NTP on Linux lab hosts
-  hosts: all:!x86_nodes:!embedded
+# ── Play 1: Debian/Ubuntu hosts — chrony ─────────────────────────────────────
+- name: Configure chrony on Debian/Ubuntu hosts
+  hosts: all:!x86_nodes:!embedded:!xu3-1
   become: true
 
   vars:
-    # Public pool sources — four strata for redundancy.
-    _ntp_pools:
-      - pool 0.pool.ntp.org iburst
-      - pool 1.pool.ntp.org iburst
-      - pool 2.pool.ntp.org iburst
-      - pool 3.pool.ntp.org iburst
-    # h4-core serves time to the LAN; all other hosts peer against it first.
     _h4_ip: "192.168.1.160"
     _is_h4: "{{ ansible_host == _h4_ip or ansible_connection == 'local' }}"
 
   tasks:
+    - name: Skip Arch Linux hosts (handled in Play 2)
+      ansible.builtin.meta: end_host
+      when: ansible_os_family == 'Archlinux'
+
     - name: Install chrony
       ansible.builtin.package:
         name: chrony
@@ -44,7 +48,7 @@
         name: systemd-timesyncd
         masked: true
         state: stopped
-      failed_when: false   # not present on all distros
+      failed_when: false
 
     - name: Write chrony config — h4-core (server + client)
       ansible.builtin.copy:
@@ -67,12 +71,12 @@
       when: _is_h4 | bool
       notify: Restart chrony
 
-    - name: Write chrony config — all other hosts (client, prefers h4-core)
+    - name: Write chrony config — client (prefers h4-core LAN server)
       ansible.builtin.copy:
         dest: /etc/chrony/chrony.conf
         mode: "0644"
         content: |
-          # Managed by Ansible (chrony.yml). Client: prefers h4-core LAN server.
+          # Managed by Ansible (chrony.yml). Client — prefers h4-core LAN server.
           server {{ _h4_ip }} iburst prefer
           pool 0.pool.ntp.org iburst
           pool 1.pool.ntp.org iburst
@@ -91,8 +95,9 @@
         name: chrony
         enabled: true
         state: started
+        daemon_reload: true   # required after fresh package install
 
-    - name: Flush handlers (apply config before verifying)
+    - name: Flush handlers
       ansible.builtin.meta: flush_handlers
 
     - name: Wait for initial sync (up to 15 s)
@@ -115,4 +120,56 @@
     - name: Restart chrony
       ansible.builtin.systemd:
         name: chrony
+        state: restarted
+        daemon_reload: true
+
+# ── Play 2: Arch Linux hosts — configure systemd-timesyncd ───────────────────
+# chrony installs nettle 4.0 which breaks dnsmasq on these hosts.
+# timesyncd is already present as part of systemd; just configure it.
+- name: Configure timesyncd on Arch Linux hosts
+  hosts: all:!x86_nodes:!embedded:!xu3-1
+  become: true
+
+  vars:
+    _h4_ip: "192.168.1.160"
+
+  tasks:
+    - name: Run only on Arch Linux
+      ansible.builtin.meta: end_host
+      when: ansible_os_family != 'Archlinux'
+
+    - name: Configure timesyncd NTP servers
+      ansible.builtin.copy:
+        dest: /etc/systemd/timesyncd.conf
+        mode: "0644"
+        content: |
+          # Managed by Ansible (chrony.yml).
+          [Time]
+          NTP={{ _h4_ip }} 0.pool.ntp.org 1.pool.ntp.org 2.pool.ntp.org
+          FallbackNTP=3.pool.ntp.org
+      notify: Restart timesyncd
+
+    - name: Enable and start systemd-timesyncd
+      ansible.builtin.systemd:
+        name: systemd-timesyncd
+        enabled: true
+        state: started
+
+    - name: Flush handlers
+      ansible.builtin.meta: flush_handlers
+
+    - name: Report sync status
+      ansible.builtin.command: timedatectl timesync-status
+      register: _status
+      changed_when: false
+      failed_when: false
+
+    - name: Show sync status
+      ansible.builtin.debug:
+        msg: "{{ _status.stdout_lines }}"
+
+  handlers:
+    - name: Restart timesyncd
+      ansible.builtin.systemd:
+        name: systemd-timesyncd
         state: restarted
