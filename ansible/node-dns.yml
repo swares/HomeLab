@@ -1,0 +1,69 @@
+---
+# Configure systemd-resolved on cluster nodes to resolve *.lab.home.arpa via lab DNS.
+#
+# Problem: k3s agent/server nodes use their default DNS (often public) and cannot
+# resolve *.lab.home.arpa hostnames — including registry.apps.lab.home.arpa, which
+# breaks image pulls on any node other than h4-core (which has /etc/hosts workaround).
+#
+# Fix: drop-in resolved config that routes lab.home.arpa queries to lab DNS servers.
+# The "~" prefix makes lab.home.arpa a routing-only domain — public queries are
+# unaffected. This avoids the race between lab and public DNS seen with symmetric config.
+#
+# Targets: k3s_agents + k3s server nodes (h4-core excluded — ansible_connection: local
+# and already has /etc/hosts workaround).
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml node-dns.yml --check   # dry run
+#   ansible-playbook -i inventory/hosts.yml node-dns.yml           # apply
+#   ansible-playbook -i inventory/hosts.yml node-dns.yml -l opi5pro-2  # single node
+
+- name: Configure lab DNS routing on cluster nodes
+  hosts: k3s_agents:k3s_new_servers
+  become: true
+
+  vars:
+    lab_dns_servers:
+      - 192.168.1.148   # dns-1 (octopi — Pi-hole v6 primary)
+      - 192.168.1.184   # dns-2 (opi-zero2w-1 — dnsmasq secondary)
+      - 192.168.1.217   # dns-4 (opi-zero2w-3 — dnsmasq secondary)
+    lab_domain: lab.home.arpa
+
+  tasks:
+    - name: Ensure resolved drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/resolved.conf.d
+        state: directory
+        mode: "0755"
+
+    - name: Write lab DNS routing drop-in
+      ansible.builtin.copy:
+        dest: /etc/systemd/resolved.conf.d/10-lab-dns.conf
+        mode: "0644"
+        content: |
+          # Managed by Ansible (node-dns.yml).
+          # Routes *.{{ lab_domain }} queries to lab DNS servers only.
+          # "~" prefix = routing domain: lab.home.arpa goes here, public DNS unchanged.
+          [Resolve]
+          DNS={{ lab_dns_servers | join(' ') }}
+          Domains=~{{ lab_domain }}
+      notify: Restart resolved
+
+    - name: Flush handlers (apply DNS change immediately)
+      ansible.builtin.meta: flush_handlers
+
+    - name: Verify lab hostname resolves from node
+      ansible.builtin.command:
+        cmd: resolvectl query registry.apps.{{ lab_domain }}
+      register: _dns_check
+      changed_when: false
+      failed_when: false
+
+    - name: Show DNS resolution result
+      ansible.builtin.debug:
+        msg: "{{ _dns_check.stdout_lines + _dns_check.stderr_lines }}"
+
+  handlers:
+    - name: Restart resolved
+      ansible.builtin.systemd:
+        name: systemd-resolved
+        state: restarted
