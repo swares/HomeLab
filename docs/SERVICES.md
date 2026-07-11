@@ -26,7 +26,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | Loki (logs) | ○ | k3s | |
 | Alertmanager | ○ | k3s | |
 | MQTT broker (Mosquitto) | ✓ | opi-zero2w-2 (.188) primary · opi-zero2w-4 (.99) secondary | HA bridge — topics mirrored bidirectionally at QoS 1; M5Stack auto-fails over to secondary |
-| chrony / NTP | ○ | all hosts | load-bearing for LDAP/k8s cert validity |
+| chrony / NTP | ✓ | all Linux hosts | h4-core serves stratum 2 to LAN; all others peer against it; Arch hosts use timesyncd; xu3-1 excluded (old Python) |
 
 ## IaaS (L1)
 
