@@ -5,7 +5,11 @@ spec:
   replicas: 1
   selector: { matchLabels: { app: litellm } }
   template:
-    metadata: { labels: { app: litellm } }
+    metadata:
+      labels: { app: litellm }
+      annotations:
+        # Stakater Reloader: auto-restart this pod when litellm-config ConfigMap changes.
+        reloader.stakater.com/auto: "true"
     spec:
       securityContext:
         runAsNonRoot: true
