@@ -1,0 +1,118 @@
+---
+# chrony.yml — Install and configure NTP sync on all Linux lab hosts.
+#
+# Why chrony over systemd-timesyncd:
+#   - timesyncd is client-only; chrony can also serve time to the LAN.
+#   - h4-core is always-on and makes a reliable local NTP server — cluster
+#     nodes, RPis, and SBCs converge faster against a LAN peer than public pools.
+#   - chrony handles large clock steps (reboots, drift) more aggressively with
+#     `makestep`, which matters for LDAP cert validity and k8s token expiry.
+#
+# What it does:
+#   - All hosts: install chrony, mask systemd-timesyncd, sync to public pools.
+#   - h4-core only: also serve time to 192.168.1.0/24 (allow directive).
+#   - All hosts: verify sync and report offset.
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml chrony.yml --vault-password-file .vault_pass --check
+#   ansible-playbook -i inventory/hosts.yml chrony.yml --vault-password-file .vault_pass
+#   ansible-playbook -i inventory/hosts.yml chrony.yml --vault-password-file .vault_pass -l rpi5
+
+- name: Configure chrony NTP on Linux lab hosts
+  hosts: all:!x86_nodes:!embedded
+  become: true
+
+  vars:
+    # Public pool sources — four strata for redundancy.
+    _ntp_pools:
+      - pool 0.pool.ntp.org iburst
+      - pool 1.pool.ntp.org iburst
+      - pool 2.pool.ntp.org iburst
+      - pool 3.pool.ntp.org iburst
+    # h4-core serves time to the LAN; all other hosts peer against it first.
+    _h4_ip: "192.168.1.160"
+    _is_h4: "{{ ansible_host == _h4_ip or ansible_connection == 'local' }}"
+
+  tasks:
+    - name: Install chrony
+      ansible.builtin.package:
+        name: chrony
+        state: present
+
+    - name: Mask systemd-timesyncd (conflicts with chrony on port 123)
+      ansible.builtin.systemd:
+        name: systemd-timesyncd
+        masked: true
+        state: stopped
+      failed_when: false   # not present on all distros
+
+    - name: Write chrony config — h4-core (server + client)
+      ansible.builtin.copy:
+        dest: /etc/chrony/chrony.conf
+        mode: "0644"
+        content: |
+          # Managed by Ansible (chrony.yml). h4-core — NTP server + client.
+          pool 0.pool.ntp.org iburst
+          pool 1.pool.ntp.org iburst
+          pool 2.pool.ntp.org iburst
+          pool 3.pool.ntp.org iburst
+
+          # Serve time to the lab LAN so other hosts converge faster.
+          allow 192.168.1.0/24
+
+          driftfile /var/lib/chrony/drift
+          makestep 1.0 3
+          rtcsync
+          logdir /var/log/chrony
+      when: _is_h4 | bool
+      notify: Restart chrony
+
+    - name: Write chrony config — all other hosts (client, prefers h4-core)
+      ansible.builtin.copy:
+        dest: /etc/chrony/chrony.conf
+        mode: "0644"
+        content: |
+          # Managed by Ansible (chrony.yml). Client: prefers h4-core LAN server.
+          server {{ _h4_ip }} iburst prefer
+          pool 0.pool.ntp.org iburst
+          pool 1.pool.ntp.org iburst
+          pool 2.pool.ntp.org iburst
+          pool 3.pool.ntp.org iburst
+
+          driftfile /var/lib/chrony/drift
+          makestep 1.0 3
+          rtcsync
+          logdir /var/log/chrony
+      when: not (_is_h4 | bool)
+      notify: Restart chrony
+
+    - name: Enable and start chrony
+      ansible.builtin.systemd:
+        name: chrony
+        enabled: true
+        state: started
+
+    - name: Flush handlers (apply config before verifying)
+      ansible.builtin.meta: flush_handlers
+
+    - name: Wait for initial sync (up to 15 s)
+      ansible.builtin.command: chronyc waitsync 3 0.1 0 5
+      register: _wait
+      changed_when: false
+      failed_when: false
+
+    - name: Report sync status
+      ansible.builtin.command: chronyc tracking
+      register: _tracking
+      changed_when: false
+      failed_when: false
+
+    - name: Show tracking output
+      ansible.builtin.debug:
+        msg: "{{ _tracking.stdout_lines }}"
+
+  handlers:
+    - name: Restart chrony
+      ansible.builtin.systemd:
+        name: chrony
+        state: restarted
