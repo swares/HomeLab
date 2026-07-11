@@ -30,14 +30,16 @@ Each accelerator node runs a small model-serving daemon that exposes an HTTP API
   `.rkllm` with the `rkllm-toolkit` (do the conversion **on the H4 or an x86 box** — it needs
   many GB of RAM/swap — never on the Pi). Pre-converted Qwen2.5/Llama-3.2-3B/Phi-3 builds
   exist on Hugging Face to start fast.
-- **M5Stack → your framework.** It already exposes the AX630C over `GET /api/llm/set?ask=…`
-  plus `GET /api/llm` for the streamed reply, and publishes over MQTT (Mosquitto on
-  opi-zero2w-2, HA-bridged to opi-zero2w-4). That's an inference
-  endpoint as-is — no extra work to stand it up.
+- **M5Stack → your framework.** It already exposes the AX630C over `POST /api/llm/set?ask=…`
+  (firmware CSRF guard requires `X-Requested-With: XMLHttpRequest` header; GET returns 405)
+  plus `GET /api/llm` for the streamed reply. Poll response fields are nested under a `"readings"`
+  key. Publishes over MQTT (Mosquitto on opi-zero2w-2, HA-bridged to opi-zero2w-4). The
+  `m5stack-adapter` (image 0.1.1, deployed 2026-07-11) handles all of this — no manual protocol
+  wiring needed for LiteLLM integration.
 - **Intel iGPU → OpenVINO Model Server (OVMS).** Runs embeddings/STT/vision models on the
   iGPU and recent versions expose an OpenAI-compatible API.
 
-Then a single **LiteLLM gateway** (running in MicroShift, deployed by Argo) presents **one
+Then a single **LiteLLM gateway** (running in k3s, deployed by Argo) presents **one
 OpenAI-compatible `/v1` endpoint** and routes by model name to the right backend, with
 load-balancing across the two OPis, failover, key management, and logging. Apps — Claude
 workflows, Home Assistant, anything — point at `ai.apps.lab.home.arpa` and never need to know
