@@ -38,12 +38,12 @@ data:
         litellm_params: { model: ollama/llama3.2:3b, api_base: "http://ollama:11434" }
       - model_name: fast
         litellm_params: { model: ollama/llama3.2:3b, api_base: "http://ollama-2:11434" }
-      # Intel iGPU embeddings/vision via OpenVINO Model Server (OpenAI-compatible).
+      # Embeddings via nomic-embed-text in Ollama (ARM CPU).
+      # OVMS/bge-small deferred: /dev/dri missing on h4-core (i915 not loaded).
       - model_name: embeddings
-        litellm_params:
-          model: openai/bge-small
-          api_base: http://openvino:8000/v3
-          api_key: "none"
+        litellm_params: { model: ollama/nomic-embed-text, api_base: "http://ollama:11434" }
+      - model_name: embeddings
+        litellm_params: { model: ollama/nomic-embed-text, api_base: "http://ollama-2:11434" }
       # M5Stack tiers via the adapter (OpenAI-compatible shim for /api/{slug}).
       # "m5" = the on-device 3-tier escalation router (local NPU → Claude API → Claude Code);
       # the others expose the Module LLM and the direct Claude client individually.
