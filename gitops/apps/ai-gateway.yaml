@@ -7,6 +7,8 @@ spec:
     repoURL: git@github.com:swares/HomeLab.git
     targetRevision: main
     path: gitops/workloads/ai-gateway
+    directory:
+      recurse: true
   destination: { server: https://kubernetes.default.svc, namespace: ai-gateway }
   syncPolicy:
     automated: { prune: true, selfHeal: true }
