@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: gitlab-runner
+  namespace: argocd
+spec:
+  project: default
+  sources:
+    # Source 1: Helm chart from GitLab's chart registry
+    - repoURL: https://charts.gitlab.io
+      chart: gitlab-runner
+      # renovate: datasource=helm registryUrl=https://charts.gitlab.io depName=gitlab-runner
+      targetRevision: 0.73.2
+      helm:
+        valueFiles:
+          - $values/gitops/workloads/gitlab-runner/values.yaml
+    # Source 2: values file from this repo
+    - repoURL: https://github.com/swares/HomeLab.git
+      targetRevision: main
+      ref: values
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: gitlab-runner
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+  # NOTE: ExternalSecret (runner token) must be populated in Vault before
+  # this Application will sync successfully. See values.yaml for bootstrap steps.

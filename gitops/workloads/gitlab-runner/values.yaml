@@ -1,0 +1,74 @@
+# gitlab-runner Helm values — kubernetes executor for the lab k3s cluster.
+#
+# Deployment notes:
+#   - GitLab must be up before this can register. The runnerToken comes from
+#     Admin → CI/CD → Runners in the GitLab UI (GitLab 16+ uses runner tokens,
+#     not the legacy registration token).
+#   - Store the token in Vault at secret/lab/gitlab/runner_token, then create
+#     an ExternalSecret that writes it to the Secret named below.
+#   - ArgoCD manages this via gitops/apps/gitlab-runner.yaml.
+#
+# Runner token bootstrap (one-time after GitLab is live):
+#   1. Log in to https://gitlab.lab.home.arpa as root.
+#   2. Admin → CI/CD → Runners → New instance runner → copy token.
+#   3. vault kv put secret/lab/gitlab runner_token=glrt-...
+#   4. kubectl -n gitlab-runner create secret generic gitlab-runner-secret \
+#        --from-literal=runner-token=$(vault kv get -field=runner_token secret/lab/gitlab)
+#   5. ArgoCD will then sync and register the runner automatically.
+
+gitlabUrl: https://gitlab.lab.home.arpa
+
+# Reference the Secret created by ESO (see external-secret.yaml in this dir)
+secret: gitlab-runner-secret
+
+## Runner configuration
+runners:
+  config: |
+    [[runners]]
+      name = "k3s-kubernetes"
+      url = "https://gitlab.lab.home.arpa"
+      executor = "kubernetes"
+      [runners.kubernetes]
+        namespace = "gitlab-runner"
+        image = "ubuntu:22.04"
+        # Trust the lab CA so the runner can talk to GitLab over self-signed TLS
+        ca_file = "/etc/ssl/certs/ca-certificates.crt"
+        # Pull images through the in-cluster registry mirror when available
+        pull_policy = ["if-not-present"]
+        # Give build pods reasonable resources
+        [runners.kubernetes.node_selector]
+          "kubernetes.io/hostname" = "n150-1"   # build jobs on the x86 node
+        [runners.kubernetes.pod_labels]
+          "app" = "gitlab-runner-job"
+        [[runners.kubernetes.volumes.host_path]]
+          name = "docker-sock"
+          mount_path = "/var/run/docker.sock"
+          host_path = "/var/run/docker.sock"
+          read_only = false
+
+## Resource limits for the runner manager pod itself
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+## Pin to n150-1 (x86)
+nodeSelector:
+  kubernetes.io/hostname: n150-1
+
+## RBAC — runner needs to create/watch job pods in its namespace
+rbac:
+  create: true
+  clusterWideAccess: false
+
+## Service account
+serviceAccount:
+  create: true
+  name: gitlab-runner
+
+## Additional CA cert so the runner trusts the self-signed GitLab cert
+# Uncomment and populate once the lab CA cert is available as a ConfigMap.
+# certsSecretName: lab-ca-cert
