@@ -10,8 +10,8 @@ spec:
       annotations:
         reloader.stakater.com/auto: "true"
     spec:
-      # Pin to odroid-nas: OPi agent nodes don't resolve *.apps.lab.home.arpa
-      # (their /etc/resolv.conf doesn't include lab DNS servers).
+      # Pin to odroid-nas: device at 192.168.1.71 is on the same LAN segment.
+      # OPi nodes can now resolve *.apps.lab.home.arpa (node-dns.yml applied).
       nodeSelector:
         kubernetes.io/hostname: odroid-nas
       securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
@@ -19,7 +19,13 @@ spec:
         - name: adapter
           # Image is BUILT FROM THE FRAMEWORK REPO (scripts/openai_adapter/), not here.
           # Pin the tag you pushed; bump it when the framework's protocol/adapter changes.
-          # Push: DOCKER_BUILDKIT=0 docker build --no-cache -f openai_adapter/Dockerfile -t registry.apps.lab.home.arpa/m5stack-adapter:<ver> . && docker save ... | k3s ctr images import -
+          # Build+push (Zot registry rejects docker push; use skopeo instead):
+          #   DOCKER_BUILDKIT=0 docker build --no-cache -f openai_adapter/Dockerfile \
+          #     -t registry.apps.lab.home.arpa/m5stack-adapter:<ver> .
+          #   docker save registry.apps.lab.home.arpa/m5stack-adapter:<ver> -o /tmp/adapter.tar
+          #   skopeo copy --dest-tls-verify=false docker-archive:/tmp/adapter.tar \
+          #     docker://registry.apps.lab.home.arpa/m5stack-adapter:<ver>
+          #   k3s ctr images import /tmp/adapter.tar  # cache on h4-core for IfNotPresent pulls
           image: registry.apps.lab.home.arpa/m5stack-adapter:0.1.1
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8080 }]
