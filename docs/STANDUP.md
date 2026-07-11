@@ -86,16 +86,19 @@ Goal: name resolution, storage, identity, and secrets — the things everything 
 
 ---
 
-## Phase 3 — L2 Core platform (MicroShift on the H4) + GitOps
+## Phase 3 — L2 Core platform (k3s on the H4) + GitOps
 
 Goal: the main Kubernetes platform and the GitOps loop that drives all in-cluster workloads.
 `make all` runs steps 1–3 in order; run them individually the first time.
 
-1. 🟢 **MicroShift** on the H4 (consumes the NVMe LVMS PVs from Phase 2):
+> **Implemented as k3s** (not MicroShift). The H4 runs a single-node k3s server with OPi 5 Pro
+> boards as agents. Use `kubectl`, not `oc`; Ingress not Route; `local-path` StorageClass.
+
+1. 🟢 **k3s** on the H4 (uses `local-path` StorageClass on the NVMe):
    ```bash
-   make microshift
-   export KUBECONFIG=/var/lib/microshift/resources/kubeadmin/kubeconfig   # on the H4
-   kubectl get nodes,pods -A                                              # Ready / Running
+   make k3s-h4
+   export KUBECONFIG=/etc/rancher/k3s/k3s.yaml   # on the H4
+   kubectl get nodes,pods -A                      # Ready / Running
    ```
 2. 🟢 **Backups** (get the backup spine up before real data lands):
    ```bash
@@ -109,7 +112,7 @@ Goal: the main Kubernetes platform and the GitOps loop that drives all in-cluste
    ```
    *Unblocks:* LiteLLM gateway, sample-app, observability, and the rest of `gitops/workloads/`.
 
-> Shortcut once you trust it: `make all` = storage → microshift → backup → argocd.
+> Shortcut once you trust it: `make all` = storage → k3s-h4 → backup → argocd.
 
 ---
 
@@ -184,7 +187,7 @@ Goal: the VM/devops sandbox. This is a **parallel track** — it doesn't block P
 | 2 | DNS | `make dns` | lab + `*.apps` names resolve |
 | 2 | Storage | `make storage` | mirrors mounted, monitoring armed |
 | 2 | Identity/secrets | Vault + LDAP up | Vault unsealed |
-| 3 | Platform | `make microshift` | nodes Ready |
+| 3 | Platform | `make k3s-h4` | nodes Ready |
 | 3 | Backups | `make backup` | first snapshot OK |
 | 3 | GitOps | `make argocd` | apps Synced |
 | 4 | AI fabric | `make ai-nodes` | gateway answers |

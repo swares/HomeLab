@@ -1,7 +1,7 @@
 # Update & Patching Coverage
 
 Current state of automated and manual update paths across every layer of the lab.
-Last updated: 2026-06-27.
+Last updated: 2026-07-11.
 
 ---
 
@@ -57,7 +57,7 @@ Human reviews + merges (or auto-merge fires for patches)
 | Major | PR opened, `major-update` label, human review |
 | Immich stack | Grouped into one PR, Monday 2–4 AM window, no auto-merge |
 | k3s | PR opened, never auto-merge (drain cycle required) |
-| `registry.lab.home.arpa` | Disabled — Renovate cannot reach private registry |
+| `registry.apps.lab.home.arpa` | Disabled — Renovate cannot reach private registry |
 
 Config lives in `renovate.json`.
 
