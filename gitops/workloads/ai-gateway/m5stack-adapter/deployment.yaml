@@ -23,7 +23,9 @@ spec:
           image: registry.apps.lab.home.arpa/m5stack-adapter:0.1.0
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8080 }]
-          envFrom: [{ configMapRef: { name: m5stack-adapter-env } }]
+          envFrom:
+            - configMapRef: { name: m5stack-adapter-env }
+            - secretRef: { name: m5stack-auth }   # M5_USER / M5_PASS — kubectl create secret generic m5stack-auth
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
