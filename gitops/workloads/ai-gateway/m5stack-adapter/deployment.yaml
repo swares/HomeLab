@@ -7,6 +7,10 @@ spec:
   template:
     metadata: { labels: { app: m5stack-adapter } }
     spec:
+      # Pin to odroid-nas: OPi agent nodes don't resolve *.apps.lab.home.arpa
+      # (their /etc/resolv.conf doesn't include lab DNS servers).
+      nodeSelector:
+        kubernetes.io/hostname: odroid-nas
       securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
       containers:
         - name: adapter
