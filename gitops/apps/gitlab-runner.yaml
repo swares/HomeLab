@@ -14,10 +14,14 @@ spec:
       helm:
         valueFiles:
           - $values/gitops/workloads/gitlab-runner/values.yaml
-    # Source 2: values file from this repo
+    # Source 2: values file from this repo (ref-only — used by source 1 valueFiles)
     - repoURL: https://github.com/swares/HomeLab.git
       targetRevision: main
       ref: values
+    # Source 3: kustomize manifests (ExternalSecret for runner token)
+    - repoURL: https://github.com/swares/HomeLab.git
+      targetRevision: main
+      path: gitops/workloads/gitlab-runner
   destination:
     server: https://kubernetes.default.svc
     namespace: gitlab-runner
