@@ -1,7 +1,7 @@
 # Extends k3s CoreDNS with:
 # 1. Wildcard zone for *.apps.lab.home.arpa → 192.168.1.160 (Traefik ingress).
-# 2. Forward zone for lab.home.arpa → lab DNS servers (dnsmasq on OPi Zero 2W nodes).
-#    This lets pods resolve any *.lab.home.arpa hostname (e.g. cores3, h4-core, opi5pro-1).
+# 2. Forward zone for lab.home.arpa → lab DNS servers (Pi-hole + dnsmasq secondaries).
+#    This lets pods resolve any *.lab.home.arpa hostname (e.g. gitlab, cores3, h4-core).
 #    apps.lab.home.arpa is more specific and wins over the forward zone for ingress names.
 apiVersion: v1
 kind: ConfigMap
@@ -19,13 +19,5 @@ data:
   lab.server: |
     lab.home.arpa:53 {
         forward . 192.168.1.184 192.168.1.217
-        cache 30
-    }
-  gitlab.server: |
-    gitlab.lab.home.arpa:53 {
-        hosts {
-            192.168.1.50 gitlab.lab.home.arpa
-            fallthrough
-        }
         cache 30
     }
