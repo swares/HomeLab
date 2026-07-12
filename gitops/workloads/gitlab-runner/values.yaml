@@ -18,6 +18,11 @@
 
 gitlabUrl: https://gitlab.lab.home.arpa
 
+# Skip TLS verification during registration — GitLab uses a self-signed cert.
+# extraEnv is a map (name: value) in this chart version.
+extraEnv:
+  RUNNER_TLS_SKIP_VERIFY: "true"
+
 ## Runner configuration
 runners:
   # runners.secret mounts the named k8s Secret at /secrets in the pod.
