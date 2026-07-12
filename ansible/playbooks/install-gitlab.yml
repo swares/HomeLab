@@ -111,6 +111,11 @@
           # Registry — disabled; lab uses the in-cluster registry.apps.lab.home.arpa
           registry['enable'] = false
 
+          # TLS — disable Let's Encrypt; .arpa domains are rejected by ACME policy.
+          # GitLab auto-generates a self-signed cert at /etc/gitlab/ssl/ on first reconfigure.
+          # To use the lab CA instead, copy cert/key there and set nginx['ssl_certificate*'].
+          letsencrypt['enable'] = false
+
           # Time zone
           gitlab_rails['time_zone'] = 'America/Chicago'
       notify: Reconfigure GitLab
