@@ -60,6 +60,32 @@ spec:
                 trusted_proxies:
                   - 10.42.0.0/16   # k3s pod CIDR (Traefik)
                   - 127.0.0.1
+
+              mqtt:
+                sensor:
+                  - name: "M5Stack Battery Voltage"
+                    state_topic: "m5stack/pmic"
+                    value_template: "{{ value_json.values.vbat }}"
+                    unit_of_measurement: "V"
+                    device_class: voltage
+                  - name: "M5Stack Battery"
+                    state_topic: "m5stack/pmic"
+                    value_template: "{{ value_json.values['bat%'] }}"
+                    unit_of_measurement: "%"
+                    device_class: battery
+                  - name: "M5Stack LLM Busy"
+                    state_topic: "m5stack/llm"
+                    value_template: "{{ value_json.values.busy }}"
+                  - name: "M5Stack Claude Queries"
+                    state_topic: "m5stack/claude"
+                    value_template: "{{ value_json.values.queries }}"
+                  - name: "M5Stack Claude Turns"
+                    state_topic: "m5stack/claude"
+                    value_template: "{{ value_json.values.turns }}"
+                  - name: "M5Stack Uptime"
+                    state_topic: "m5stack/route"
+                    value_template: "{{ value_json.uptime }}"
+                    unit_of_measurement: "s"
               EOF
                 echo "Seeded /config/configuration.yaml"
               else
