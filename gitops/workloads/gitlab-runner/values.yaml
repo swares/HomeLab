@@ -18,18 +18,12 @@
 
 gitlabUrl: https://gitlab.lab.home.arpa
 
-# Inject the runner auth token (glrt-) from the ESO-managed secret as CI_SERVER_TOKEN.
-# The top-level `secret:` field in this chart version does not mount the secret into the
-# pod — use extraEnv with secretKeyRef instead.
-extraEnv:
-  - name: CI_SERVER_TOKEN
-    valueFrom:
-      secretKeyRef:
-        name: gitlab-runner-secret
-        key: runner-token
-
 ## Runner configuration
 runners:
+  # runners.secret mounts the named k8s Secret at /secrets in the pod.
+  # The entrypoint reads /secrets/runner-token for glrt- auth tokens.
+  # Secret is managed by ESO (see external-secret.yaml).
+  secret: gitlab-runner-secret
   config: |
     [[runners]]
       name = "k3s-kubernetes"
