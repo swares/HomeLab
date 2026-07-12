@@ -30,8 +30,8 @@
 
   "packageRules": [
     {
-      "description": "Skip private local registry — Renovate cannot reach registry.lab.home.arpa",
-      "matchPackagePatterns": ["^registry\\.lab\\.home\\.arpa/"],
+      "description": "Skip private local registry — Renovate cannot reach registry.apps.lab.home.arpa",
+      "matchPackagePatterns": ["^registry\\.apps\\.lab\\.home\\.arpa/"],
       "enabled": false
     },
     {
