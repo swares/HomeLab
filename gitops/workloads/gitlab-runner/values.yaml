@@ -18,8 +18,15 @@
 
 gitlabUrl: https://gitlab.lab.home.arpa
 
-# Reference the Secret created by ESO (see external-secret.yaml in this dir)
-secret: gitlab-runner-secret
+# Inject the runner auth token (glrt-) from the ESO-managed secret as CI_SERVER_TOKEN.
+# The top-level `secret:` field in this chart version does not mount the secret into the
+# pod — use extraEnv with secretKeyRef instead.
+extraEnv:
+  - name: CI_SERVER_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: gitlab-runner-secret
+        key: runner-token
 
 ## Runner configuration
 runners:
