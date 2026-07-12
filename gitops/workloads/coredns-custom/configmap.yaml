@@ -21,3 +21,11 @@ data:
         forward . 192.168.1.184 192.168.1.217
         cache 30
     }
+  gitlab.server: |
+    gitlab.lab.home.arpa:53 {
+        hosts {
+            192.168.1.50 gitlab.lab.home.arpa
+            fallthrough
+        }
+        cache 30
+    }
