@@ -32,7 +32,7 @@
     vm_ip:          192.168.1.50
     vm_gw:          192.168.1.1
     vm_dns:         192.168.1.148        # octopi Pi-hole
-    vm_mac:         "52:54:00:gl:ab:01"  # deterministic — avoids DHCP collisions
+    vm_mac:         "52:54:00:6b:ab:01"  # deterministic — avoids DHCP collisions
     vm_bridge:      br0
     image_dir:      /var/lib/libvirt/images
     base_image_url: https://cloud-images.ubuntu.com/jammy/current/jammy-server-cloudimg-amd64.img
@@ -88,6 +88,9 @@
             - name: swares
               groups: [sudo, adm]
               shell: /bin/bash
+              lock_passwd: false
+              passwd: "$6$rounds=4096$labsalt$3z6E9ML4tMNklYBkrmCPjO5nqFDEqAIPBZCk9t0RbGaS.7HsYI3o2P3C5Dk7XLJDdpJ5PmkAhVzrR1BGynX11"
+              # sha512 of 'LabTemp123!' — change immediately after first login
               sudo: ALL=(ALL) NOPASSWD:ALL
               ssh_authorized_keys:
                 - {{ ansible_pub_key }}
