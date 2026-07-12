@@ -29,15 +29,10 @@ runners:
       name = "k3s-kubernetes"
       url = "https://gitlab.lab.home.arpa"
       executor = "kubernetes"
-      tls-skip-verify = true
       [runners.kubernetes]
         namespace = "gitlab-runner"
         image = "ubuntu:22.04"
-        # Trust the lab CA so the runner can talk to GitLab over self-signed TLS
-        ca_file = "/etc/ssl/certs/ca-certificates.crt"
-        # Pull images through the in-cluster registry mirror when available
         pull_policy = ["if-not-present"]
-        # Give build pods reasonable resources
         [runners.kubernetes.node_selector]
           "kubernetes.io/hostname" = "n150-1"   # build jobs on the x86 node
         [runners.kubernetes.pod_labels]
@@ -47,6 +42,7 @@ runners:
           mount_path = "/var/run/docker.sock"
           host_path = "/var/run/docker.sock"
           read_only = false
+          mount_propagation = ""
 
 ## Resource limits for the runner manager pod itself
 resources:
@@ -71,9 +67,11 @@ serviceAccount:
   create: true
   name: gitlab-runner
 
-## Trust GitLab's self-signed cert.
-# Secret gitlab-tls must be created manually (one-time bootstrap):
-#   ssh swares@192.168.1.50 "sudo cat /etc/gitlab/ssl/gitlab.lab.home.arpa.crt" > /tmp/gitlab.crt
+## Trust the lab root CA so the runner can verify GitLab's TLS cert.
+# gitlab-tls Secret contains the lab CA cert (CA:TRUE), created imperatively:
+#   kubectl -n gitlab-runner get secret gitlab-lab-tls \
+#     -o jsonpath='{.data.ca\.crt}' | base64 -d > /tmp/lab-ca.crt
 #   kubectl -n gitlab-runner create secret generic gitlab-tls \
-#     --from-file=gitlab.lab.home.arpa.crt=/tmp/gitlab.crt
+#     --from-file=gitlab.lab.home.arpa.crt=/tmp/lab-ca.crt
+# GitLab nginx uses a cert signed by lab-ca (see gitlab-cert.yaml).
 certsSecretName: gitlab-tls
