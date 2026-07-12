@@ -1,0 +1,19 @@
+---
+# cert-manager Certificate for GitLab's nginx TLS.
+# Signed by the lab-ca ClusterIssuer (CA:TRUE) so the runner and all
+# cluster workloads can verify it using the lab root CA.
+# After issuance, copy tls.crt + tls.key to gitlab-1 and reconfigure.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: gitlab-lab
+  namespace: gitlab-runner
+spec:
+  secretName: gitlab-lab-tls
+  issuerRef:
+    name: lab-ca
+    kind: ClusterIssuer
+  dnsNames:
+    - gitlab.lab.home.arpa
+  duration: 8760h    # 1 year
+  renewBefore: 720h  # renew 30 days before expiry
