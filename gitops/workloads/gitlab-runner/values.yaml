@@ -29,6 +29,7 @@ runners:
       name = "k3s-kubernetes"
       url = "https://gitlab.lab.home.arpa"
       executor = "kubernetes"
+      tls-skip-verify = true
       [runners.kubernetes]
         namespace = "gitlab-runner"
         image = "ubuntu:22.04"
