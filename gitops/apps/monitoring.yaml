@@ -80,6 +80,7 @@ spec:
                 # Keeping them here caused port 9100 conflicts with the DaemonSet.
                 static_configs:
                   - targets:
+                      - 192.168.1.50:9100   # gitlab-1 (GitLab CE VM)
                       - 192.168.1.70:9100   # ldap-1 (lldap VM)
                       - 192.168.1.148:9100  # octopi (DNS primary)
                       - 192.168.1.184:9100  # opi-zero2w-1 (DNS secondary)
