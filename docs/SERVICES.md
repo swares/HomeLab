@@ -66,8 +66,8 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
-| GitLab (SCM / CI / registry) | ● | KVM VM on n150-1 | provisioned by cloud-init/Ansible |
-| GitLab Runners | ● | N150 VMs / k3s | |
+| GitLab (SCM / CI / registry) | ● | gitlab-1 VM (.50) on n150-1 | provision-gitlab-vm.yml → install-gitlab.yml; gitlab.lab.home.arpa; runner token → Vault secret/lab/gitlab |
+| GitLab Runners | ● | k3s · gitlab-runner namespace | kubernetes executor; Helm via ArgoCD; needs runner token in Vault before sync |
 | Multi-arch buildx | ● | runners | x86 + arm64 |
 | Renovate (dep updates) | ● | `renovate.json` in repo | Mend hosted |
 | Claude Code | ● | orchestrator / dev | agentic |
