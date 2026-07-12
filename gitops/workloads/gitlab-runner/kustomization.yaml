@@ -3,3 +3,4 @@ kind: Kustomization
 resources:
   - external-secret.yaml
   - gitlab-cert.yaml
+  - gitlab-tls-secret.yaml
