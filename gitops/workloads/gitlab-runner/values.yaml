@@ -18,11 +18,6 @@
 
 gitlabUrl: https://gitlab.lab.home.arpa
 
-# Skip TLS verification during registration — GitLab uses a self-signed cert.
-# extraEnv is a map (name: value) in this chart version.
-extraEnv:
-  RUNNER_TLS_SKIP_VERIFY: "true"
-
 ## Runner configuration
 runners:
   # runners.secret mounts the named k8s Secret at /secrets in the pod.
@@ -76,6 +71,9 @@ serviceAccount:
   create: true
   name: gitlab-runner
 
-## Additional CA cert so the runner trusts the self-signed GitLab cert
-# Uncomment and populate once the lab CA cert is available as a ConfigMap.
-# certsSecretName: lab-ca-cert
+## Trust GitLab's self-signed cert.
+# Secret gitlab-tls must be created manually (one-time bootstrap):
+#   ssh swares@192.168.1.50 "sudo cat /etc/gitlab/ssl/gitlab.lab.home.arpa.crt" > /tmp/gitlab.crt
+#   kubectl -n gitlab-runner create secret generic gitlab-tls \
+#     --from-file=gitlab.lab.home.arpa.crt=/tmp/gitlab.crt
+certsSecretName: gitlab-tls
