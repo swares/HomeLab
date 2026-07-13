@@ -118,7 +118,8 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 
 ## Pending / TODO
 
-- octopi (RPi 3B #2): flash Bookworm → run dns.yml → Pi-hole v6
+- ✅ octopi (RPi 3B #2): Bookworm flashed, Pi-hole v6.4.3/FTL v6.7 running (confirmed 2026-07-13)
+- ✅ N150 #3 (yikw): WinRM credentials corrected, Ansible win_ping confirmed (2026-07-13)
 - ✅ opi5pro-1: reflashed Ubuntu 22.04 Jammy, k3s agent rejoined, NVMe remounted at /mnt/nvme, Ollama models intact (2026-07-10)
 - ✅ opi-zero2w-3: deployed as dns-4 secondary (dnsmasq, Armbian Trixie, 192.168.1.217) (2026-07-10)
 - ✅ lldap JWT secret rotated 2026-07-02
@@ -137,3 +138,6 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 - ✅ lldap migrated from ldap-1 KVM VM (192.168.1.70) to k3s Deployment in lldap namespace; ldap-1 VM stopped (2026-07-04)
 - ✅ MQTT HA: opi-zero2w-4 (.99) deployed as secondary broker bridging all topics to/from opi-zero2w-2 (.188); M5Stack firmware has automatic failover (2026-07-04)
 - ✅ update-hosts.yml: drain/uncordon step added to h4-core reboot play (tagged reboot_h4,never) (2026-07-04)
+- ✅ Home Assistant: deployed to k3s (home-assistant namespace), receiving MQTT data from opi-zero2w-2 (.188) (2026-07-13)
+- ✅ GitHub Actions self-hosted runner: active on H4 (odroid-nas), runner v2.335.1, ANSIBLE_VAULT_PASS + KUBECONFIG_B64 secrets set, weekly jobs running (confirmed 2026-07-13)
+- ⏳ Whisper STT: faster-whisper-server as k3s workload (gitops/workloads/whisper/); merge PR to activate. OVMS disabled on n150-1/n150-2 (no renderD128, no model IR files — cleanup tracked separately).

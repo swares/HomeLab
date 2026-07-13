@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: whisper
+  namespace: whisper
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: whisper }
+  template:
+    metadata:
+      labels: { app: whisper }
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: n150-1   # x86 CPU; arm64 OPi agents lack amd64 image
+      securityContext:
+        runAsNonRoot: false              # faster-whisper-server runs as root in container
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: whisper
+          # renovate: datasource=docker depName=fedirz/faster-whisper-server
+          image: fedirz/faster-whisper-server:latest-cpu
+          ports:
+            - containerPort: 8000
+          env:
+            - name: WHISPER__MODEL
+              value: base               # tiny | base | small — base is fast+accurate on CPU
+          resources:
+            requests:
+              cpu: 500m
+              memory: 512Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 60
+            periodSeconds: 30

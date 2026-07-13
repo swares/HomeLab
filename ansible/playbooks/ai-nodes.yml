@@ -188,10 +188,32 @@
         name: rkllama
         state: restarted
 
+# ── Play 2a: Disable OVMS (pending GPU runtime + model IR setup) ──────────────
+# OVMS crashes on startup because:
+#   - n150-1 has /dev/dri/card0 (display) but no renderD128 (compute device)
+#   - intel-opencl-icd / level-zero not installed on either n150
+#   - config.json has // comments (invalid JSON) and no model IR files present
+# Re-enable by: installing intel-opencl-icd + level-zero, converting models to
+# OpenVINO IR format, fixing config.json, placing IR files under /opt/ovms/models/,
+# then tagging this play with 'ovms_enable' and re-running make ai-nodes.
+- name: Disable crash-looping OVMS (pending GPU runtime + model IR setup)
+  hosts: ovms
+  become: true
+  tags: [ovms_disable]
+
+  tasks:
+    - name: Stop and disable OVMS service
+      ansible.builtin.systemd:
+        name: ovms
+        state: stopped
+        enabled: false
+      ignore_errors: true   # may not be installed on all hosts
+
 # ── Play 2: OpenVINO Model Server ─────────────────────────────────────────────
 - name: OpenVINO Model Server (Intel iGPU — h4-core, n150-1, n150-2)
   hosts: ovms
   become: true
+  tags: [ovms_install]
 
   tasks:
     - name: Install Docker prerequisites

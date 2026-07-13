@@ -18,4 +18,4 @@ spec: { type: ExternalName, externalName: m5stack.lab.home.arpa }     # framewor
 apiVersion: v1
 kind: Service
 metadata: { name: openvino, namespace: ai-gateway }
-spec: { type: ExternalName, externalName: h4-core.lab.home.arpa }     # OVMS :8000 (or an N150)
+spec: { type: ExternalName, externalName: h4-core.lab.home.arpa }     # OVMS :8000 (disabled — pending GPU runtime + model IR setup)
