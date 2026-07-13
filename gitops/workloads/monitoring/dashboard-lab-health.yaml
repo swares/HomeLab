@@ -348,7 +348,14 @@ data:
             }
           ],
           "title": "Running Pods",
-          "type": "stat"
+          "type": "stat",
+          "links": [
+            {
+              "title": "Show running pods",
+              "url": "/d/lab-health-cap?viewPanel=20",
+              "targetBlank": false
+            }
+          ]
         },
         {
           "datasource": {
@@ -2115,6 +2122,114 @@ data:
             }
           ],
           "type": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "inspect": false
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text"
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 12,
+            "w": 24,
+            "x": 0,
+            "y": 56
+          },
+          "id": 20,
+          "options": {
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            },
+            "showHeader": true,
+            "sortBy": [
+              {
+                "desc": false,
+                "displayName": "Namespace"
+              },
+              {
+                "desc": false,
+                "displayName": "Pod"
+              }
+            ]
+          },
+          "pluginVersion": "12.0.0",
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "label_replace(kube_pod_status_phase{phase=\"Running\"} == 1 * on(pod, namespace) group_left(node, host_ip) kube_pod_info, \"node_fqdn\", \"$1.lab.home.arpa\", \"node\", \"(.+)\")",
+              "format": "table",
+              "instant": true,
+              "legendFormat": "{{pod}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Running Pods",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "Value": true,
+                  "phase": true,
+                  "container": true,
+                  "created_by_kind": true,
+                  "created_by_name": true,
+                  "image": true,
+                  "image_id": true,
+                  "image_spec": true,
+                  "pod_ip": true,
+                  "uid": true,
+                  "priority_class": true,
+                  "node_selector": true,
+                  "service_account": true
+                },
+                "renameByName": {
+                  "namespace": "Namespace",
+                  "pod": "Pod",
+                  "node": "Node",
+                  "host_ip": "Host IP",
+                  "node_fqdn": "Node FQDN"
+                },
+                "indexByName": {
+                  "namespace": 0,
+                  "pod": 1,
+                  "node": 2,
+                  "host_ip": 3,
+                  "node_fqdn": 4
+                }
+              }
+            }
+          ],
+          "type": "table"
         }
       ],
       "preload": false,
@@ -2143,5 +2258,5 @@ data:
       "timezone": "browser",
       "title": "Lab Health & Capacity",
       "uid": "lab-health-cap",
-      "version": 7
+      "version": 8
     }
