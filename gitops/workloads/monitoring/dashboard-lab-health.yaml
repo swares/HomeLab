@@ -274,7 +274,14 @@ data:
             }
           ],
           "title": "k3s Nodes Ready",
-          "type": "stat"
+          "type": "stat",
+          "links": [
+            {
+              "title": "Show not-ready nodes",
+              "url": "/d/lab-health-cap?viewPanel=17",
+              "targetBlank": false
+            }
+          ]
         },
         {
           "datasource": {
@@ -419,7 +426,14 @@ data:
             }
           ],
           "title": "RAID md0 (cold-sec)",
-          "type": "stat"
+          "type": "stat",
+          "links": [
+            {
+              "title": "RAID md0 health detail",
+              "url": "/d/lab-health-cap?viewPanel=18",
+              "targetBlank": false
+            }
+          ]
         },
         {
           "datasource": {
@@ -497,7 +511,14 @@ data:
             }
           ],
           "title": "RAID md1 (cold-8t)",
-          "type": "stat"
+          "type": "stat",
+          "links": [
+            {
+              "title": "RAID md1 health detail",
+              "url": "/d/lab-health-cap?viewPanel=19",
+              "targetBlank": false
+            }
+          ]
         },
         {
           "datasource": {
@@ -1280,12 +1301,12 @@ data:
                           "0": {
                             "color": "red",
                             "index": 1,
-                            "text": "\u2717 down"
+                            "text": "✗ down"
                           },
                           "1": {
                             "color": "green",
                             "index": 0,
-                            "text": "\u2713 up"
+                            "text": "✓ up"
                           }
                         },
                         "type": "value"
@@ -1537,7 +1558,7 @@ data:
                 "type": "prometheus",
                 "uid": "${datasource}"
               },
-              "expr": "up{job=~\"node-exporter.*\"} == 0",
+              "expr": "label_replace(label_replace(up{job=~\"node-exporter.*\"} == 0 * on(instance) group_left(nodename) node_uname_info, \"ip\", \"$1\", \"instance\", \"([^:]+):.+\"), \"fqdn\", \"$1.lab.home.arpa\", \"nodename\", \"(.+)\")",
               "format": "table",
               "instant": true,
               "legendFormat": "{{instance}}",
@@ -1553,10 +1574,542 @@ data:
                   "Time": true,
                   "__name__": true,
                   "Value": true,
-                  "job": true
+                  "job": true,
+                  "instance": true,
+                  "domainname": true,
+                  "machine": true,
+                  "release": true,
+                  "sysname": true,
+                  "version": true
                 },
                 "renameByName": {
-                  "instance": "Host"
+                  "ip": "IP",
+                  "nodename": "Host",
+                  "fqdn": "FQDN"
+                },
+                "indexByName": {
+                  "ip": 0,
+                  "nodename": 1,
+                  "fqdn": 2
+                }
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "inspect": false
+              },
+              "mappings": [],
+              "noValue": "All nodes ready",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red"
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Status"
+                },
+                "properties": [
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-text"
+                    }
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "false": {
+                            "text": "NotReady",
+                            "color": "red",
+                            "index": 0
+                          },
+                          "unknown": {
+                            "text": "Unknown",
+                            "color": "yellow",
+                            "index": 1
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 24,
+            "x": 0,
+            "y": 42
+          },
+          "id": 17,
+          "options": {
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            },
+            "showHeader": true
+          },
+          "pluginVersion": "12.0.0",
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "label_replace(kube_node_status_condition{condition=\"Ready\",status=~\"false|unknown\"} == 1 * on(node) group_left(internal_ip) kube_node_info, \"fqdn\", \"$1.lab.home.arpa\", \"node\", \"(.+)\")",
+              "format": "table",
+              "instant": true,
+              "legendFormat": "{{node}}",
+              "refId": "A"
+            }
+          ],
+          "title": "k3s NotReady Nodes",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "Value": true,
+                  "condition": true,
+                  "container_runtime_version": true,
+                  "kernel_version": true,
+                  "kubelet_version": true,
+                  "kubeproxy_version": true,
+                  "os_image": true,
+                  "provider_id": true,
+                  "pod_cidr": true,
+                  "system_uuid": true
+                },
+                "renameByName": {
+                  "node": "Node",
+                  "internal_ip": "IP",
+                  "fqdn": "FQDN",
+                  "status": "Status"
+                },
+                "indexByName": {
+                  "node": 0,
+                  "internal_ip": 1,
+                  "fqdn": 2,
+                  "status": 3
+                }
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "inspect": false
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text"
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Disks (failed)"
+                },
+                "properties": [
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-background"
+                    }
+                  },
+                  {
+                    "id": "thresholds",
+                    "value": {
+                      "mode": "absolute",
+                      "steps": [
+                        {
+                          "color": "green"
+                        },
+                        {
+                          "color": "red",
+                          "value": 1
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Array State"
+                },
+                "properties": [
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-text"
+                    }
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "clean": {
+                            "text": "clean",
+                            "color": "green",
+                            "index": 0
+                          },
+                          "active": {
+                            "text": "active",
+                            "color": "green",
+                            "index": 1
+                          },
+                          "degraded": {
+                            "text": "degraded",
+                            "color": "red",
+                            "index": 2
+                          },
+                          "recovering": {
+                            "text": "recovering",
+                            "color": "yellow",
+                            "index": 3
+                          },
+                          "resync": {
+                            "text": "resyncing",
+                            "color": "yellow",
+                            "index": 4
+                          },
+                          "check": {
+                            "text": "checking",
+                            "color": "blue",
+                            "index": 5
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 48
+          },
+          "id": 18,
+          "options": {
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            },
+            "showHeader": true
+          },
+          "pluginVersion": "12.0.0",
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "label_replace(label_replace(node_md_disks{device=\"md0\"} * on(instance) group_left(nodename) node_uname_info, \"ip\", \"$1\", \"instance\", \"([^:]+):.+\"), \"fqdn\", \"$1.lab.home.arpa\", \"nodename\", \"(.+)\")",
+              "format": "table",
+              "instant": true,
+              "legendFormat": "{{state}}",
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "label_replace(label_replace(node_md_state{device=\"md0\"} == 1 * on(instance) group_left(nodename) node_uname_info, \"ip\", \"$1\", \"instance\", \"([^:]+):.+\"), \"fqdn\", \"$1.lab.home.arpa\", \"nodename\", \"(.+)\")",
+              "format": "table",
+              "instant": true,
+              "legendFormat": "array-state",
+              "refId": "B"
+            }
+          ],
+          "title": "RAID md0 (cold-sec) Health",
+          "transformations": [
+            {
+              "id": "merge",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "Value #B": true,
+                  "job": true,
+                  "instance": true,
+                  "domainname": true,
+                  "machine": true,
+                  "release": true,
+                  "sysname": true,
+                  "version": true
+                },
+                "renameByName": {
+                  "ip": "IP",
+                  "nodename": "Host",
+                  "fqdn": "FQDN",
+                  "device": "Device",
+                  "state": "State",
+                  "Value #A": "Disk Count",
+                  "Value #B": "Array State"
+                },
+                "indexByName": {
+                  "ip": 0,
+                  "nodename": 1,
+                  "fqdn": 2,
+                  "device": 3,
+                  "state": 4,
+                  "Value #A": 5
+                }
+              }
+            }
+          ],
+          "type": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "inspect": false
+              },
+              "mappings": [],
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "text"
+                  }
+                ]
+              }
+            },
+            "overrides": [
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Disks (failed)"
+                },
+                "properties": [
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-background"
+                    }
+                  },
+                  {
+                    "id": "thresholds",
+                    "value": {
+                      "mode": "absolute",
+                      "steps": [
+                        {
+                          "color": "green"
+                        },
+                        {
+                          "color": "red",
+                          "value": 1
+                        }
+                      ]
+                    }
+                  }
+                ]
+              },
+              {
+                "matcher": {
+                  "id": "byName",
+                  "options": "Array State"
+                },
+                "properties": [
+                  {
+                    "id": "custom.cellOptions",
+                    "value": {
+                      "type": "color-text"
+                    }
+                  },
+                  {
+                    "id": "mappings",
+                    "value": [
+                      {
+                        "type": "value",
+                        "options": {
+                          "clean": {
+                            "text": "clean",
+                            "color": "green",
+                            "index": 0
+                          },
+                          "active": {
+                            "text": "active",
+                            "color": "green",
+                            "index": 1
+                          },
+                          "degraded": {
+                            "text": "degraded",
+                            "color": "red",
+                            "index": 2
+                          },
+                          "recovering": {
+                            "text": "recovering",
+                            "color": "yellow",
+                            "index": 3
+                          },
+                          "resync": {
+                            "text": "resyncing",
+                            "color": "yellow",
+                            "index": 4
+                          },
+                          "check": {
+                            "text": "checking",
+                            "color": "blue",
+                            "index": 5
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 48
+          },
+          "id": 19,
+          "options": {
+            "cellHeight": "sm",
+            "footer": {
+              "show": false
+            },
+            "showHeader": true
+          },
+          "pluginVersion": "12.0.0",
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "label_replace(label_replace(node_md_disks{device=\"md1\"} * on(instance) group_left(nodename) node_uname_info, \"ip\", \"$1\", \"instance\", \"([^:]+):.+\"), \"fqdn\", \"$1.lab.home.arpa\", \"nodename\", \"(.+)\")",
+              "format": "table",
+              "instant": true,
+              "legendFormat": "{{state}}",
+              "refId": "A"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "label_replace(label_replace(node_md_state{device=\"md1\"} == 1 * on(instance) group_left(nodename) node_uname_info, \"ip\", \"$1\", \"instance\", \"([^:]+):.+\"), \"fqdn\", \"$1.lab.home.arpa\", \"nodename\", \"(.+)\")",
+              "format": "table",
+              "instant": true,
+              "legendFormat": "array-state",
+              "refId": "B"
+            }
+          ],
+          "title": "RAID md1 (cold-8t) Health",
+          "transformations": [
+            {
+              "id": "merge",
+              "options": {}
+            },
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "Value #B": true,
+                  "job": true,
+                  "instance": true,
+                  "domainname": true,
+                  "machine": true,
+                  "release": true,
+                  "sysname": true,
+                  "version": true
+                },
+                "renameByName": {
+                  "ip": "IP",
+                  "nodename": "Host",
+                  "fqdn": "FQDN",
+                  "device": "Device",
+                  "state": "State",
+                  "Value #A": "Disk Count",
+                  "Value #B": "Array State"
+                },
+                "indexByName": {
+                  "ip": 0,
+                  "nodename": 1,
+                  "fqdn": 2,
+                  "device": 3,
+                  "state": 4,
+                  "Value #A": 5
                 }
               }
             }
@@ -1590,5 +2143,5 @@ data:
       "timezone": "browser",
       "title": "Lab Health & Capacity",
       "uid": "lab-health-cap",
-      "version": 6
+      "version": 7
     }
