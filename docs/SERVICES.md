@@ -57,7 +57,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | m5stack-adapter | ✓ | k3s · odroid-nas node | OpenAI shim for M5Stack; image 0.1.1 (2026-07-11); models: m5, m5-llm, m5-claude |
 | Claude Code orchestrator | ✓ | opi5pro-1 | escalation Tier 3; HTTPS :8443; TLS self-signed; Claude Code 2.1.204 |
 | M5Stack escalation router | ✓ | M5Stack | edge front-end; 3-tier escalation |
-| Whisper STT | ● | k3s · whisper namespace (n150-1, CPU) | faster-whisper-server; `stt` model in LiteLLM gateway; managed by ArgoCD |
+| Whisper STT | ✓ | k3s · whisper namespace (n150-1, CPU) | `https://stt.apps.lab.home.arpa/v1/audio/transcriptions`; base model; TLS via lab-ca |
 | Embedding model (nomic-embed-text) | ● | Ollama on H4 | configured in LiteLLM as `openai/nomic-embed-text`; bge-small via OpenVINO deferred |
 | Vector DB (Qdrant / Chroma) | ○ | k3s | RAG store |
 | Ollama / llama.cpp | ○ | H4 CPU | fallback engine; also hosts nomic-embed-text |

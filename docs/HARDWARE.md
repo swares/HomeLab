@@ -140,4 +140,4 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 - ✅ update-hosts.yml: drain/uncordon step added to h4-core reboot play (tagged reboot_h4,never) (2026-07-04)
 - ✅ Home Assistant: deployed to k3s (home-assistant namespace), receiving MQTT data from opi-zero2w-2 (.188) (2026-07-13)
 - ✅ GitHub Actions self-hosted runner: active on H4 (odroid-nas), runner v2.335.1, ANSIBLE_VAULT_PASS + KUBECONFIG_B64 secrets set, weekly jobs running (confirmed 2026-07-13)
-- ⏳ Whisper STT: faster-whisper-server as k3s workload (gitops/workloads/whisper/); merge PR to activate. OVMS disabled on n150-1/n150-2 (no renderD128, no model IR files — cleanup tracked separately).
+- ✅ Whisper STT: faster-whisper-server in k3s whisper namespace (n150-1, CPU); live at https://stt.apps.lab.home.arpa/v1/audio/transcriptions; cert via lab-ca (confirmed 2026-07-13). OVMS disabled (cleanup tracked separately).
