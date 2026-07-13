@@ -708,7 +708,7 @@ data:
                 "type": "prometheus",
                 "uid": "${datasource}"
               },
-              "expr": "label_replace(label_replace(label_replace(libvirt_domain_state_code, \"host_ip\", \"$1\", \"instance\", \"([^:]+):.+\") * on(host_ip) group_left(nodename) label_replace(node_uname_info, \"host_ip\", \"$1\", \"instance\", \"([^:]+):.+\"), \"host_fqhn\", \"$1.lab.home.arpa\", \"nodename\", \"(.+)\"), \"vm_fqhn\", \"$1.lab.home.arpa\", \"domain\", \"(.+)\")",
+              "expr": "label_replace(label_replace(label_replace(libvirt_domain_state_code, \"host_ip\", \"$1\", \"instance\", \"([^:]+):.+\") * on(host_ip) group_left(nodename) max by (host_ip, nodename)(label_replace(node_uname_info, \"host_ip\", \"$1\", \"instance\", \"([^:]+):.+\")), \"host_fqhn\", \"$1.lab.home.arpa\", \"nodename\", \"(.+)\"), \"vm_fqhn\", \"$1.lab.home.arpa\", \"domain\", \"(.+)\")",
               "format": "table",
               "instant": true,
               "legendFormat": "{{domain}}",
@@ -2300,5 +2300,5 @@ data:
       "timezone": "browser",
       "title": "Lab Health & Capacity",
       "uid": "lab-health-cap",
-      "version": 12
+      "version": 13
     }
