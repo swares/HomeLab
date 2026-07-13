@@ -1,7 +1,3 @@
----
-# Grafana dashboard: Lab Health & Capacity
-# Auto-imported by the Grafana sidecar (sidecar.dashboards.enabled=true).
-# Source: exported from Grafana 12.0.0 with manual additions.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -10,7 +6,7 @@ metadata:
   labels:
     grafana_dashboard: "1"
 data:
-  lab-health.json: |
+  lab-health.json: |-
     {
       "annotations": {
         "list": [
@@ -708,7 +704,7 @@ data:
                 "type": "prometheus",
                 "uid": "${datasource}"
               },
-              "expr": "label_replace(label_replace(label_replace(libvirt_domain_state_code, \"host_ip\", \"$1\", \"instance\", \"([^:]+):.+\") * on(host_ip) group_left(nodename) max by (host_ip, nodename)(label_replace(node_uname_info, \"host_ip\", \"$1\", \"instance\", \"([^:]+):.+\")), \"host_fqhn\", \"$1.lab.home.arpa\", \"nodename\", \"(.+)\"), \"vm_fqhn\", \"$1.lab.home.arpa\", \"domain\", \"(.+)\")",
+              "expr": "label_replace(label_replace(label_replace(libvirt_domain_state_code, \"host_ip\", \"$1\", \"instance\", \"([^:]+):.+\") * on(host_ip) group_left(nodename) max by (host_ip, nodename)(label_replace(node_uname_info, \"host_ip\", \"$1\", \"instance\", \"([^:]+)(?::.+)?\")), \"host_fqhn\", \"$1.lab.home.arpa\", \"nodename\", \"(.+)\"), \"vm_fqhn\", \"$1.lab.home.arpa\", \"domain\", \"(.+)\")",
               "format": "table",
               "instant": true,
               "legendFormat": "{{domain}}",
@@ -1320,12 +1316,12 @@ data:
                           "0": {
                             "color": "red",
                             "index": 1,
-                            "text": "✗ down"
+                            "text": "\u2717 down"
                           },
                           "1": {
                             "color": "green",
                             "index": 0,
-                            "text": "✓ up"
+                            "text": "\u2713 up"
                           }
                         },
                         "type": "value"
@@ -2300,5 +2296,5 @@ data:
       "timezone": "browser",
       "title": "Lab Health & Capacity",
       "uid": "lab-health-cap",
-      "version": 13
+      "version": 14
     }
