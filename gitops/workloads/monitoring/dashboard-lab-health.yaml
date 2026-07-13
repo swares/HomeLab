@@ -708,7 +708,7 @@ data:
                 "type": "prometheus",
                 "uid": "${datasource}"
               },
-              "expr": "libvirt_domain_state_code",
+              "expr": "label_replace(label_replace(label_replace(libvirt_domain_state_code, \"host_ip\", \"$1\", \"instance\", \"([^:]+):.+\") * on(host_ip) group_left(nodename) label_replace(node_uname_info, \"host_ip\", \"$1\", \"instance\", \"([^:]+):.+\"), \"host_fqhn\", \"$1.lab.home.arpa\", \"nodename\", \"(.+)\"), \"vm_fqhn\", \"$1.lab.home.arpa\", \"domain\", \"(.+)\")",
               "format": "table",
               "instant": true,
               "legendFormat": "{{domain}}",
@@ -728,9 +728,21 @@ data:
                   "uuid": true
                 },
                 "renameByName": {
+                  "domain": "VM",
+                  "vm_fqhn": "VM FQHN",
                   "Value": "State",
                   "Value #A": "State",
-                  "domain": "VM"
+                  "nodename": "Host",
+                  "host_ip": "Host IP",
+                  "host_fqhn": "Host FQHN"
+                },
+                "indexByName": {
+                  "domain": 0,
+                  "vm_fqhn": 1,
+                  "Value": 2,
+                  "nodename": 3,
+                  "host_ip": 4,
+                  "host_fqhn": 5
                 }
               }
             }
@@ -2288,5 +2300,5 @@ data:
       "timezone": "browser",
       "title": "Lab Health & Capacity",
       "uid": "lab-health-cap",
-      "version": 11
+      "version": 12
     }
