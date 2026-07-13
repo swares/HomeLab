@@ -277,7 +277,7 @@ data:
           "type": "stat",
           "links": [
             {
-              "title": "Show not-ready nodes",
+              "title": "k3s Node Status",
               "url": "/d/lab-health-cap?viewPanel=17",
               "targetBlank": false
             }
@@ -1445,7 +1445,7 @@ data:
             "sortBy": [
               {
                 "desc": false,
-                "displayName": "instance"
+                "displayName": "Host"
               }
             ]
           },
@@ -1493,6 +1493,17 @@ data:
               "legendFormat": "{{instance}}",
               "refId": "D",
               "format": "table"
+            },
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "label_replace(node_uname_info, \"fqhn\", \"$1.lab.home.arpa\", \"nodename\", \"(.+)\")",
+              "format": "table",
+              "instant": true,
+              "legendFormat": "{{instance}}",
+              "refId": "E"
             }
           ],
           "title": "Host Overview",
@@ -1504,11 +1515,30 @@ data:
             {
               "id": "organize",
               "options": {
+                "excludeByName": {
+                  "domainname": true,
+                  "machine": true,
+                  "release": true,
+                  "sysname": true,
+                  "version": true,
+                  "__name__": true
+                },
                 "renameByName": {
                   "Value #A": "Up",
                   "Value #B": "CPU %",
                   "Value #C": "Memory %",
-                  "Value #D": "Uptime"
+                  "Value #D": "Uptime",
+                  "nodename": "Host",
+                  "fqhn": "FQHN"
+                },
+                "indexByName": {
+                  "nodename": 0,
+                  "fqhn": 1,
+                  "instance": 2,
+                  "Value #A": 3,
+                  "Value #B": 4,
+                  "Value #C": 5,
+                  "Value #D": 6
                 }
               }
             }
@@ -1616,7 +1646,7 @@ data:
                 "inspect": false
               },
               "mappings": [],
-              "noValue": "All nodes ready",
+              "noValue": "No data",
               "thresholds": {
                 "mode": "absolute",
                 "steps": [
@@ -1645,15 +1675,20 @@ data:
                       {
                         "type": "value",
                         "options": {
+                          "true": {
+                            "text": "Ready",
+                            "color": "green",
+                            "index": 0
+                          },
                           "false": {
                             "text": "NotReady",
                             "color": "red",
-                            "index": 0
+                            "index": 1
                           },
                           "unknown": {
                             "text": "Unknown",
                             "color": "yellow",
-                            "index": 1
+                            "index": 2
                           }
                         }
                       }
@@ -1684,14 +1719,14 @@ data:
                 "type": "prometheus",
                 "uid": "${datasource}"
               },
-              "expr": "label_replace((kube_node_status_condition{condition=\"Ready\",status=~\"false|unknown\"} == 1) * on(node) group_left(internal_ip) kube_node_info, \"fqdn\", \"$1.lab.home.arpa\", \"node\", \"(.+)\")",
+              "expr": "label_replace((kube_node_status_condition{condition=\"Ready\"} == 1) * on(node) group_left(internal_ip, os_image, kubelet_version) kube_node_info, \"fqhn\", \"$1.lab.home.arpa\", \"node\", \"(.+)\")",
               "format": "table",
               "instant": true,
               "legendFormat": "{{node}}",
               "refId": "A"
             }
           ],
-          "title": "k3s NotReady Nodes",
+          "title": "k3s Node Status",
           "transformations": [
             {
               "id": "organize",
@@ -1701,26 +1736,27 @@ data:
                   "__name__": true,
                   "Value": true,
                   "condition": true,
+                  "provider_id": true,
+                  "external_ip": true,
                   "container_runtime_version": true,
                   "kernel_version": true,
-                  "kubelet_version": true,
-                  "kubeproxy_version": true,
-                  "os_image": true,
-                  "provider_id": true,
-                  "pod_cidr": true,
-                  "system_uuid": true
+                  "kubelet_endpoint_port": true
                 },
                 "renameByName": {
                   "node": "Node",
                   "internal_ip": "IP",
-                  "fqdn": "FQDN",
-                  "status": "Status"
+                  "fqhn": "FQHN",
+                  "status": "Status",
+                  "kubelet_version": "k8s Version",
+                  "os_image": "OS"
                 },
                 "indexByName": {
                   "node": 0,
-                  "internal_ip": 1,
-                  "fqdn": 2,
-                  "status": 3
+                  "fqhn": 1,
+                  "internal_ip": 2,
+                  "status": 3,
+                  "kubelet_version": 4,
+                  "os_image": 5
                 }
               }
             }
@@ -2252,5 +2288,5 @@ data:
       "timezone": "browser",
       "title": "Lab Health & Capacity",
       "uid": "lab-health-cap",
-      "version": 10
+      "version": 11
     }
