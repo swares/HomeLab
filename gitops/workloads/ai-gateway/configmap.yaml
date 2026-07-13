@@ -53,7 +53,7 @@ data:
       # Deployed via gitops/workloads/whisper/ — ArgoCD manages it.
       - model_name: stt
         litellm_params:
-          model: openai/whisper
+          model: openai/base     # faster-whisper-server expects the model size name, not "whisper"
           api_base: http://whisper.whisper.svc.cluster.local:8000/v1
           api_key: "none"
 
