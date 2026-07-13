@@ -1458,7 +1458,8 @@ data:
               "expr": "up{job=~\"node-exporter.*\"}",
               "instant": true,
               "legendFormat": "{{instance}}",
-              "refId": "A"
+              "refId": "A",
+              "format": "table"
             },
             {
               "datasource": {
@@ -1468,7 +1469,8 @@ data:
               "expr": "100 - (avg by (instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
               "instant": true,
               "legendFormat": "{{instance}}",
-              "refId": "B"
+              "refId": "B",
+              "format": "table"
             },
             {
               "datasource": {
@@ -1478,7 +1480,8 @@ data:
               "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
               "instant": true,
               "legendFormat": "{{instance}}",
-              "refId": "C"
+              "refId": "C",
+              "format": "table"
             },
             {
               "datasource": {
@@ -1488,7 +1491,8 @@ data:
               "expr": "node_time_seconds - node_boot_time_seconds",
               "instant": true,
               "legendFormat": "{{instance}}",
-              "refId": "D"
+              "refId": "D",
+              "format": "table"
             }
           ],
           "title": "Host Overview",
@@ -1565,8 +1569,7 @@ data:
                 "type": "prometheus",
                 "uid": "${datasource}"
               },
-              "expr": "label_replace(label_replace((up{job=~\"node-exporter.*\"} == 0) * on(instance) group_left(nodename) node_uname_info, \"ip\", \"$1\", \"instance\", \"([^:]+):.+\"), \"fqdn\", \"$1.lab.home.arpa\", \"nodename\", \"(.+)\")",
-              "format": "table",
+              "expr": "label_replace(up{job=~\"node-exporter.*\"} == 0, \"ip\", \"$1\", \"instance\", \"([^:]+):.+\")",
               "instant": true,
               "legendFormat": "{{instance}}",
               "refId": "A"
@@ -1582,22 +1585,13 @@ data:
                   "__name__": true,
                   "Value": true,
                   "job": true,
-                  "instance": true,
-                  "domainname": true,
-                  "machine": true,
-                  "release": true,
-                  "sysname": true,
-                  "version": true
+                  "instance": true
                 },
                 "renameByName": {
-                  "ip": "IP",
-                  "nodename": "Host",
-                  "fqdn": "FQDN"
+                  "ip": "Host IP"
                 },
                 "indexByName": {
-                  "ip": 0,
-                  "nodename": 1,
-                  "fqdn": 2
+                  "ip": 0
                 }
               }
             }
@@ -2258,5 +2252,5 @@ data:
       "timezone": "browser",
       "title": "Lab Health & Capacity",
       "uid": "lab-health-cap",
-      "version": 9
+      "version": 10
     }
