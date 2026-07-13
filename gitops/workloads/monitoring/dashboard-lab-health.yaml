@@ -114,6 +114,13 @@ data:
               "refId": "A"
             }
           ],
+          "links": [
+            {
+              "title": "Host Overview",
+              "url": "/d/lab-health-cap?viewPanel=13",
+              "targetBlank": false
+            }
+          ],
           "title": "Hosts Up",
           "type": "stat"
         },
@@ -190,6 +197,13 @@ data:
               "instant": true,
               "legendFormat": "Down",
               "refId": "A"
+            }
+          ],
+          "links": [
+            {
+              "title": "Show down hosts",
+              "url": "/d/lab-health-cap?viewPanel=16",
+              "targetBlank": false
             }
           ],
           "title": "Hosts Down",
@@ -1468,6 +1482,86 @@ data:
             }
           ],
           "type": "table"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "custom": {
+                "align": "auto",
+                "cellOptions": {
+                  "type": "auto"
+                },
+                "inspect": false
+              },
+              "mappings": [],
+              "noValue": "All hosts up",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "color": "red"
+                  }
+                ]
+              }
+            },
+            "overrides": []
+          },
+          "gridPos": {
+            "h": 6,
+            "w": 24,
+            "x": 0,
+            "y": 36
+          },
+          "id": 16,
+          "options": {
+            "cellHeight": "sm",
+            "footer": {
+              "reducer": [
+                "sum"
+              ],
+              "show": false
+            },
+            "showHeader": true
+          },
+          "pluginVersion": "12.0.0",
+          "targets": [
+            {
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${datasource}"
+              },
+              "expr": "up{job=~\"node-exporter.*\"} == 0",
+              "format": "table",
+              "instant": true,
+              "legendFormat": "{{instance}}",
+              "refId": "A"
+            }
+          ],
+          "title": "Down Hosts Detail",
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "__name__": true,
+                  "Value": true,
+                  "job": true
+                },
+                "renameByName": {
+                  "instance": "Host"
+                }
+              }
+            }
+          ],
+          "type": "table"
         }
       ],
       "preload": false,
@@ -1496,5 +1590,5 @@ data:
       "timezone": "browser",
       "title": "Lab Health & Capacity",
       "uid": "lab-health-cap",
-      "version": 5
+      "version": 6
     }
