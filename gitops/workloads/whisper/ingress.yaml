@@ -1,0 +1,23 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: whisper
+  namespace: whisper
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    cert-manager.io/cluster-issuer: lab-ca
+spec:
+  rules:
+    - host: stt.apps.lab.home.arpa
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: whisper
+                port:
+                  number: 8000
+  tls:
+    - hosts: [stt.apps.lab.home.arpa]
+      secretName: whisper-tls

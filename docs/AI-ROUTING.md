@@ -52,7 +52,7 @@ embeddings endpoint is wired into LiteLLM.
 |---|---|---|
 | `chat` | RKLLama on opi5pro-1 + opi5pro-2 (load-balanced) | Fast chat via DeepSeek-R1-Distill-1.5B on RK3588S NPU |
 | `embeddings` | Ollama / nomic-embed-text (ARM CPU) | RAG, semantic search |
-| `stt` | faster-whisper-server · k3s whisper namespace (n150-1, CPU) | Speech-to-text (`/v1/audio/transcriptions`) |
+| `stt` | `https://stt.apps.lab.home.arpa/v1/audio/transcriptions` (direct, not via gateway) | Speech-to-text — LiteLLM doesn't proxy multipart audio to custom backends |
 | `m5` | m5stack-adapter → `/api/route` | Full 3-tier escalation router |
 | `m5-llm` | m5stack-adapter → `/api/llm` | Direct Module LLM only |
 | `m5-claude` | m5stack-adapter → `/api/claude` | Direct Claude API client on device |

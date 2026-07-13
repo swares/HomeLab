@@ -48,14 +48,10 @@ data:
         litellm_params: { model: openai/nomic-embed-text, api_base: "http://ollama:11434/v1", api_key: "none" }
       - model_name: embeddings
         litellm_params: { model: openai/nomic-embed-text, api_base: "http://ollama-2:11434/v1", api_key: "none" }
-      # ── Whisper STT (faster-whisper-server, k3s workload, n150-1 CPU) ──────────
-      # OpenAI-compatible /v1/audio/transcriptions endpoint.
-      # Deployed via gitops/workloads/whisper/ — ArgoCD manages it.
-      - model_name: stt
-        litellm_params:
-          model: openai/base     # faster-whisper-server expects the model size name, not "whisper"
-          api_base: http://whisper.whisper.svc.cluster.local:8000/v1
-          api_key: "none"
+      # ── Whisper STT ──────────────────────────────────────────────────────────
+      # LiteLLM does not proxy /v1/audio/transcriptions to custom backends.
+      # Whisper is exposed directly via Ingress at https://stt.apps.lab.home.arpa
+      # (gitops/workloads/whisper/ingress.yaml). Call it directly, not via this gateway.
 
       # M5Stack tiers via the adapter (OpenAI-compatible shim for /api/{slug}).
       # "m5" = the on-device 3-tier escalation router (local NPU → Claude API → Claude Code);
