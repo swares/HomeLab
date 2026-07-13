@@ -11,10 +11,11 @@ data:
       # drop converted .rkllm models into /opt/rkllama/models/ on each board.
       # Model name must match the loaded .rkllm filename (check 'rkllama list' on the host).
       # Reaches the OPis via ExternalName services (rkllama-opi1/2 in ai-backends).
-      # Model name confirmed from /api/tags on 2026-07-06 (both boards).
-      # DeepSeek-R1-Distill-Qwen-1.5B — fits within NPU driver 0.9.6 memory limit (~2.2 GB).
-      # Qwen3-4B_W8A8_RK3588 fails: driver 0.9.6 cannot allocate 3.75 GB NPU memory.
-      # Upgrade both OPis to driver 0.9.7 to unlock 4B+ models.
+      # Model name confirmed from /api/tags on 2026-07-13 (both boards).
+      # Driver upgraded to 0.9.7; Qwen3-4B loads but is too slow for interactive use
+      # (thinking mode generates a reasoning chain even for trivial prompts).
+      # DeepSeek-1.5B is the right default — fast, responsive.
+      # Qwen3-4B available on both OPis for batch/async use if needed.
       - model_name: chat
         litellm_params:
           model: ollama/DeepSeek-R1-Distill-Qwen-1.5B_w8a8_g128_rk3588
@@ -24,7 +25,7 @@ data:
           model: ollama/DeepSeek-R1-Distill-Qwen-1.5B_w8a8_g128_rk3588
           api_base: http://rkllama-opi2:8080
 
-      # ── CPU fallback (Ollama in-cluster, ARM CPU — NPU unavailable until driver 0.9.7) ──
+      # ── CPU fallback (Ollama in-cluster, ARM CPU) ──
       - model_name: chat-cpu
         litellm_params: { model: ollama/qwen2.5:7b, api_base: "http://ollama:11434" }
       - model_name: chat-cpu
@@ -47,6 +48,15 @@ data:
         litellm_params: { model: openai/nomic-embed-text, api_base: "http://ollama:11434/v1", api_key: "none" }
       - model_name: embeddings
         litellm_params: { model: openai/nomic-embed-text, api_base: "http://ollama-2:11434/v1", api_key: "none" }
+      # ── Whisper STT (faster-whisper-server, k3s workload, n150-1 CPU) ──────────
+      # OpenAI-compatible /v1/audio/transcriptions endpoint.
+      # Deployed via gitops/workloads/whisper/ — ArgoCD manages it.
+      - model_name: stt
+        litellm_params:
+          model: openai/whisper
+          api_base: http://whisper.whisper.svc.cluster.local:8000/v1
+          api_key: "none"
+
       # M5Stack tiers via the adapter (OpenAI-compatible shim for /api/{slug}).
       # "m5" = the on-device 3-tier escalation router (local NPU → Claude API → Claude Code);
       # the others expose the Module LLM and the direct Claude client individually.
@@ -60,7 +70,7 @@ data:
       # - model_name: big
       #   litellm_params: { model: anthropic/claude-sonnet-4-6, api_key: os.environ/ANTHROPIC_API_KEY }
     router_settings:
-      routing_strategy: simple-shuffle   # ready for multiple backends when opi5pro-2 joins
+      routing_strategy: simple-shuffle   # load-balances across opi1 + opi2
       num_retries: 2
     # NOTE: the M5Stack speaks the framework's /api/llm protocol, not OpenAI — front it with a
     # tiny adapter (or call it directly / via MQTT from Home Assistant). See AI-INFERENCE.md.

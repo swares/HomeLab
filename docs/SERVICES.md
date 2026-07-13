@@ -57,7 +57,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | m5stack-adapter | ✓ | k3s · odroid-nas node | OpenAI shim for M5Stack; image 0.1.1 (2026-07-11); models: m5, m5-llm, m5-claude |
 | Claude Code orchestrator | ✓ | opi5pro-1 | escalation Tier 3; HTTPS :8443; TLS self-signed; Claude Code 2.1.204 |
 | M5Stack escalation router | ✓ | M5Stack | edge front-end; 3-tier escalation |
-| Whisper STT | ○ | OpenVINO | faster-than-realtime |
+| Whisper STT | ● | k3s · whisper namespace (n150-1, CPU) | faster-whisper-server; `stt` model in LiteLLM gateway; managed by ArgoCD |
 | Embedding model (nomic-embed-text) | ● | Ollama on H4 | configured in LiteLLM as `openai/nomic-embed-text`; bge-small via OpenVINO deferred |
 | Vector DB (Qdrant / Chroma) | ○ | k3s | RAG store |
 | Ollama / llama.cpp | ○ | H4 CPU | fallback engine; also hosts nomic-embed-text |
@@ -88,7 +88,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | M5Stack framework | ✓ | M5Stack | sensors + escalation router |
 | Pi-hole | ✓ | octopi (.148) | DNS + ad-block |
 | MQTT (Mosquitto) | ✓ | opi-zero2w-2 (.188) | always-on broker |
-| Home Assistant | ○ | TBD | natural MQTT consumer; optional |
+| Home Assistant | ✓ | k3s · home-assistant namespace | `ha.apps.lab.home.arpa`; MQTT consumer (broker at opi-zero2w-2 .188); direct login (Authelia SSO future work) |
 
 ## Applications
 
@@ -105,13 +105,14 @@ validates correctly.
 
 ## Gaps worth a decision
 
-1. **Home Assistant** — *deferred.* Natural MQTT consumer if/when you want home-automation.
-2. **Remote access** — WireGuard or Tailscale to reach the lab from outside.
+1. ~~**Home Assistant**~~ — **DONE.** Running in k3s (`ha.apps.lab.home.arpa`); receiving MQTT data from broker at opi-zero2w-2 (2026-07-13).
+2. **Remote access** — WireGuard or Tailscale to reach the lab from outside. *Very low priority.*
 3. ~~**Reverse proxy + internal CA + SSO**~~ — **DONE.** Traefik ingress + cert-manager lab-ca + Authelia OIDC all deployed.
 4. ~~**MQTT broker**~~ — **DONE.** Relocated to always-on Zero 2W.
 5. ~~**Offsite backup**~~ — **DONE.** Nightly `restic copy` via `backup-offsite.timer`.
 6. **UPS + NUT** — *deferred.* The H4 is a single storage point; a UPS is cheap insurance.
-7. **Homepage / dashboard** — landing page once 30+ services are running.
-8. **Shared DB service** — CloudNativePG + Redis operators if more apps need state.
-9. **k8s device plugins (rknpu / Intel-GPU)** — only if inference runs *in* k8s rather than bare-metal.
-10. **RPi 4B reassignment** — now spare (lldap took over LDAP from what was planned for it).
+7. **Grafana dashboard** — basic lab health dashboard exists and working. Improvement needed: clickable counts (e.g. click "down: 2" to drill into affected hosts).
+8. **Home Assistant SSO** — Authelia OIDC for HA (future work; direct login for now).
+9. **Shared DB service** — CloudNativePG + Redis operators if more apps need state.
+10. **k8s device plugins (rknpu / Intel-GPU)** — only if inference runs *in* k8s rather than bare-metal.
+11. **RPi 4B reassignment** — now spare (lldap took over LDAP from what was planned for it).
