@@ -189,7 +189,7 @@ data:
                 "type": "prometheus",
                 "uid": "${datasource}"
               },
-              "expr": "count(up{job=~\"node-exporter.*\"} == 0) or vector(0)",
+              "expr": "count(min_over_time(up{job=~\"node-exporter.*\"}[2m]) == 0) or vector(0)",
               "instant": true,
               "legendFormat": "Down",
               "refId": "A"
@@ -2296,5 +2296,5 @@ data:
       "timezone": "browser",
       "title": "Lab Health & Capacity",
       "uid": "lab-health-cap",
-      "version": 14
+      "version": 15
     }
