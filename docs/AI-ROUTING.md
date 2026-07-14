@@ -99,8 +99,8 @@ See `gitops/workloads/ai-gateway/configmap.yaml` for the live routing config.
 
 | Device | IP | Accelerator | Runtime | Model | Status | LiteLLM name |
 |---|---|---|---|---|---|---|
-| **OPi 5 Pro #1** | `192.168.1.168` | RK3588S NPU (6 TOPS) | RKLLama 0.9.7 | `Llama-3.2-3B-Instruct_w8a8_g128_rk3588` (4.1 GB) | ✅ serving | `chat` |
-| **OPi 5 Pro #2** | `192.168.1.172` | RK3588S NPU (6 TOPS) | RKLLama 0.9.7 | `Llama-3.2-3B-Instruct_w8a8_g128_rk3588` (4.1 GB) | ✅ serving | `chat` |
+| **OPi 5 Pro #1** | `192.168.1.168` | RK3588S NPU (6 TOPS) | RKLLama (runtime 1.3.0) | `DeepSeek-R1-Distill-Qwen-1.5B_w8a8_g128_rk3588` (2.1 GB) | ✅ serving | `chat` |
+| **OPi 5 Pro #2** | `192.168.1.172` | RK3588S NPU (6 TOPS) | RKLLama (runtime 1.3.0) | `DeepSeek-R1-Distill-Qwen-1.5B_w8a8_g128_rk3588` (2.1 GB) | ✅ serving | `chat` |
 | **M5Stack Module LLM** | `192.168.1.71` | AX630C NPU (~6 TOPS) | M5 framework | built-in ~0.5B (firmware) | ✅ via adapter | `m5`, `m5-llm`, `m5-claude` |
 | **H4 Ultra** | `192.168.1.160` | Intel iGPU (N305, 32 EU) | OpenVINO | `bge-small` (embeddings) | ✅ wired | `embeddings` |
 | **N150 #1** | `192.168.1.42` | Intel iGPU (N150, 24 EU) | OpenVINO | `bge-small` (embeddings) | ✅ capable | `embeddings` |
@@ -109,7 +109,7 @@ See `gitops/workloads/ai-gateway/configmap.yaml` for the live routing config.
 
 ### Notes
 
-- Both OPis serving `Llama-3.2-3B-Instruct_w8a8_g128_rk3588` (switched 2026-07-13). RKLLM runtime is 0.9.7 — models must be built for this version (c01zaut 1.1.1 builds are incompatible). Qwen3-4B loads but times out (thinking mode); DeepSeek-1.5B available as `chat-fast`. `chat` requests load-balance across both OPis.
+- Both OPis running RKLLM runtime 1.3.0, rknpu kernel driver 0.9.6 (kernel 6.1.43-rockchip-rk3588). Driver 0.9.6 cannot allocate the ~3GB NPU memory required by 3B models — only models needing <2GB load successfully. DeepSeek-1.5B is the working default. Llama-3.2-3B and Qwen3-4B are present on disk but fail to load. **Upgrade path:** update rknpu kernel module to 0.9.7 on both OPis to unlock 3B models.
 - Whisper STT: `faster-whisper-server` on n150-1 (CPU, port 8001) — deploy with `whisper.yml`, then merge configmap PR. OVMS disabled on n150-1/n150-2 pending GPU runtime + model IR setup (separate task).
 - OpenVINO vision/OCR: not yet wired — OVMS needs GPU runtime (intel-opencl-icd, level-zero) and model IR files before re-enabling.
 - The M5Stack `m5-claude` route uses the `NetDevice_ClaudeAPI` plugin (Haiku by default); this costs cloud tokens unlike the other local routes.
