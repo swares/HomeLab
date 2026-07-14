@@ -13,6 +13,8 @@ is in `docs/` (start with `ARCHITECTURE.md`).
 - To undo something, `git revert`. The git history is the audit log.
 - Host changes go through the Ansible playbooks in `ansible/`. Run `--check` first; a real
   run is an `ask` action.
+- Always suggest a branch name.
+- Always use gh pr to create pull requests.
 
 ## This box has two roles — keep them separate
 
