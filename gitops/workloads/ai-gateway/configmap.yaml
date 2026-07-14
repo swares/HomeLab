@@ -12,15 +12,24 @@ data:
       # Model name must match the loaded .rkllm filename (check 'rkllama list' on the host).
       # Reaches the OPis via ExternalName services (rkllama-opi1/2 in ai-backends).
       # Model name confirmed from /api/tags on 2026-07-13 (both boards).
-      # Driver upgraded to 0.9.7; Qwen3-4B loads but is too slow for interactive use
-      # (thinking mode generates a reasoning chain even for trivial prompts).
-      # DeepSeek-1.5B is the right default — fast, responsive.
+      # RKLLM runtime: 0.9.7 (bundled with RKLLama). Models must be built for this version.
+      # Qwen3-4B loads but is too slow (thinking mode; both boards). DeepSeek-1.5B is fast.
+      # Llama-3.2-3B is the preferred default — better quality than 1.5B, responsive.
       # Qwen3-4B available on both OPis for batch/async use if needed.
       - model_name: chat
         litellm_params:
-          model: ollama/DeepSeek-R1-Distill-Qwen-1.5B_w8a8_g128_rk3588
+          model: ollama/Llama-3.2-3B-Instruct_w8a8_g128_rk3588
           api_base: http://rkllama-opi1:8080
       - model_name: chat
+        litellm_params:
+          model: ollama/Llama-3.2-3B-Instruct_w8a8_g128_rk3588
+          api_base: http://rkllama-opi2:8080
+      # Fallback: DeepSeek-1.5B if 3B is too slow for a use case
+      - model_name: chat-fast
+        litellm_params:
+          model: ollama/DeepSeek-R1-Distill-Qwen-1.5B_w8a8_g128_rk3588
+          api_base: http://rkllama-opi1:8080
+      - model_name: chat-fast
         litellm_params:
           model: ollama/DeepSeek-R1-Distill-Qwen-1.5B_w8a8_g128_rk3588
           api_base: http://rkllama-opi2:8080
