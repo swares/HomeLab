@@ -21,6 +21,16 @@ spec:
           image: ghcr.io/berriai/litellm:main-latest   # pin a tag in production
           args: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
           ports: [{ containerPort: 4000 }]
+          readinessProbe:
+            httpGet: { path: /health, port: 4000 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health/liveliness, port: 4000 }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }

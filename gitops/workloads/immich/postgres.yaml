@@ -29,6 +29,18 @@ spec:
             - name: POSTGRES_PASSWORD
               valueFrom: { secretKeyRef: { name: immich-secrets, key: DB_PASSWORD } }
           ports: [{ containerPort: 5432 }]
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, immich, -d, immich]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: [pg_isready, -U, immich, -d, immich]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
           volumeMounts: [{ name: pgdata, mountPath: /var/lib/postgresql/data }]
       volumes:
         - { name: pgdata, persistentVolumeClaim: { claimName: immich-pgdata } }
