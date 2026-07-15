@@ -172,7 +172,7 @@ data:
 ---
 # ── ExternalSecret — API key from Vault ───────────────────────────────────────
 # Seed with: vault kv put secret/lab/m5stack api-key=<WEBHOOK_INJECT_API_KEY>
-apiVersion: external-secrets.io/v1
+apiVersion: external-secrets.io/v1beta1
 kind: ExternalSecret
 metadata:
   name: m5stack-adapter-secret
