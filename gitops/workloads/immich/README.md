@@ -33,7 +33,7 @@ without pegging the CPU. Two optional upgrades:
 
 **A) H4 iGPU via OpenVINO.** Switch the image to `…-openvino`, and add device access:
 ```yaml
-        securityContext: { privileged: true }   # or the Intel GPU device plugin + a non-privileged SCC
+        securityContext: { privileged: true }   # or the Intel GPU device plugin + a non-privileged security context
         volumeMounts:
           - { name: dri, mountPath: /dev/dri }
           - { name: usb, mountPath: /dev/bus/usb }

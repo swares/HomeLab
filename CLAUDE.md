@@ -46,8 +46,9 @@ is in `docs/` (start with `ARCHITECTURE.md`).
 - Security is standard **PodSecurityAdmission** (not SCCs). If a workload needs elevated
   permissions, fix the `securityContext` — never set `privileged: true`.
 - Confirm the StorageClass name with `kubectl get sc` rather than assuming it.
-- DNS is load-bearing: `api.lab.home.arpa` and `*.apps.lab.home.arpa` must resolve to
-  `192.168.1.160`. If Ingress doesn't resolve, check DNS first.
+- DNS is load-bearing: `api.lab.home.arpa` must resolve to `192.168.1.200` (kube-vip
+  VIP); `*.apps.lab.home.arpa` must resolve to `192.168.1.160` (Traefik ingress).
+  If Ingress doesn't resolve, check DNS first.
 
 ## Secrets
 
@@ -64,7 +65,7 @@ is in `docs/` (start with `ARCHITECTURE.md`).
 
 The H4 is the core (k3s server + NAS, Ubuntu 22.04, `192.168.1.160`). The two
 **Orange Pi 5 Pro** boards (8C/16GB/NPU) are k3s agents / AI inference hosts; RPi 5
-runs Vault; RPi 4B runs Home Assistant (standalone, not k3s); lldap runs as a KVM VM
-(`ldap-1`) on n150-1; the XU3 is a build agent. DNS needs a permanent host.
+runs Vault; RPi 4B runs Home Assistant (standalone, not k3s); lldap runs as a k3s Deployment in the `lldap` namespace (ldap-1 VM decommissioned
+2026-07-04); the XU3 is a build agent. DNS needs a permanent host.
 M5Stack + OPi NPUs are edge inference endpoints, not cluster nodes.
 The map's plaintext credentials must be rotated. See `docs/HARDWARE.md`.

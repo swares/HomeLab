@@ -24,7 +24,7 @@ ssh swares@192.168.1.160 sudo cat /var/lib/rancher/k3s/server/node-token
 # 2. On the agent node, run the installer with all required vars
 curl -sfL https://get.k3s.io | \
   INSTALL_K3S_VERSION=v1.36.2+k3s1 \
-  K3S_URL=https://192.168.1.160:6443 \
+  K3S_URL=https://192.168.1.200:6443 \
   K3S_TOKEN=<token-from-step-1> \
   sh -s - agent
 
@@ -39,7 +39,7 @@ kubectl get nodes   # from H4 — new node should show Ready
 cat /etc/systemd/system/k3s-agent.service.env
 
 sudo tee /etc/systemd/system/k3s-agent.service.env <<EOF
-K3S_URL=https://192.168.1.160:6443
+K3S_URL=https://192.168.1.200:6443
 K3S_TOKEN=<token>
 EOF
 

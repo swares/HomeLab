@@ -20,5 +20,5 @@ rollout-report.txt
 *.tfstate.*
 .terraform/
 .terraform.lock.hcl
-terraform.tfvars
-crash.log
+terraform
+docs-audit-pr.sh

@@ -22,8 +22,9 @@ Run the health check before and after any significant change:
 
     bash scripts/lab-check.sh
 
-**Secrets friction:** anything touching `authelia-secrets` or other manually-created k8s
-secrets requires an out-of-band step — they are not in git. Update them with
+**Secrets friction:** `authelia-secrets` is now ESO-managed via Vault (`gitops/workloads/authelia/external-secret.yaml`);
+it is populated automatically by ExternalSecrets Operator — no out-of-band kubectl step needed.
+For other manually-created k8s secrets, update with
 `kubectl create secret ... --dry-run=client -o yaml | kubectl apply -f -`, then run
 `sync-secrets-to-vault.yml` to keep Vault current.
 

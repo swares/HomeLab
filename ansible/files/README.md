@@ -2,9 +2,7 @@
 
 Place these here locally. They are excluded by `.gitignore`.
 
-- `pull-secret.json` — free Red Hat pull secret from
-  https://console.redhat.com/openshift/install/pull-secret
-  Copied to `/etc/crio/openshift-pull-secret` before MicroShift's first start.
+- `pull-secret.json` — legacy Red Hat pull secret from the MicroShift era. The platform is now k3s; this file is kept for reference but is no longer used at install time.
 
 Secrets that are NOT files (restic password, vault password) live at:
 - `/etc/restic/password` on the host (mode 0700)

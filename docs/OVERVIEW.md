@@ -4,7 +4,7 @@ Current as of 2026-07-07. Detailed service catalog in [SERVICES.md](SERVICES.md)
 
 ## Infrastructure & Platform
 
-- **k3s cluster** — H4 as server, opi5pro-2 as agent; `local-path` StorageClass on NVMe
+- **k3s cluster** — H4, n150-1, n150-2 as servers; opi5pro-1 and opi5pro-2 as agents; `local-path` StorageClass on NVMe
 - **ArgoCD** — GitOps from `gitops/`; selfHeal + prune on all apps
 - **Traefik** — ingress for all `*.apps.lab.home.arpa`; TLS via cert-manager lab CA
 - **kube-vip** — control-plane HA VIP (`192.168.1.200`)
@@ -26,7 +26,7 @@ Current as of 2026-07-07. Detailed service catalog in [SERVICES.md](SERVICES.md)
 ## Observability
 
 - **Grafana + Prometheus** — metrics (`grafana.apps.lab.home.arpa`)
-- **Loki + Promtail** — log aggregation; Promtail runs as a DaemonSet
+- **Loki + Alloy** — log aggregation; Alloy runs as a DaemonSet (Promtail removed)
 - **Alloy** — Grafana telemetry agent
 - **node-exporter** — on non-cluster hosts
 - **smartd / mdadm** — disk health and RAID alerting on H4
@@ -34,9 +34,9 @@ Current as of 2026-07-07. Detailed service catalog in [SERVICES.md](SERVICES.md)
 ## AI & Inference
 
 - **LiteLLM gateway** — unified OpenAI-compatible API across all backends (`ai.apps.lab.home.arpa`)
-- **RKLLama** — NPU-native LLM on opi5pro-2 (~7–8 tok/s, RK3588S)
-- **OpenVINO Model Server** — embeddings, STT, vision on H4 + n150s (Intel iGPU)
-- **Ollama** — in-cluster CPU fallback (opi5pro-2)
+- **RKLLama** — NPU-native LLM on opi5pro-1 and opi5pro-2 (~7–8 tok/s, RK3588S)
+- **OpenVINO Model Server** — currently disabled (pending GPU runtime + model IR setup); planned for H4 + n150s Intel iGPU
+- **Ollama** — in-cluster CPU fallback (opi5pro-1 and opi5pro-2)
 - **M5Stack escalation router** — 3-tier edge AI: local NPU → Claude API → Claude Code
 - **m5stack-adapter** — OpenAI-compatible shim for M5Stack `/api/*` protocol
 
@@ -63,4 +63,4 @@ Current as of 2026-07-07. Detailed service catalog in [SERVICES.md](SERVICES.md)
 - UPS + NUT (H4 is a single-point storage risk)
 - Homepage / dashboard
 - CloudNativePG + Redis operators for shared DB
-- RPi 4B reassignment (currently spare)
+- RPi 4B runs Home Assistant (standalone, Debian 12)

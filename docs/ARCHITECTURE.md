@@ -12,7 +12,7 @@ fleet**. Everything that runs inside the cluster is declared in git and reconcil
 |-------|------|------|--------------|
 | Host | **Ansible** | OS config, storage (LVM/RAID), k3s install, backups | Whole box — gate hardest |
 | Cluster | **Argo CD** | Namespaces, workloads, Ingress, config inside k3s | Recoverable from git |
-| VMs | **KVM / libvirt** | lldap and other services on n150-1/n150-2 hypervisors | Per-VM |
+| VMs | **KVM / libvirt** | gitlab-1 and other services on n150-1/n150-2 hypervisors (lldap moved to k3s) | Per-VM |
 
 Ansible runs rarely (setup and changes you approve). Argo runs continuously. Claude lives
 mostly in the git/Argo layer.
@@ -150,8 +150,8 @@ The previous `ldap-1` KVM VM on n150-1 (`192.168.1.70`) has been decommissioned.
 
 **Authelia** runs in k3s (`authelia.apps.lab.home.arpa`) as an OIDC provider backed by
 lldap. It gates SSO for apps that support OIDC but not LDAP directly (Immich). The OIDC
-private key and all secrets live in the `authelia-secrets` k8s Secret (created manually,
-not in git).
+private key and all secrets live in the `authelia-secrets` k8s Secret, ESO-managed
+via Vault (`gitops/workloads/authelia/external-secret.yaml`).
 
 **cert-manager** (`lab-ca` ClusterIssuer) signs TLS certs for all `*.apps.lab.home.arpa`
 Ingresses using a self-signed lab root CA stored in the `lab-root-ca` secret.

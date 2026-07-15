@@ -22,7 +22,7 @@ Add to Pi-hole / dnsmasq on octopi (`192.168.1.148`):
 
 | Record | Type | Value |
 |--------|------|-------|
-| `api.lab.home.arpa` | A | `192.168.1.160` |
+| `api.lab.home.arpa` | A | `192.168.1.200` | k3s API server (kube-vip VIP) |
 | `*.apps.lab.home.arpa` | A | `192.168.1.160` |
 
 CoreDNS handles `*.apps.lab.home.arpa` inside the cluster automatically via the
@@ -279,36 +279,4 @@ copy is the offsite restic + md1's own mirror. The secondary covers the small cr
 
 ### Migrate the ex-Synology secondary to a clean mirror
 
-(One-time: the secondary disks came off an old Synology — ext4 LVM `vg1000`.)
-
-    # 1. Copy photos to primary (verify in Immich before deleting source)
-    rsync -aHAX --info=progress2 /mnt/cold-sec-old/<photos>/ /mnt/cold-8t/immich/library/
-
-    # 2. Wipe old layout and create clean RAID 1 across the two 6 TB disks
-    umount /mnt/cold-sec-old
-    vgremove vg1000
-    mdadm --stop /dev/md2 /dev/md3
-    wipefs -a /dev/sda /dev/sdc
-    mdadm --create /dev/md0 --level=1 --raid-devices=2 /dev/sda /dev/sdc
-    mkfs.xfs /dev/md0
-    mdadm --detail --scan >> /etc/mdadm/mdadm.conf
-    # 3. Mount at /mnt/cold-sec; storage.yml manages it going forward.
-
----
-
-## DNS records reference
-
-| Record | Type | Value | Notes |
-|--------|------|-------|-------|
-| `api.lab.home.arpa` | A | `192.168.1.160` | k3s API server |
-| `*.apps.lab.home.arpa` | A | `192.168.1.160` | All Ingresses |
-
----
-
-## Disaster recovery — priority order
-
-1. **Verify cold tier integrity** — `cat /proc/mdstat`; if degraded, replace disk first.
-2. **Restore Vault** — unseal on rpi5; all other secrets flow from here.
-3. **Restore k3s** — etcd snapshot restore; ArgoCD re-syncs workloads from git.
-4. **Restore Immich Postgres** — from nightly dump on `/mnt/cold-8t/immich/`.
-5. **Restore NAS data** — restic restore from `/mnt/cold-8t/restic` or offsite.
+(One-time: the secondary disks came off an old Synology — ext4

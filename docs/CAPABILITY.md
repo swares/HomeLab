@@ -18,7 +18,7 @@ Totals across the 19-node fleet, classed the way the hardware actually divides. 
 
 | Tier | Nodes | Cores | RAM | GPU | NPU | Purpose |
 |------|-------|-------|-----|-----|-----|---------|
-| **x86 · Proxmox** | 4 | 20C/20T | 112 GB | 104 EU (Intel) | — | VMs + containers |
+| **x86 · KVM/libvirt** | 4 | 20C/20T | 112 GB | 104 EU (Intel) | — | VMs + containers |
 | **ARM AI · bare-metal** | 2 | 16C | 32 GB | Mali-G610 MP4 ×2 | 12 TOPS | RKLLama LLM + orchestrator |
 | **ARM k3s agents** | 4 | 16C | 16 GB | Mali-G31 MP2 ×4 | — | containers (stateless) |
 | **ARM infra / services** | 5 | 24C | 20 GB | VideoCore · Mali-T628 | — | Vault, LDAP, OctoPi, build |
@@ -44,8 +44,8 @@ Counts reconcile: 4+2+4+5+4 = **19 nodes**; 20+16+16+24+3 = **79 cores**;
 
 These are **raw** capability totals. Two allocation realities matter when planning:
 
-- The **H4 (64 GB, 32 EU)** is dedicated to NAS/MinIO/AI, *not* a hypervisor — so the Proxmox
-  cluster's usable x86 compute is really the **3× N150 ≈ 12C / 48 GB / 72 EU**.
+- The **H4 (64 GB, 32 EU)** is dedicated to NAS/MinIO/AI, *not* a hypervisor — so the KVM/libvirt
+  hosts' usable x86 compute is really the **3× N150 ≈ 12C / 48 GB / 72 EU**.
 - The **OPi 5 Pro** pair runs AI bare-metal, so their 16C/32 GB is for inference + the
   orchestrator, not general VMs.
 - The **Zero 2W** pool is SD-backed — count it for stateless k3s pods, not storage/IO-heavy work.
@@ -66,13 +66,13 @@ free for *new* lab workloads is roughly half:
 
 **Reserved (~40 cores / ~96 GB):**
 - **H4** — 8C / 64 GB / 32 EU → NAS, MinIO, backups, heavy AI. Not a hypervisor.
-- **Infra services** — RPi 5 (Vault), RPi 4B (OpenLDAP), RPi 3B ×2 (OctoPi, DNS/QDevice), XU3
+- **Infra services** — RPi 5 (Vault), RPi 4B (Home Assistant, standalone), RPi 3B ×2 (OctoPi, DNS/QDevice), XU3
   (build) ≈ 24C / 20 GB, spoken-for by their roles.
 - **TV/browse VM** — ~2 vCPU / 4 GB + the iGPU (24 EU) on N150 #3.
-- **Hypervisor + OS overhead** — ~3C / 6 GB across the Proxmox nodes.
+- **Hypervisor + OS overhead** — ~3C / 6 GB across the KVM/libvirt hosts.
 
 **Allocatable breakdown:**
-- x86 VM pool (Proxmox) ≈ **7 vCPU / 38 GB** (3× N150 − TV VM − host overhead) + **48 EU** OpenVINO
+- x86 VM pool (KVM/libvirt) ≈ **7 vCPU / 38 GB** (3× N150 − TV VM − host overhead) + **48 EU** OpenVINO
 - ARM AI (OPi 5 Pro ×2) = **16C / 32 GB / 12 TOPS** (bare-metal)
 - ARM k3s agents (Zero 2W ×4) ≈ **16C / 14 GB** (stateless pods)
 

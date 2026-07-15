@@ -69,11 +69,11 @@ mirrors) keeps data safe.
 | Orange Pi 5 Pro #1 | opi5pro-1 | 192.168.1.168 | k3s agent, Ollama inference |
 | Orange Pi 5 Pro #2 | opi5pro-2 | 192.168.1.172 | k3s agent, Ollama-2 inference |
 | Raspberry Pi 5 | rpi5 | 192.168.1.128 | Vault |
-| N150 mini PC #1 | n150-1 | 192.168.1.9   | Windows (WinRM managed, sleep disabled) |
-| N150 mini PC #2 | n150-2 | 192.168.1.171 | Windows (WinRM managed, sleep disabled) |
+| N150 mini PC #1 | n150-1 | 192.168.1.42  | Ubuntu 24.04, k3s server + KVM hypervisor |
+| N150 mini PC #2 | n150-2 | 192.168.1.21  | Ubuntu 24.04, k3s server + KVM hypervisor |
 | N150 mini PC #3 | n150-3 | 192.168.1.176 | Windows HTPC (WinRM managed, sleep disabled) |
 | OPi Zero 2W #2 | opi-zero2w-2 | 192.168.1.188 | MQTT broker |
-| OctoPi (RPi 3B #2) | octopi | 192.168.1.148 | Pi-hole DNS (needs Bookworm upgrade) |
+| OctoPi (RPi 3B #2) | octopi | 192.168.1.148 | Pi-hole DNS (Bookworm, Pi-hole v6.4.3) |
 | Odroid XU3 | xu3-1 | 192.168.1.64 | Build agent (flagged unstable) |
 
 ## Quickstart (fresh bootstrap)
@@ -98,10 +98,7 @@ mirrors) keeps data safe.
 Add a workload: add a directory under `gitops/workloads/` and an `Application` in
 `gitops/apps/`, then merge to `main`. Argo deploys it within ~30 seconds.
 
-Change anything: edit git, never poke the cluster directly. The
-[sample app](gitops/workloads/sample-app/) is a working template.
-
-Secrets: store in Vault under `secret/lab/<name>`, then create an `ExternalSecret` in
+Change anything: edit git, never poke the cluster directly. Secrets: store in Vault under `secret/lab/<name>`, then create an `ExternalSecret` in
 the workload namespace. See `gitops/workloads/immich/external-secret.yaml` for an example.
 
 ## Updates and rollback
@@ -140,9 +137,6 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the full security model.
 - [ ] Rotate octopi Pi-hole credentials (currently plaintext)
 - [ ] Flash octopi to Raspberry Pi OS Bookworm → upgrade to Pi-hole v6
 - [ ] Move photo library (~1.3TB) into `/mnt/cold-8t/immich` so Immich can serve it
-
-### Blocked on physical access
-- [ ] Find rpi4b (or replacement) → bootstrap OpenLDAP
 
 ### Longer term
 - [ ] Vault TLS — currently plain HTTP; wire cert-manager before exposing beyond LAN

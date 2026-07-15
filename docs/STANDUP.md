@@ -33,7 +33,7 @@ to build on** (don't build the NAS on a faulted disk link).
      ```
 3. 🔧 **Network & addressing.** Give every infra node a **static / DHCP-reserved IP** (Pi-hole
    client-scoping and the k8s API both need stable addresses). Confirm the gateway
-   (`lab_gateway`, flagged *confirm* in the inventory) and the ingress VIP (`10.136.151.40`).
+   (`lab_gateway`, flagged *confirm* in the inventory) and the ingress VIP (`192.168.1.160`).
 4. 🔧 **Credentials.** Replace the map's shared password with **SSH keys** (`ansible_user`), and
    generate real secrets — Vault init/unseal keys, the Pi-hole web hash, a Proxmox API token, the
    restic repo password. Keep them out of Git (Ansible Vault now; HashiCorp Vault once it's up).
@@ -65,11 +65,11 @@ Goal: name resolution, storage, identity, and secrets — the things everything 
    ```bash
    make dns
    ```
-   Then point DHCP at **both** resolvers (primary `.59` wired, Zero 2W secondary). Install Pi-hole
+   Then point DHCP at **both** resolvers (primary `.148` octopi, Zero 2W secondary). Install Pi-hole
    on top for the UI/blocking if you want it (the playbook pre-seeds `pihole.toml`). Verify:
    ```bash
-   dig @10.136.151.59 h4-core.lab.home.arpa +short          # -> 192.168.1.160
-   dig @10.136.151.59 anything.apps.lab.home.arpa +short    # -> 10.136.151.40 (ingress VIP)
+   dig @192.168.1.148 h4-core.lab.home.arpa +short          # -> 192.168.1.160
+   dig @192.168.1.148 anything.apps.lab.home.arpa +short    # -> 192.168.1.160 (Traefik ingress VIP)
    ```
    *Depends on:* Phase 1. *Unblocks:* the cluster API + all `*.apps` ingress names.
 2. 🟢 **Storage on the H4** (only once the 8 TB CRC link is proven, Phase 0):
@@ -194,6 +194,6 @@ Goal: the VM/devops sandbox. This is a **parallel track** — it doesn't block P
 | 5 | IaaS (parallel) | Proxmox + `tofu apply` | VMs reachable |
 | 6 | Verify/harden | smoke test + close gaps | — |
 
-**Critical path:** Phase 0 (healthy disks + IPs) → **DNS** → storage → MicroShift → Argo. DNS is
+**Critical path:** Phase 0 (healthy disks + IPs) → **DNS** → storage → k3s → Argo. DNS is
 the true first dependency; the unresolved H4 CRC fault is the one thing that can undermine the
 storage tier, so clear it first.
