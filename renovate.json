@@ -87,6 +87,11 @@
       "description": "ollama — Docker Hub tags don't use v-prefix (0.32.0 not v0.32.0); force loose versioning",
       "matchPackageNames": ["ollama/ollama"],
       "versioning": "loose"
+    },
+    {
+      "description": "ESO API version — cluster CRDs only have v1beta1; block v1 bump until ESO Helm release is upgraded",
+      "matchPackageNames": ["external-secrets.io/ExternalSecret", "external-secrets.io/ClusterSecretStore"],
+      "enabled": false
     }
   ],
 
