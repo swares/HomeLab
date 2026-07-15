@@ -27,7 +27,7 @@ jobs:
     name: Vault seal check
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Show checked-out commit
         run: git log --oneline -3
@@ -51,7 +51,7 @@ jobs:
     name: Update Pi-hole
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Show checked-out commit
         run: git log --oneline -3
@@ -75,7 +75,7 @@ jobs:
     runs-on: [self-hosted, Linux, X64]
     if: vars.SKIP_VM_UPDATES != 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Show checked-out commit
         run: git log --oneline -3
@@ -112,7 +112,7 @@ jobs:
     name: Lab health check
     runs-on: [self-hosted, Linux, X64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up kubeconfig
         run: |
