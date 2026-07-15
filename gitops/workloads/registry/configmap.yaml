@@ -15,7 +15,7 @@ data:
         "port": "5000",
         "auth": {
           "htpasswd": {
-            "path": "/etc/zot/htpasswd"
+            "path": "/etc/zot-auth/htpasswd"
           }
         }
       },
