@@ -1,0 +1,106 @@
+# NetworkPolicies for the ai-gateway namespace.
+# Restricts ingress to Traefik only; restricts egress to ollama pods and DNS.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: ai-gateway
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Allow Traefik (kube-system) to reach litellm on port 4000.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-traefik
+  namespace: ai-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: litellm
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 4000
+---
+# Allow litellm to reach ollama pods within the same namespace (port 11434).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-litellm-to-ollama
+  namespace: ai-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: litellm
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [ollama, ollama-2]
+      ports:
+        - port: 11434
+    # DNS
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# Allow ollama pods to receive requests from litellm.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ollama-from-litellm
+  namespace: ai-gateway
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [ollama, ollama-2]
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: litellm
+      ports:
+        - port: 11434
+---
+# Allow m5stack-adapter egress to the M5Stack device (external HTTPS on port 443).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-m5stack-adapter-egress
+  namespace: ai-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: m5stack-adapter
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - port: 443
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP

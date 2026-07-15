@@ -1,10 +1,11 @@
 # Runs on every PR and push to main.
-# Lints YAML and dry-runs kubectl apply against the live cluster.
+# Lints YAML and client-side dry-runs kubectl apply.
 #
-# Required repository secrets (Settings → Secrets and variables → Actions):
-#   KUBECONFIG_B64      base64-encoded kubeconfig:  base64 < ~/.kube/config
-#   ARGOCD_AUTH_TOKEN   ArgoCD API token (admin → User Info → Generate Token)
-#   ARGOCD_SERVER       e.g. argocd.apps.lab.home.arpa
+# CI authority: GitLab CI is the authoritative pipeline (full validate/sync-check/rollback).
+# This GitHub Actions workflow runs yaml-lint and client-side manifest validation only —
+# it does NOT require cluster access and runs entirely on GitHub-hosted runners.
+#
+# No secrets required for these jobs.
 
 name: Validate
 
@@ -37,25 +38,21 @@ jobs:
           echo "All YAML valid."
 
   dry-run-apply:
-    name: kubectl dry-run
+    name: kubectl dry-run (client-side)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up kubeconfig
-        run: |
-          mkdir -p ~/.kube
-          echo "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
-          chmod 600 ~/.kube/config
-
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
 
-      - name: Dry-run apply all workload manifests
+      - name: Client-side dry-run all workload manifests
+        # --dry-run=client validates manifest structure without a live cluster.
+        # Server-side validation (schema + admission) runs in GitLab CI on a self-hosted runner.
         run: |
           FAILED=0
           find gitops/workloads -name '*.yaml' | while read f; do
             echo "  checking $f"
-            kubectl apply --dry-run=server -f "$f" || FAILED=1
+            kubectl apply --dry-run=client -f "$f" 2>&1 || FAILED=1
           done
           [ "$FAILED" -eq 0 ] || { echo "Dry-run failed."; exit 1; }

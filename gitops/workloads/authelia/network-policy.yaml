@@ -1,0 +1,89 @@
+# NetworkPolicies for the authelia namespace.
+# Default-deny all ingress/egress, then selectively allow required traffic.
+---
+# Default deny all ingress and egress in the namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: authelia
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Allow Traefik (ingress controller in kube-system) to reach Authelia on port 9091.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ingress-from-traefik
+  namespace: authelia
+spec:
+  podSelector:
+    matchLabels:
+      app: authelia
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 9091
+---
+# Allow Authelia to reach its Postgres sidecar within the same namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-authelia-to-postgres
+  namespace: authelia
+spec:
+  podSelector:
+    matchLabels:
+      app: authelia-postgres
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: authelia
+      ports:
+        - port: 5432
+---
+# Allow Authelia egress to lldap (LDAP port 3890) in the lldap namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-authelia-egress-ldap
+  namespace: authelia
+spec:
+  podSelector:
+    matchLabels:
+      app: authelia
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: lldap
+          podSelector:
+            matchLabels:
+              app: lldap
+      ports:
+        - port: 3890
+    # Allow DNS resolution
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    # Allow Authelia to reach its own Postgres
+    - to:
+        - podSelector:
+            matchLabels:
+              app: authelia-postgres
+      ports:
+        - port: 5432

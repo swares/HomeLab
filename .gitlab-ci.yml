@@ -1,8 +1,12 @@
 # ──────────────────────────────────────────────────────────────────────────────
-# HomeLab CI — update validation pipeline
+# HomeLab CI — AUTHORITATIVE pipeline (GitLab is primary CI)
+#
+# GitHub Actions (.github/workflows/validate.yml) runs yaml-lint and
+# client-side kubectl dry-run only. This pipeline is the source of truth
+# for server-side validation, ArgoCD sync-check, and rollback.
 #
 # Stages:
-#   validate   : run on every MR — lint YAML, dry-run kubectl apply
+#   validate   : run on every MR — lint YAML, dry-run kubectl apply (server-side)
 #   sync-check : run on merge to main — wait for ArgoCD sync, probe Ingresses
 #   rollback   : auto-triggered on sync-check failure; manual gate for safety
 #

@@ -31,14 +31,18 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /etc/zot
+            - name: htpasswd
+              mountPath: /etc/zot/htpasswd
+              subPath: htpasswd
+              readOnly: true
             - name: data
               mountPath: /var/lib/registry
           readinessProbe:
-            httpGet: { path: /v2/, port: 5000 }
+            tcpSocket: { port: 5000 }   # /v2/ returns 401 with auth enabled
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
-            httpGet: { path: /v2/, port: 5000 }
+            tcpSocket: { port: 5000 }
             initialDelaySeconds: 15
             periodSeconds: 30
           resources:
@@ -51,5 +55,7 @@ spec:
       volumes:
         - name: config
           configMap: { name: zot-config }
+        - name: htpasswd
+          secret: { secretName: zot-htpasswd }
         - name: data
           persistentVolumeClaim: { claimName: zot-data }

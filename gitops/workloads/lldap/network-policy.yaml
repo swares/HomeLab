@@ -1,0 +1,74 @@
+# NetworkPolicies for the lldap namespace.
+# Default-deny all, allow only LDAP from authelia and HTTP UI from Traefik.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: lldap
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# Allow LDAP (3890) from authelia namespace only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ldap-from-authelia
+  namespace: lldap
+spec:
+  podSelector:
+    matchLabels:
+      app: lldap
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: authelia
+          podSelector:
+            matchLabels:
+              app: authelia
+      ports:
+        - port: 3890
+---
+# Allow HTTP UI (17170) from Traefik for the lldap web interface.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-ui-from-traefik
+  namespace: lldap
+spec:
+  podSelector:
+    matchLabels:
+      app: lldap
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 17170
+---
+# Allow lldap egress for DNS only (it doesn't call external services).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-lldap-egress-dns
+  namespace: lldap
+spec:
+  podSelector:
+    matchLabels:
+      app: lldap
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
