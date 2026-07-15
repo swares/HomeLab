@@ -20,7 +20,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: litellm
-          image: ghcr.io/berriai/litellm:v1.85.7
+          image: ghcr.io/berriai/litellm:v1.92.0
           args: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
           ports: [{ containerPort: 4000 }]
           readinessProbe:
