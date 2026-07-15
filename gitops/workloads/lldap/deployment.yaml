@@ -19,7 +19,7 @@ spec:
       automountServiceAccountToken: false
       containers:
         - name: lldap
-          image: lldap/lldap:stable   # PIN to a vX.Y.Z tag once stable is confirmed working
+          image: lldap/lldap:v0.6.3
           ports:
             - name: ldap
               containerPort: 3890

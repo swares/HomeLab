@@ -13,6 +13,7 @@ LAB-URLS.md
 # Local state
 *.retry
 .DS_Store
+rollout-report.txt
 
 # terraform / opentofu
 *.tfstate

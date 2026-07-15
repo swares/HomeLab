@@ -50,13 +50,13 @@ dns:         ## Configure Pi-hole/dnsmasq lab zone (primary + secondary)
 vault:       ## Install + configure Vault (RPi 5)
 	cd ansible && $(ANSIBLE) playbooks/vault.yml
 
-ldap:        ## Install + configure OpenLDAP (RPi 4B)
+ldap:        ## Install + configure OpenLDAP on legacy RPi 4B (lldap now runs as k3s workload)
 	cd ansible && $(ANSIBLE) playbooks/ldap.yml
 
 mqtt:        ## Install Mosquitto broker (lab Zero 2W)
 	cd ansible && $(ANSIBLE) playbooks/mqtt.yml
 
-k3s-vms:     ## Install k3s on the Proxmox VMs (run terraform/inventory-from-tofu.sh first)
+k3s-vms:     ## Install k3s on the Proxmox VMs (requires terraform/ dir; run terraform/inventory-from-tofu.sh first)
 	cd ansible && $(ANSIBLE) -i inventory/tofu-vms.yml playbooks/k3s.yml
 
 all:         ## Run the full site playbook
@@ -84,7 +84,7 @@ update-k3s:        ## Upgrade k3s binary to pinned version in group_vars/all/k3s
 check-vault:       ## Verify Vault seal status (safe to run anytime)
 	cd ansible && $(ANSIBLE) playbooks/update-non-apt.yml -t vault
 
-bake-image:        ## Bake a fresh patched Ubuntu Noble Proxmox template via Packer
+bake-image:        ## Bake a fresh patched Ubuntu Noble Proxmox template via Packer (requires packer/proxmox.pkrvars.hcl — copy and fill from proxmox.pkrvars.hcl.example)
 	cd packer && packer init . && packer build -var-file=proxmox.pkrvars.hcl ubuntu-noble.pkr.hcl
 
 # ── Image push (Zot rejects Docker schema v2; push via OCI layout + crane) ────

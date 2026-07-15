@@ -63,7 +63,8 @@ is in `docs/` (start with `ARCHITECTURE.md`).
 ## The fleet
 
 The H4 is the core (k3s server + NAS, Ubuntu 22.04, `192.168.1.160`). The two
-**Orange Pi 5 Pro** boards (8C/16GB/NPU) are k3s agents / AI inference hosts; RPi 5/4B
-run Vault and OpenLDAP; the XU3 is a build agent. DNS needs a permanent host.
+**Orange Pi 5 Pro** boards (8C/16GB/NPU) are k3s agents / AI inference hosts; RPi 5
+runs Vault; RPi 4B runs Home Assistant (standalone, not k3s); lldap runs as a KVM VM
+(`ldap-1`) on n150-1; the XU3 is a build agent. DNS needs a permanent host.
 M5Stack + OPi NPUs are edge inference endpoints, not cluster nodes.
 The map's plaintext credentials must be rotated. See `docs/HARDWARE.md`.
