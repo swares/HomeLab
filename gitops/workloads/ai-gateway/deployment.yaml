@@ -24,7 +24,7 @@ spec:
           args: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
           ports: [{ containerPort: 4000 }]
           readinessProbe:
-            httpGet: { path: /health, port: 4000 }
+            httpGet: { path: /health/liveliness, port: 4000 }
             initialDelaySeconds: 20
             periodSeconds: 10
             failureThreshold: 3
