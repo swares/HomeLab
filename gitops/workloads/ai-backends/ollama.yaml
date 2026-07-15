@@ -35,7 +35,7 @@ spec:
           tolerationSeconds: 60
       containers:
         - name: ollama
-          image: ollama/ollama:v0.21.2
+          image: ollama/ollama:0.21.2
           args: ["serve"]
           env:
             - name: OLLAMA_HOST
