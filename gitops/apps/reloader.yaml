@@ -7,7 +7,7 @@ spec:
   project: default
   source:
     repoURL: git@github.com:swares/HomeLab.git
-    targetRevision: HEAD
+    targetRevision: main
     path: gitops/workloads/reloader
   destination:
     server: https://kubernetes.default.svc
