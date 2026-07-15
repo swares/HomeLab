@@ -79,7 +79,7 @@ Goal: name resolution, storage, identity, and secrets — the things everything 
    Mounts the two mirrors (`md1` 8 TB → `/mnt/cold-8t`, secondary ~5.45 TB → `/mnt/cold-sec`), carves the NVMe LVM hot tier, and installs
    **smartd + mdadm monitoring**. Verify mounts, array health, and that the monitors are active.
    See [storage-tiers.svg](diagrams/storage-tiers.svg).
-3. 🟢 **Identity & secrets.** `make vault` (RPi 5) then `make ldap` (RPi 4B). Vault install/config
+3. 🟢 **Identity & secrets.** `make vault` (RPi 5). lldap runs as k3s Deployment. Vault install/config
    is automated; **`vault operator init` + unseal are a one-time manual step** (store keys offline).
 4. 🟢 **MQTT broker.** `make mqtt` stands up Mosquitto on a lab Zero 2W; point the M5Stack
    framework's broker address at it (dad's laptop stays a dev target).
@@ -172,7 +172,7 @@ Goal: the VM/devops sandbox. This is a **parallel track** — it doesn't block P
    - ✅ **Offsite backup** — wired: `backup-offsite.timer` does a nightly `restic copy` to an
      offsite repo. Set `offsite_restic_repo` + `/etc/restic/offsite.env` (creds from Vault).
    - ✅ **MQTT (Mosquitto)** — relocated to a lab Zero 2W (`make mqtt`).
-   - 🔵 **UPS + NUT** and **Home Assistant** — deferred by choice (future improvements).
+   - 🔵 **UPS + NUT** — deferred by choice (future improvement).
    - 🟡 **Reverse proxy + internal CA + SSO** — once several web UIs are live.
    - 🟡 **VPN** (WireGuard/Tailscale), **UPS + NUT** (the H4 is a single storage point), dashboards.
 

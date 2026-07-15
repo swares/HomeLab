@@ -54,7 +54,7 @@ Match each box to what it's actually good at. `✓` = already running.
 | **Orange Pi 5 Pro ×2** | ARM 8C / 16 GB / **6 TOPS NPU** | **Bare-metal AI** (RKLLama) + the **Claude Code orchestrator** + GitLab✓; the "brain" tier. |
 | **N150 ×3** | x86 4C / 16 GB each | **3-node Proxmox cluster** (homogeneous → clean live-migrate). Two lab boxes + the living-room box, which runs its **TV/browse VM** (iGPU passthrough) while still voting in quorum. Also OpenVINO iGPU inference. |
 | **RPi 5** | ARM 4C / 8 GB | **Vault**✓ (secrets) + k8s agent. |
-| **RPi 4B** | ARM 4C / 8 GB | **Home Assistant**✓ (standalone). |
+| **RPi 4B** | ARM 4C / 8 GB | **Pi-hole secondary DNS**✓ (192.168.1.116). |
 | **RPi 3B ×2** | ARM 4C / 1 GB | #2 (wired) = **DNS (Pi-hole)** — printer offline; #1 ⚠ **power fault** → retire/RMA. |
 | **Odroid-XU3** | ARM 8C / 2 GB ⚠ | CI build agent / light pods (flaky — verify). |
 | **Orange Pi Zero 2W ×4** | H618 A53 4C / **4 GB** | **Standalone WiFi** (ClusterHAT failed) — a lightweight **k3s agent pool** (~16 C/16 GB) or single-service hosts; SD-only, keep stateless; no NPU. |
