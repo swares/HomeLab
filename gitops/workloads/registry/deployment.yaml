@@ -32,7 +32,7 @@ spec:
             - name: config
               mountPath: /etc/zot
             - name: htpasswd
-              mountPath: /etc/zot/htpasswd
+              mountPath: /etc/zot-auth/htpasswd
               subPath: htpasswd
               readOnly: true
             - name: data
