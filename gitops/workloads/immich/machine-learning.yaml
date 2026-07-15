@@ -31,7 +31,7 @@ spec:
     spec:
       containers:
         - name: ml
-          image: ghcr.io/immich-app/immich-machine-learning:release   # CPU default; see header for accel
+          image: ghcr.io/immich-app/immich-machine-learning:v2.7.5   # CPU default; see header for accel
           ports: [{ containerPort: 3003 }]
           readinessProbe:
             httpGet: { path: /ping, port: 3003 }

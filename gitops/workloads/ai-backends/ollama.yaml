@@ -35,7 +35,12 @@ spec:
           tolerationSeconds: 60
       containers:
         - name: ollama
-          image: ollama/ollama:latest
+<<<<<<< Updated upstream
+          image: ollama/ollama:v0.21.2
+=======
+          image: ollama/ollama:latest   # TODO: pin to versioned tag once pull confirmed on OPi nodes
+          imagePullPolicy: IfNotPresent  # OPi nodes can't reach Docker Hub; use cached image
+>>>>>>> Stashed changes
           args: ["serve"]
           env:
             - name: OLLAMA_HOST
