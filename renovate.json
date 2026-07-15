@@ -82,6 +82,11 @@
       "description": "Pi-hole — no Renovate tracking (uses pihole -up internally); placeholder to suppress noise",
       "matchDepNames": ["pi-hole/pi-hole"],
       "enabled": false
+    },
+    {
+      "description": "ollama — Docker Hub tags don't use v-prefix (0.32.0 not v0.32.0); force loose versioning",
+      "matchPackageNames": ["ollama/ollama"],
+      "versioning": "loose"
     }
   ],
 
