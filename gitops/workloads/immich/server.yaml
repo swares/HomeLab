@@ -18,6 +18,16 @@ spec:
             - name: NODE_EXTRA_CA_CERTS
               value: /etc/ssl/lab-ca/ca.crt
           ports: [{ containerPort: 2283 }]
+          readinessProbe:
+            httpGet: { path: /api/server/ping, port: 2283 }
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /api/server/ping, port: 2283 }
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 3
           volumeMounts:
             - { name: library, mountPath: /usr/src/app/upload }
             - { name: lab-ca, mountPath: /etc/ssl/lab-ca, readOnly: true }
