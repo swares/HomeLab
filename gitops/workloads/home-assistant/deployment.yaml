@@ -50,7 +50,7 @@ spec:
               memory: 512Mi
       initContainers:
         - name: seed-config
-          image: busybox:1.37
+          image: busybox:1.38
           command:
             - sh
             - -c
