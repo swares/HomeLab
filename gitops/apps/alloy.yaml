@@ -57,10 +57,26 @@ spec:
               }
 
               // ── Node systemd journal ─────────────────────────────────────
+              // Relabeling extracts unit and hostname from journal metadata so
+              // Loki queries can filter by systemd unit or source host — matching
+              // the labels Promtail produced before it was removed.
               loki.source.journal "systemd" {
                 max_age    = "12h"
                 labels     = { job = "node-journal" }
+                forward_to = [loki.relabel.journal.receiver]
+              }
+
+              loki.relabel "journal" {
                 forward_to = [loki.write.gateway.receiver]
+
+                rule {
+                  source_labels = ["__journal__systemd_unit"]
+                  target_label  = "unit"
+                }
+                rule {
+                  source_labels = ["__journal__hostname"]
+                  target_label  = "hostname"
+                }
               }
 
               // ── Forward to Loki gateway ──────────────────────────────────
