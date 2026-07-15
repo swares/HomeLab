@@ -25,15 +25,27 @@
     - name: Write registries.yaml
       ansible.builtin.copy:
         dest: "{{ k3s_config_dir }}/registries.yaml"
-        mode: "0644"
+        mode: "0600"
         content: |
-          # Ansible-managed — lab OCI registry (Zot, self-signed cert)
+          # Ansible-managed — lab OCI registry (Zot) as pull-through cache
+          # docker.io and ghcr.io are mirrored via Zot's on-demand sync extension.
+          # Zot pulls upstream on first request and caches locally — OPi nodes never
+          # need direct internet access for image pulls.
           mirrors:
             "{{ registry_host }}":
               endpoint:
                 - "https://{{ registry_host }}"
+            docker.io:
+              endpoint:
+                - "https://{{ registry_host }}"
+            ghcr.io:
+              endpoint:
+                - "https://{{ registry_host }}"
           configs:
             "{{ registry_host }}":
+              auth:
+                username: "{{ zot_admin_user | default('admin') }}"
+                password: "{{ zot_admin_password }}"
               tls:
                 insecure_skip_verify: true
       notify: restart k3s
