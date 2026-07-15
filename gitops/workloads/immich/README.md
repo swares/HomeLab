@@ -1,7 +1,7 @@
 # Immich (self-hosted photos) on the H4
 
 GitOps-managed photo/video library, synced by Argo (`gitops/apps/immich.yaml`). Runs on the H4
-MicroShift node so it sits next to its storage.
+k3s node so it sits next to its storage.
 
 ## Stack & tier placement
 | Component | Image | Where it lands |

@@ -13,6 +13,7 @@ LAB-URLS.md
 # Local state
 *.retry
 .DS_Store
+rollout-report.txt
 
 # terraform / opentofu
 *.tfstate
@@ -21,4 +22,3 @@ LAB-URLS.md
 .terraform.lock.hcl
 terraform.tfvars
 crash.log
-actions-runner/
