@@ -31,7 +31,7 @@ spec:
           ports: [{ containerPort: 8080 }]
           envFrom:
             - configMapRef: { name: m5stack-adapter-env }
-            - secretRef: { name: m5stack-auth }   # M5_USER / M5_PASS — kubectl create secret generic m5stack-auth
+            - secretRef: { name: m5stack-auth }   # M5_USER / M5_PASS — managed by ESO (see external-secret.yaml)
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
