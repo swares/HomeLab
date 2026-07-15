@@ -66,7 +66,7 @@ free for *new* lab workloads is roughly half:
 
 **Reserved (~40 cores / ~96 GB):**
 - **H4** — 8C / 64 GB / 32 EU → NAS, MinIO, backups, heavy AI. Not a hypervisor.
-- **Infra services** — RPi 5 (Vault), RPi 4B (Home Assistant, standalone), RPi 3B ×2 (OctoPi, DNS/QDevice), XU3
+- **Infra services** — RPi 5 (Vault), RPi 4B (Pi-hole secondary DNS, 192.168.1.116), RPi 3B ×2 (OctoPi, DNS/QDevice), XU3
   (build) ≈ 24C / 20 GB, spoken-for by their roles.
 - **TV/browse VM** — ~2 vCPU / 4 GB + the iGPU (24 EU) on N150 #3.
 - **Hypervisor + OS overhead** — ~3C / 6 GB across the KVM/libvirt hosts.

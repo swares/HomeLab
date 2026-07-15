@@ -22,3 +22,4 @@ rollout-report.txt
 .terraform.lock.hcl
 terraform
 docs-audit-pr.sh
+actions-runner/

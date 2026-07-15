@@ -88,7 +88,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | M5Stack framework | ✓ | M5Stack | sensors + escalation router |
 | Pi-hole | ✓ | octopi (.148) | DNS + ad-block |
 | MQTT (Mosquitto) | ✓ | opi-zero2w-2 (.188) | always-on broker |
-| Home Assistant | ✓ | RPi 4B (.116) standalone | Debian 12 Bookworm; not in k3s; MQTT consumer (broker at opi-zero2w-2 .188) |
+| Home Assistant | ✓ | k3s · home-assistant namespace | `ha.apps.lab.home.arpa`; MQTT consumer (broker at opi-zero2w-2 .188) |
 
 ## Applications
 
@@ -105,7 +105,7 @@ validates correctly.
 
 ## Gaps worth a decision
 
-1. ~~**Home Assistant**~~ — **DONE.** Running standalone on RPi 4B (Debian 12 Bookworm, 192.168.1.116); receiving MQTT data from broker at opi-zero2w-2 (2026-07-13).
+1. ~~**Home Assistant**~~ — **DONE.** Running as k3s Deployment in the `home-assistant` namespace (`ha.apps.lab.home.arpa`); MQTT data from opi-zero2w-2 (2026-07-13).
 2. **Remote access** — WireGuard or Tailscale to reach the lab from outside. *Very low priority.*
 3. ~~**Reverse proxy + internal CA + SSO**~~ — **DONE.** Traefik ingress + cert-manager lab-ca + Authelia OIDC all deployed.
 4. ~~**MQTT broker**~~ — **DONE.** Relocated to always-on Zero 2W.

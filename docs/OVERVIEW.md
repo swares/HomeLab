@@ -58,9 +58,8 @@ Current as of 2026-07-07. Detailed service catalog in [SERVICES.md](SERVICES.md)
 
 ## Deferred / Gaps
 
-- Home Assistant (natural MQTT consumer)
 - Remote access — WireGuard or Tailscale
 - UPS + NUT (H4 is a single-point storage risk)
 - Homepage / dashboard
 - CloudNativePG + Redis operators for shared DB
-- RPi 4B runs Home Assistant (standalone, Debian 12)
+- RPi 4B runs Pi-hole secondary DNS (192.168.1.116)
