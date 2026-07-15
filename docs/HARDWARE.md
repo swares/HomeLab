@@ -14,12 +14,12 @@ Last verified: 2026-07-10.
 | **Odroid-H4 Ultra** | i3-N305 8C/8T x86 | 64 GB DDR5 | `192.168.1.160` | — | **Core: k3s server + NAS** |
 | **Orange Pi 5 Pro #1** | RK3588S 8C ARM | 16 GB | `192.168.1.168` | — | k3s agent · Ollama inference · Ubuntu 22.04 (Jammy) · 476 GB NVMe |
 | **Orange Pi 5 Pro #2** | RK3588S 8C ARM | 16 GB | `192.168.1.172` | — | k3s agent · Ollama inference · Ubuntu 22.04 |
-| **N150 mini PC #1** | Intel N150 4C x86 | 16 GB | `192.168.1.42` (br0) | — | KVM hypervisor · Ubuntu 24.04 · hosts ldap-1 VM |
+| **N150 mini PC #1** | Intel N150 4C x86 | 16 GB | `192.168.1.42` (br0) | — | KVM hypervisor · Ubuntu 24.04 |
 | **N150 mini PC #2** | Intel N150 4C x86 | 16 GB | `192.168.1.21` (br0) | — | KVM hypervisor · Ubuntu 24.04 |
 | **N150 mini PC #3 (HTPC)** | Intel N150 4C x86 | 16 GB | — | `192.168.1.176` | Living-room HTPC |
 | **RPi 5** | Cortex-A76 4C | 8 GB | `192.168.1.128` | `192.168.1.124` (avoid) | HashiCorp Vault |
 | **RPi 4B** | Cortex-A72 4C | 8 GB | `192.168.1.116` | — | Home Assistant host (Debian 12 Bookworm) |
-| **RPi 3B #2** | Cortex-A53 4C | 1 GB | `192.168.1.148` | `192.168.1.152` (avoid) | DNS primary (Pi-hole pending — needs Bookworm flash) |
+| **RPi 3B #2** | Cortex-A53 4C | 1 GB | `192.168.1.148` | `192.168.1.152` (avoid) | DNS primary (Pi-hole v6.4.3, Bookworm) |
 | **RPi 3B #1** | Cortex-A53 4C | 1 GB | — | — | ⚠ on-board power fault — retired |
 | **Odroid-XU3 #1** | Exynos5422 8C | 2 GB | `192.168.1.64` | — | Build agent (Python <3.8 — excluded from Ansible auto-updates) |
 | **Orange Pi Zero 2W #1** | H618 A53 4C | 4 GB | — | `192.168.1.184` | DNS secondary (dnsmasq) |
@@ -79,7 +79,7 @@ API: `https://api.lab.home.arpa:6443`.
 | Node | Role | IP | OS | Notes |
 |------|------|----|-----|-------|
 | `odroid-nas` | server | `192.168.1.160` | Ubuntu 22.04 | H4 Ultra; also runs NAS |
-| `n150-1` | server | `192.168.1.42` | Ubuntu 24.04 | Also KVM hypervisor (ldap-1 VM) |
+| `n150-1` | server | `192.168.1.42` | Ubuntu 24.04 | Also KVM hypervisor |
 | `n150-2` | server | `192.168.1.21` | Ubuntu 24.04 | Also KVM hypervisor |
 | `opi5pro-1` | agent | `192.168.1.168` | Ubuntu 22.04 Jammy | `role=inference`; NVMe-backed Ollama PVC (`/mnt/nvme`) |
 | `opi5pro-2` | agent | `192.168.1.172` | Ubuntu 22.04 | `role=inference`; NVMe-backed Ollama PVC |
@@ -110,7 +110,7 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 | Ollama #2 | opi5pro-2 (k3s) | ClusterIP `:11434` |
 | lldap | k3s lldap namespace | `https://lldap.apps.lab.home.arpa` (UI) · ClusterIP `:3890` (LDAP) |
 | HashiCorp Vault | RPi 5 | `http://192.168.1.128:8200` |
-| DNS primary | RPi 3B #2 | `192.168.1.148` (Pi-hole pending) |
+| DNS primary | RPi 3B #2 | `192.168.1.148` (Pi-hole v6.4.3) |
 | DNS secondary | OPi Zero 2W #1 | `192.168.1.184` (dnsmasq fallback) |
 | Home Assistant | k3s (any node) | `https://ha.apps.lab.home.arpa` |
 | MQTT primary | OPi Zero 2W #2 | `192.168.1.188:1883` (bridges to .99) |
@@ -136,8 +136,4 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 - ✅ Monitoring stack (Prometheus, Grafana, Alertmanager, Loki) migrated from odroid-nas to n150-1 (2026-07-04)
 - ✅ immich-library PV: hostPath+nodeAffinity → NFS ReadWriteMany; immich-server now schedules on any node (2026-07-04)
 - ✅ lldap migrated from ldap-1 KVM VM (192.168.1.70) to k3s Deployment in lldap namespace; ldap-1 VM stopped (2026-07-04)
-- ✅ MQTT HA: opi-zero2w-4 (.99) deployed as secondary broker bridging all topics to/from opi-zero2w-2 (.188); M5Stack firmware has automatic failover (2026-07-04)
-- ✅ update-hosts.yml: drain/uncordon step added to h4-core reboot play (tagged reboot_h4,never) (2026-07-04)
-- ✅ Home Assistant: deployed to k3s (home-assistant namespace), receiving MQTT data from opi-zero2w-2 (.188) (2026-07-13)
-- ✅ GitHub Actions self-hosted runner: active on H4 (odroid-nas), runner v2.335.1, ANSIBLE_VAULT_PASS + KUBECONFIG_B64 secrets set, weekly jobs running (confirmed 2026-07-13)
-- ✅ Whisper STT: faster-whisper-server in k3s whisper namespace (n150-1, CPU); live at https://stt.apps.lab.home.arpa/v1/audio/transcriptions; cert via lab-ca (confirmed 2026-07-13). OVMS disabled (cleanup tracked separately).
+- ✅ MQTT HA: opi-zero2w-4 (.99) deployed as secondary broker bridging all topics to/from opi-zero2w-2 (.188); M5Stack firmware has automatic failover (2

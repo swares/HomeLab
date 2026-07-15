@@ -40,7 +40,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
-| k3s (H4 server + opi5pro-2 agent) | ✓ | H4 (.160) server · opi5pro-2 (.172) arm64 agent | single-server cluster; `local-path` StorageClass on NVMe |
+| k3s (3 servers + 2 agents) | ✓ | H4 (.160) + n150-1 (.42) + n150-2 (.21) servers · opi5pro-1 (.168) + opi5pro-2 (.172) arm64 agents | HA 3-node cluster; kube-vip VIP 192.168.1.200; `local-path` StorageClass on NVMe |
 | Argo CD | ✓ | k3s | GitOps; app-of-apps from `gitops/apps/`; selfHeal + prune on |
 | Traefik ingress | ✓ | k3s | k3s default; all `*.apps.lab.home.arpa` Ingresses; TLS via cert-manager |
 | Helm + Kustomize | ● | CASC | used by ArgoCD |
@@ -88,7 +88,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | M5Stack framework | ✓ | M5Stack | sensors + escalation router |
 | Pi-hole | ✓ | octopi (.148) | DNS + ad-block |
 | MQTT (Mosquitto) | ✓ | opi-zero2w-2 (.188) | always-on broker |
-| Home Assistant | ✓ | k3s · home-assistant namespace | `ha.apps.lab.home.arpa`; MQTT consumer (broker at opi-zero2w-2 .188); direct login (Authelia SSO future work) |
+| Home Assistant | ✓ | RPi 4B (.116) standalone | Debian 12 Bookworm; not in k3s; MQTT consumer (broker at opi-zero2w-2 .188) |
 
 ## Applications
 
@@ -105,14 +105,10 @@ validates correctly.
 
 ## Gaps worth a decision
 
-1. ~~**Home Assistant**~~ — **DONE.** Running in k3s (`ha.apps.lab.home.arpa`); receiving MQTT data from broker at opi-zero2w-2 (2026-07-13).
+1. ~~**Home Assistant**~~ — **DONE.** Running standalone on RPi 4B (Debian 12 Bookworm, 192.168.1.116); receiving MQTT data from broker at opi-zero2w-2 (2026-07-13).
 2. **Remote access** — WireGuard or Tailscale to reach the lab from outside. *Very low priority.*
 3. ~~**Reverse proxy + internal CA + SSO**~~ — **DONE.** Traefik ingress + cert-manager lab-ca + Authelia OIDC all deployed.
 4. ~~**MQTT broker**~~ — **DONE.** Relocated to always-on Zero 2W.
 5. ~~**Offsite backup**~~ — **DONE.** Nightly `restic copy` via `backup-offsite.timer`.
 6. **UPS + NUT** — *deferred.* The H4 is a single storage point; a UPS is cheap insurance.
-7. **Grafana dashboard** — basic lab health dashboard exists and working. Improvement needed: clickable counts (e.g. click "down: 2" to drill into affected hosts).
-8. **Home Assistant SSO** — Authelia OIDC for HA (future work; direct login for now).
-9. **Shared DB service** — CloudNativePG + Redis operators if more apps need state.
-10. **k8s device plugins (rknpu / Intel-GPU)** — only if inference runs *in* k8s rather than bare-metal.
-11. **RPi 4B reassignment** — now spare (lldap took over LDAP from what was planned for it).
+7. **Grafana dashboard** — basic lab health dashboard exists and working. Improvement need

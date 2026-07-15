@@ -14,7 +14,7 @@ Last updated: 2026-07-11.
 | Linux OS packages (apt) | Ansible `update-hosts.yml` in GitHub Actions | Weekly (Sunday 03:00 Central)¹ | H4 reboot if flagged |
 | Pi-hole application | Ansible `update-non-apt.yml -t pihole` in GitHub Actions | Weekly (Sunday 03:00 Central)¹ | No |
 | HashiCorp Vault binary | apt (HashiCorp repo) — included in OS play; seal-check play runs after | Weekly¹ | Yes — unseal manually if sealed after restart |
-| **KVM VMs (ldap-1, etc.)** | **`sandbox-vm-update.yml` — clone-test-promote pipeline** | **Manual / on-demand** | **Yes — human runs promote step** |
+| **KVM VMs (gitlab-1, etc.)** | **`sandbox-vm-update.yml` — clone-test-promote pipeline** | **Manual / on-demand** | **Yes — human runs promote step** |
 | Windows OS (n150-1/2/3) | None — Windows Update runs uncontrolled | Uncontrolled | Manual if policy required |
 
 ¹ GitHub Actions schedule runs on the **self-hosted runner on H4** (`runs-on: [self-hosted, lab]`)
@@ -246,8 +246,9 @@ becomes a priority. The `ansible.windows.win_updates` module handles reboot sequ
 
 ## Running manually
 
-The GitHub Actions schedule runs from hosted runners that cannot reach `192.168.1.x`.
-Until a self-hosted runner is registered on H4, run the weekly jobs from H4 directly:
+The GitHub Actions schedule runs from the **self-hosted runner registered on H4** (`runs-on: [self-hosted, lab]`),
+which has direct LAN access. GitLab CI is the authoritative pipeline. GitHub Actions handles yaml-lint + client-side dry-run only.
+To run jobs manually from H4:
 
 ```bash
 cd ~/lab/homelab/homelab/ansible
@@ -302,20 +303,20 @@ A clone-test-promote pipeline for OS package updates on KVM VMs (e.g. `ldap-1`).
 ```
 Validate only (default):
   ansible-playbook -i inventory/hosts.yml playbooks/sandbox-vm-update.yml \
-    -e target_vm=ldap-1 --vault-password-file .vault_pass --ask-become-pass
+    -e target_vm=gitlab-1 --vault-password-file .vault_pass --ask-become-pass
 
 Validate + promote (swaps production disk):
   ansible-playbook -i inventory/hosts.yml playbooks/sandbox-vm-update.yml \
-    -e "target_vm=ldap-1 promote_on_pass=true" \
+    -e "target_vm=gitlab-1 promote_on_pass=true" \
     --vault-password-file .vault_pass --ask-become-pass
 ```
 
 Pipeline phases:
-1. **Phase 1 (n150-1)** — suspend VM briefly, `cp` disk to standalone sandbox image, resume; patch sandbox netplan to DHCP; boot `ldap-1-sandbox` on isolated NAT network (`10.99.0.0/24`)
-2. **Phase 2 (sandbox-clone)** — `apt dist-upgrade`, reboot if needed; HTTP health check on `:17170`; authenticated LDAP base search on `:3890`
+1. **Phase 1 (n150-1)** — suspend VM briefly, `cp` disk to standalone sandbox image, resume; patch sandbox netplan to DHCP; boot `gitlab-1-sandbox` on isolated NAT network (`10.99.0.0/24`)
+2. **Phase 2 (sandbox-clone)** — `apt dist-upgrade`, reboot if needed; HTTP health check
 3. **Phase 3 (n150-1)** — destroy sandbox VM; if `promote_on_pass=true` and healthy: compact sandbox disk → shut production briefly → swap disk → restart; always delete sandbox disk
 
-Old production disk is saved as `ldap-1-pre-YYYY-MM-DD.qcow2`.
+Old production disk is saved as `gitlab-1-pre-YYYY-MM-DD.qcow2`.
 
 Requires per-VM inventory vars (`kvm_host`, `libvirt_vm_name`, `health_check_url`) in the `standalone_vms` group.
 
@@ -328,6 +329,6 @@ Requires per-VM inventory vars (`kvm_host`, `libvirt_vm_name`, `health_check_url
 | Authelia → PostgreSQL | High | SQLite PVC blocks `replicas: 2`; PostgreSQL migration enables true Authelia HA |
 | Windows Update automation (`windows-updates.yml`) | Medium | `ansible.windows.win_updates` module is ready; playbook not yet written |
 | Vault TLS | Medium | Currently plain HTTP; add before exposing beyond LAN |
-| octopi OS upgrade (Raspbian Buster → Bookworm) | Medium | Prerequisite for Pi-hole v6 on primary DNS |
-| zswap on n150-1/n150-2 | Low | Ubuntu 24.04 kernel 6.8 supports zswap; apply via Ansible role |
+| ~~octopi OS upgrade (Raspbian Buster → Bookworm)~~ | ✅ Done (2026-07-13) | Bookworm + Pi-hole v6.4.3/FTL v6.7 confirmed running |
+| ~~zswap on n150-1/n150-2~~ | ✅ Done (2026-07-03) | zswap enabled: zstd compressor, zsmalloc zpool, 20% max pool |
 | Shared storage (n150-1 ↔ n150-2) | Low | NFS or Ceph enables VM live migration between hypervisors |

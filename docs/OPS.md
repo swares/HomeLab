@@ -155,7 +155,7 @@ If H4 is flagged as needing a reboot, see
 
 ## VM OS updates (sandbox pipeline)
 
-KVM VMs (e.g. `ldap-1`) are updated via a clone-test-promote pipeline that validates
+KVM VMs (e.g. `gitlab-1`) are updated via a clone-test-promote pipeline that validates
 updates in an isolated sandbox before touching production.
 
 ### Validate only (safe to run anytime)
@@ -163,27 +163,27 @@ updates in an isolated sandbox before touching production.
 ```bash
 cd ~/lab/homelab/homelab/ansible
 ansible-playbook -i inventory/hosts.yml playbooks/sandbox-vm-update.yml \
-  -e target_vm=ldap-1 \
+  -e target_vm=gitlab-1 \
   --vault-password-file .vault_pass --ask-become-pass
 ```
 
 What it does:
-1. Suspends `ldap-1` briefly, copies disk to standalone sandbox image, resumes
-2. Patches sandbox netplan to DHCP, boots `ldap-1-sandbox` on isolated NAT network
+1. Suspends `gitlab-1` briefly, copies disk to standalone sandbox image, resumes
+2. Patches sandbox netplan to DHCP, boots `gitlab-1-sandbox` on isolated NAT network
 3. Runs `apt dist-upgrade` + reboot in sandbox
-4. Checks HTTP `:17170` (web UI) and authenticated LDAP `:3890`
+4. Checks HTTP health endpoint
 5. Destroys sandbox VM and disk — production untouched
 
 ### Validate + promote (apply to production)
 
 ```bash
 ansible-playbook -i inventory/hosts.yml playbooks/sandbox-vm-update.yml \
-  -e "target_vm=ldap-1 promote_on_pass=true" \
+  -e "target_vm=gitlab-1 promote_on_pass=true" \
   --vault-password-file .vault_pass --ask-become-pass
 ```
 
-If all checks pass, the pipeline compacts the updated sandbox disk, shuts `ldap-1` down
-briefly, swaps the disk, and restarts. Old disk saved as `ldap-1-pre-YYYY-MM-DD.qcow2`.
+If all checks pass, the pipeline compacts the updated sandbox disk, shuts `gitlab-1` down
+briefly, swaps the disk, and restarts. Old disk saved as `gitlab-1-pre-YYYY-MM-DD.qcow2`.
 
 ### Add a new VM to the pipeline
 
@@ -205,9 +205,12 @@ All cluster changes go through git — never `kubectl apply` directly.
 
 ### 1. Create the manifests
 
+Create `gitops/workloads/<name>/` with Deployment, Service, Ingress, and Namespace manifests.
+Copy an existing app yaml from `gitops/apps/` for the ArgoCD Application.
+
 ```bash
-cp -r gitops/workloads/sample-app gitops/workloads/<name>
-# Edit deployment, service, ingress, pvc as needed
+mkdir -p gitops/workloads/<name>
+# Create deployment.yaml, service.yaml, ingress.yaml, namespace.yaml
 ```
 
 Ingress template:
@@ -241,7 +244,8 @@ kubectl get sc
 ### 2. Create the ArgoCD Application
 
 ```bash
-cp gitops/apps/sample-app.yaml gitops/apps/<name>.yaml
+# Copy any existing app yaml from gitops/apps/ and edit: name, namespace, path
+cp gitops/apps/lldap.yaml gitops/apps/<name>.yaml
 # Edit: name, namespace, path (gitops/workloads/<name>)
 ```
 
@@ -272,7 +276,10 @@ argocd app get <name>    # or check the UI at https://argocd.apps.lab.home.arpa
 
 ```bash
 export VAULT_ADDR=http://192.168.1.128:8200
+# For a NEW secret path:
 vault kv put secret/lab/<name> key=value key2=value2
+# For an EXISTING path (use patch to avoid destroying other keys):
+vault kv patch secret/lab/<name> key=value
 ```
 
 ### Force ExternalSecret to re-sync immediately
@@ -413,7 +420,7 @@ On the new node:
 ```bash
 curl -sfL https://get.k3s.io | \
   INSTALL_K3S_VERSION=<current-version> \
-  K3S_URL=https://192.168.1.160:6443 \
+  K3S_URL=https://192.168.1.200:6443 \
   K3S_TOKEN=<token> \
   sh -s - agent
 ```

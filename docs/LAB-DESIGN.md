@@ -54,7 +54,7 @@ Match each box to what it's actually good at. `✓` = already running.
 | **Orange Pi 5 Pro ×2** | ARM 8C / 16 GB / **6 TOPS NPU** | **Bare-metal AI** (RKLLama) + the **Claude Code orchestrator** + GitLab✓; the "brain" tier. |
 | **N150 ×3** | x86 4C / 16 GB each | **3-node Proxmox cluster** (homogeneous → clean live-migrate). Two lab boxes + the living-room box, which runs its **TV/browse VM** (iGPU passthrough) while still voting in quorum. Also OpenVINO iGPU inference. |
 | **RPi 5** | ARM 4C / 8 GB | **Vault**✓ (secrets) + k8s agent. |
-| **RPi 4B** | ARM 4C / 8 GB | **OpenLDAP**✓ (identity). |
+| **RPi 4B** | ARM 4C / 8 GB | **Home Assistant**✓ (standalone). |
 | **RPi 3B ×2** | ARM 4C / 1 GB | #2 (wired) = **DNS (Pi-hole)** — printer offline; #1 ⚠ **power fault** → retire/RMA. |
 | **Odroid-XU3** | ARM 8C / 2 GB ⚠ | CI build agent / light pods (flaky — verify). |
 | **Orange Pi Zero 2W ×4** | H618 A53 4C / **4 GB** | **Standalone WiFi** (ClusterHAT failed) — a lightweight **k3s agent pool** (~16 C/16 GB) or single-service hosts; SD-only, keep stateless; no NPU. |
@@ -145,7 +145,7 @@ The payoff is one reproducible loop that exercises every goal:
 
 Two Kubernetes footprints, on purpose: a **platform k8s in IaaS VMs** (the cloud-native
 devops loop — provision, nest, GitOps) and a **bare-metal ARM k3s** for AI (the NPUs need
-direct device access, which is painful through virtualization). The MicroShift + Argo repo you
+direct device access, which is painful through virtualization). The k3s + Argo repo you
 already have is a valid *fast path* for the platform layer — run it bare-metal now, and grow
 into the IaaS-VM version as the cloud layer comes up.
 
@@ -180,7 +180,7 @@ k8s + edge.
    living-room box's function into a VM on its own node. (Later, optional: a nested Sunbeam
    OpenStack VM for learning.)
 3. **Platform (L2).** OpenTofu → VMs → Ansible → a k3s/OpenShift cluster → Argo CD. This *is*
-   the devops playground. (Or run the existing bare-metal MicroShift now.)
+   the devops playground. (Or run the existing bare-metal k3s now.)
 4. **AI (L3).** RKLLama on the OPis, OpenVINO on the Intel iGPUs, the LiteLLM gateway, the
    m5stack-adapter, JupyterHub + MLflow + a vector DB.
 5. **Edge.** Wire the M5Stack escalation router to the gateway; `route_taken` into Grafana.

@@ -61,7 +61,7 @@ flowchart LR
 ## How it plugs into the cluster
 
 - The gateway is a normal GitOps workload: `gitops/workloads/ai-gateway/` (Deployment +
-  Service + Route + a ConfigMap with the model→backend routing).
+  Service + Ingress + a ConfigMap with the model→backend routing).
 - The NPU nodes live outside the cluster, so they're registered as **ExternalName Services**
   (`gitops/workloads/ai-backends/`) — in-cluster pods then resolve `rkllama-opi1` etc. by DNS.
 - The NPU runtimes themselves are **host services**, installed by Ansible
