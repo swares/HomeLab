@@ -41,6 +41,13 @@ spec:
             initialDelaySeconds: 120
             periodSeconds: 30
             failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 512Mi
       initContainers:
         - name: seed-config
           image: busybox:1.37

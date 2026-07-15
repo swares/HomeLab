@@ -43,6 +43,13 @@ spec:
             initialDelaySeconds: 120
             periodSeconds: 30
             failureThreshold: 3
+          resources:
+            requests:
+              cpu: 500m
+              memory: 1Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
           volumeMounts:
             - { name: model-cache, mountPath: /cache }
       volumes:

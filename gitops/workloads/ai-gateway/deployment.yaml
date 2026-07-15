@@ -31,6 +31,13 @@ spec:
             initialDelaySeconds: 60
             periodSeconds: 30
             failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
