@@ -1,0 +1,11 @@
+# proxmox.pkrvars.hcl — Packer variable values for ubuntu-noble.pkr.hcl
+# Copy to proxmox.pkrvars.hcl and fill in real values. DO NOT COMMIT the real file.
+
+proxmox_url          = "https://pve-n150-1.lab.home.arpa:8006/api2/json"
+proxmox_username     = "packer@pam!packer-token"
+proxmox_token        = "<token-secret-from-proxmox-ui>"
+proxmox_node         = "pve-n150-1"
+iso_datastore        = "nfs-h4"
+vm_datastore         = "nfs-h4"
+ssh_private_key_file = "~/.ssh/id_ed25519"
+ssh_username         = "ansible"

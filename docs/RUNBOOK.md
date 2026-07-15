@@ -52,6 +52,39 @@ CoreDNS handles `*.apps.lab.home.arpa` inside the cluster automatically via the
       ansible-playbook -i inventory/hosts.yml playbooks/sync-secrets-to-vault.yml \
       --vault-password-file .vault_pass
 
+### 6. Populate ESO-managed secrets in Vault (before ArgoCD syncs workloads)
+
+ExternalSecrets Operator pulls these paths. Populate them before the relevant ArgoCD app
+syncs or the pods will stay pending on secret creation.
+
+    export VAULT_ADDR=http://192.168.1.128:8200
+
+    # Authelia — OIDC + session secrets (sync-secrets-to-vault.yml handles this)
+    # vault kv put secret/lab/authelia \
+    #   JWT_SECRET=<jwt> SESSION_SECRET=<session> \
+    #   STORAGE_ENCRYPTION_KEY=<key> OIDC_HMAC_SECRET=<hmac>
+
+    # lldap — admin password
+    # vault kv put secret/lab/lldap LLDAP_LDAP_USER_PASS=<password>
+
+    # m5stack adapter — API key + LiteLLM auth
+    vault kv patch secret/lab/m5stack \
+      api-key=<WEBHOOK_INJECT_API_KEY> \
+      M5_USER=<user> M5_PASS=<pass>
+
+    # Zot registry — htpasswd line (bcrypt)
+    htpasswd_line=$(htpasswd -nbB admin '<password>')
+    vault kv put secret/lab/registry htpasswd="$htpasswd_line"
+
+    # Grafana admin
+    # vault kv put secret/lab/grafana admin-password=<password>
+
+After populating, ESO will sync within its refreshInterval (default 1h). Force immediate
+refresh per secret with:
+
+    kubectl annotate externalsecret <name> -n <namespace> \
+      force-sync=$(date +%s) --overwrite
+
 ---
 
 ## Verify a healthy cluster
@@ -70,8 +103,8 @@ CoreDNS handles `*.apps.lab.home.arpa` inside the cluster automatically via the
 
 ## Deploy a workload
 
-1. Copy `gitops/workloads/sample-app/` to `gitops/workloads/<name>/` and edit manifests.
-2. Add `gitops/apps/<name>.yaml` (copy `sample-app.yaml`, change `name`/`path`/`namespace`).
+1. Create `gitops/workloads/<name>/` with Deployment, Service, Ingress, and Namespace manifests.
+2. Add `gitops/apps/<name>.yaml` ArgoCD Application (copy any existing app yaml, change `name`/`path`/`namespace`).
 3. Add `cert-manager.io/cluster-issuer: lab-ca` to the Ingress for automatic TLS.
 4. Open PR → merge → ArgoCD syncs.
 
