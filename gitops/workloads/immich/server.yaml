@@ -28,6 +28,13 @@ spec:
             initialDelaySeconds: 60
             periodSeconds: 30
             failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 512Mi
+            limits:
+              cpu: "4"
+              memory: 2Gi
           volumeMounts:
             - { name: library, mountPath: /usr/src/app/upload }
             - { name: lab-ca, mountPath: /etc/ssl/lab-ca, readOnly: true }
