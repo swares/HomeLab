@@ -29,7 +29,7 @@ spec:
       containers:
         - name: kube-vip
           # Check https://github.com/kube-vip/kube-vip/releases for latest version
-          image: ghcr.io/kube-vip/kube-vip:v0.8.9
+          image: ghcr.io/kube-vip/kube-vip:v0.9.2
           imagePullPolicy: IfNotPresent
           args:
             - manager
