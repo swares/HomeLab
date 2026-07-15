@@ -11,6 +11,8 @@ spec:
         # Stakater Reloader: auto-restart this pod when litellm-config ConfigMap changes.
         reloader.stakater.com/auto: "true"
     spec:
+      nodeSelector:
+        kubernetes.io/hostname: odroid-nas   # keep litellm on H4; OPi nodes reserve RAM for ollama
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000      # litellm image uses non-numeric "root" — explicit UID satisfies runAsNonRoot
