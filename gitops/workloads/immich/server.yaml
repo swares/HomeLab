@@ -10,7 +10,7 @@ spec:
     spec:
       containers:
         - name: server
-          image: ghcr.io/immich-app/immich-server:release   # PIN to a vX.Y.Z for reproducible GitOps
+          image: ghcr.io/immich-app/immich-server:v2.7.5
           envFrom: [{ configMapRef: { name: immich-env } }]
           env:
             - name: DB_PASSWORD
