@@ -51,6 +51,34 @@ spec:
       ports:
         - port: 17170
 ---
+# Allow backup CronJob egress: DNS + SSH to odroid-nas for restic over SFTP.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backup-egress
+  namespace: lldap
+spec:
+  podSelector:
+    matchLabels:
+      app: lldap-backup
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 192.168.1.160/32
+      ports:
+        - port: 22
+          protocol: TCP
+---
 # Allow lldap egress for DNS only (it doesn't call external services).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
