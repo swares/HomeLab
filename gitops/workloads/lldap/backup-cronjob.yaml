@@ -4,44 +4,22 @@ metadata:
   name: lldap-backup
   namespace: lldap
 spec:
-  schedule: "30 2 * * *"
+  schedule: "30 2 * * *"   # 02:30 daily — after backup-nas starts, before backup-vault
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
       template:
+        metadata:
+          labels:
+            app: lldap-backup
         spec:
           restartPolicy: OnFailure
+          # No nodeSelector — PV affinity schedules this to the correct node automatically.
+          # NFS volume is mounted by kubelet on the host; no SSH or pod-level egress needed.
           securityContext:
             runAsUser: 0
-          initContainers:
-            - name: setup-ssh
-              image: busybox:latest
-              imagePullPolicy: IfNotPresent
-              command:
-                - /bin/sh
-                - -c
-                - |
-                  mkdir -p /root/.ssh
-                  cp /ssh-key/ssh-private-key /root/.ssh/id_ed25519
-                  chmod 600 /root/.ssh/id_ed25519
-                  cat > /root/.ssh/known_hosts << 'KNOWNHOSTS'
-                  192.168.1.160 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJcD83GbFiAhe0+1E/JSKysE5u13ydrElPdCWBGFP0hN
-                  KNOWNHOSTS
-                  cat > /root/.ssh/config << 'SSHCONFIG'
-                  Host 192.168.1.160
-                    IdentityFile /root/.ssh/id_ed25519
-                    StrictHostKeyChecking yes
-                    UserKnownHostsFile /root/.ssh/known_hosts
-                  SSHCONFIG
-                  cp -r /root/.ssh /ssh-out/
-              volumeMounts:
-                - name: ssh-key
-                  mountPath: /ssh-key
-                  readOnly: true
-                - name: ssh-config
-                  mountPath: /ssh-out
           containers:
             - name: backup
               image: restic/restic:latest
@@ -51,16 +29,17 @@ spec:
                 - -c
                 - |
                   set -eu
-                  cp -r /ssh-config/.ssh /root/.ssh
-                  chmod 700 /root/.ssh
-                  chmod 600 /root/.ssh/id_ed25519
-                  REPO="sftp:swares@192.168.1.160:/mnt/cold-8t/restic"
+                  REPO="/restic-repo"
                   export RESTIC_PASSWORD_FILE=/secrets/restic-password
+
+                  # Initialize repo if not already (no-op if it exists)
                   restic -r "$REPO" snapshots > /dev/null 2>&1 || restic -r "$REPO" init
+
                   echo "Starting lldap SQLite backup..."
                   restic -r "$REPO" backup /data/users.db \
                     --tag lldap \
                     --host lldap-k8s
+
                   echo "Backup complete. Recent lldap snapshots:"
                   restic -r "$REPO" snapshots --tag lldap --last 5
               volumeMounts:
@@ -70,8 +49,8 @@ spec:
                 - name: backup-secrets
                   mountPath: /secrets
                   readOnly: true
-                - name: ssh-config
-                  mountPath: /ssh-config
+                - name: restic-repo
+                  mountPath: /restic-repo
               resources:
                 requests:
                   cpu: 10m
@@ -87,8 +66,7 @@ spec:
             - name: backup-secrets
               secret:
                 secretName: lldap-backup-secrets
-            - name: ssh-key
-              secret:
-                secretName: lldap-backup-secrets
-            - name: ssh-config
-              emptyDir: {}
+            - name: restic-repo
+              nfs:
+                server: 192.168.1.160
+                path: /mnt/cold-8t/restic
