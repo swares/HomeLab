@@ -4,7 +4,7 @@ metadata:
   name: lldap-backup
   namespace: lldap
 spec:
-  schedule: "30 2 * * *"   # 02:30 daily — after backup-nas starts, before backup-vault
+  schedule: "30 2 * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -13,46 +13,82 @@ spec:
       template:
         spec:
           restartPolicy: OnFailure
-          nodeSelector:
-            kubernetes.io/hostname: odroid-nas   # local-path PV is node-local
           securityContext:
-            runAsUser: 0    # need root to read lldap's data dir and write to hostPath
+            runAsUser: 0
+          initContainers:
+            - name: setup-ssh
+              image: busybox:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  mkdir -p /root/.ssh
+                  cp /ssh-key/ssh-private-key /root/.ssh/id_ed25519
+                  chmod 600 /root/.ssh/id_ed25519
+                  cat > /root/.ssh/known_hosts << 'KNOWNHOSTS'
+                  192.168.1.160 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJcD83GbFiAhe0+1E/JSKysE5u13ydrElPdCWBGFP0hN
+                  KNOWNHOSTS
+                  cat > /root/.ssh/config << 'SSHCONFIG'
+                  Host 192.168.1.160
+                    IdentityFile /root/.ssh/id_ed25519
+                    StrictHostKeyChecking yes
+                    UserKnownHostsFile /root/.ssh/known_hosts
+                  SSHCONFIG
+                  cp -r /root/.ssh /ssh-out/
+              volumeMounts:
+                - name: ssh-key
+                  mountPath: /ssh-key
+                  readOnly: true
+                - name: ssh-config
+                  mountPath: /ssh-out
           containers:
             - name: backup
-              image: kevinboulain/sqlite:latest
+              image: restic/restic:latest
               imagePullPolicy: IfNotPresent
               command:
                 - /bin/sh
                 - -c
                 - |
                   set -eu
-                  DEST=/backup/lldap-$(date +%Y%m%d-%H%M%S).db
-                  echo "Backing up lldap SQLite to $DEST"
-                  sqlite3 /data/users.db ".backup '$DEST'"
-                  echo "Backup complete: $(ls -lh $DEST)"
-                  # Keep last 30 days
-                  find /backup -name 'lldap-*.db' -mtime +30 -delete
-                  echo "Cleanup done. Remaining backups:"
-                  ls -lh /backup/lldap-*.db
+                  cp -r /ssh-config/.ssh /root/.ssh
+                  chmod 700 /root/.ssh
+                  chmod 600 /root/.ssh/id_ed25519
+                  REPO="sftp:swares@192.168.1.160:/mnt/cold-8t/restic"
+                  export RESTIC_PASSWORD_FILE=/secrets/restic-password
+                  restic -r "$REPO" snapshots > /dev/null 2>&1 || restic -r "$REPO" init
+                  echo "Starting lldap SQLite backup..."
+                  restic -r "$REPO" backup /data/users.db \
+                    --tag lldap \
+                    --host lldap-k8s
+                  echo "Backup complete. Recent lldap snapshots:"
+                  restic -r "$REPO" snapshots --tag lldap --last 5
               volumeMounts:
                 - name: lldap-data
                   mountPath: /data
                   readOnly: true
-                - name: cold-backup
-                  mountPath: /backup
+                - name: backup-secrets
+                  mountPath: /secrets
+                  readOnly: true
+                - name: ssh-config
+                  mountPath: /ssh-config
               resources:
                 requests:
                   cpu: 10m
-                  memory: 32Mi
+                  memory: 64Mi
                 limits:
-                  cpu: 200m
-                  memory: 128Mi
+                  cpu: 500m
+                  memory: 256Mi
           volumes:
             - name: lldap-data
               persistentVolumeClaim:
                 claimName: lldap-data
                 readOnly: true
-            - name: cold-backup
-              hostPath:
-                path: /mnt/cold-8t/lldap-backups
-                type: DirectoryOrCreate
+            - name: backup-secrets
+              secret:
+                secretName: lldap-backup-secrets
+            - name: ssh-key
+              secret:
+                secretName: lldap-backup-secrets
+            - name: ssh-config
+              emptyDir: {}
