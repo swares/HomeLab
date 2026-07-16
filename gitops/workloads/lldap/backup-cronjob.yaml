@@ -1,0 +1,58 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: lldap-backup
+  namespace: lldap
+spec:
+  schedule: "30 2 * * *"   # 02:30 daily — after backup-nas starts, before backup-vault
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          nodeSelector:
+            kubernetes.io/hostname: odroid-nas   # local-path PV is node-local
+          securityContext:
+            runAsUser: 0    # need root to read lldap's data dir and write to hostPath
+          containers:
+            - name: backup
+              image: kevinboulain/sqlite:latest
+              imagePullPolicy: IfNotPresent
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  DEST=/backup/lldap-$(date +%Y%m%d-%H%M%S).db
+                  echo "Backing up lldap SQLite to $DEST"
+                  sqlite3 /data/users.db ".backup '$DEST'"
+                  echo "Backup complete: $(ls -lh $DEST)"
+                  # Keep last 30 days
+                  find /backup -name 'lldap-*.db' -mtime +30 -delete
+                  echo "Cleanup done. Remaining backups:"
+                  ls -lh /backup/lldap-*.db
+              volumeMounts:
+                - name: lldap-data
+                  mountPath: /data
+                  readOnly: true
+                - name: cold-backup
+                  mountPath: /backup
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 32Mi
+                limits:
+                  cpu: 200m
+                  memory: 128Mi
+          volumes:
+            - name: lldap-data
+              persistentVolumeClaim:
+                claimName: lldap-data
+                readOnly: true
+            - name: cold-backup
+              hostPath:
+                path: /mnt/cold-8t/lldap-backups
+                type: DirectoryOrCreate
