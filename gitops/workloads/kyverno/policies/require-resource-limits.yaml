@@ -26,7 +26,18 @@ spec:
       exclude:
         any:
           - resources:
-              namespaces: [kube-system, kyverno, argocd]
+              # kube-system, kyverno, argocd: system controllers — no upstream resource limits.
+              # default: argocd control-plane pods live here in this lab.
+              # cert-manager, external-secrets, monitoring: upstream Helm charts without
+              # resource limits in their default values; not worth forking every chart.
+              namespaces:
+                - kube-system
+                - kyverno
+                - argocd
+                - default
+                - cert-manager
+                - external-secrets
+                - monitoring
       validate:
         message: "Container must specify resources.limits.cpu and resources.limits.memory."
         pattern:
