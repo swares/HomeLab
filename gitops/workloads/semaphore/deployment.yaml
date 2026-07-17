@@ -1,0 +1,106 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: semaphore
+  namespace: semaphore
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: semaphore }
+  strategy:
+    type: Recreate   # RWO PVC — only one pod at a time
+  template:
+    metadata:
+      labels: { app: semaphore }
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: n150-1   # x86; ansible runs here
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: semaphore
+          # renovate: datasource=docker depName=semaphoreui/semaphore
+          image: semaphoreui/semaphore:v2.18.27
+          ports:
+            - containerPort: 3000
+          env:
+            # Database — BoltDB (no external postgres required)
+            - name: SEMAPHORE_DB_DIALECT
+              value: bolt
+            - name: SEMAPHORE_DB
+              value: /data/database.bolt
+
+            # Temp path for playbook execution
+            - name: SEMAPHORE_PLAYBOOK_PATH
+              value: /tmp/semaphore
+
+            # Web root — must match the ingress URL for CSRF to work
+            - name: SEMAPHORE_WEB_ROOT
+              value: https://semaphore.apps.lab.home.arpa
+
+            # Admin account — bootstrapped on first run only
+            - name: SEMAPHORE_ADMIN
+              value: admin
+            - name: SEMAPHORE_ADMIN_NAME
+              value: Admin
+            - name: SEMAPHORE_ADMIN_EMAIL
+              value: admin@lab.home.arpa
+            - name: SEMAPHORE_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: semaphore-secrets
+                  key: admin-password
+
+            # Encryption keys — must stay stable; changing them invalidates stored keys
+            - name: SEMAPHORE_COOKIE_HASH
+              valueFrom:
+                secretKeyRef:
+                  name: semaphore-secrets
+                  key: cookie-hash
+            - name: SEMAPHORE_COOKIE_ENCRYPTION
+              valueFrom:
+                secretKeyRef:
+                  name: semaphore-secrets
+                  key: cookie-encryption
+            - name: SEMAPHORE_ACCESS_KEY_ENCRYPTION
+              valueFrom:
+                secretKeyRef:
+                  name: semaphore-secrets
+                  key: access-key-encryption
+
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp/semaphore
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
+
+          readinessProbe:
+            httpGet: { path: /api/ping, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /api/ping, port: 3000 }
+            initialDelaySeconds: 30
+            periodSeconds: 30
+
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: semaphore-data
+        - name: tmp
+          emptyDir: {}
