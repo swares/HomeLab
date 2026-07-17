@@ -1,9 +1,9 @@
 # Runs on every PR and push to main.
-# Lints YAML and client-side dry-runs kubectl apply.
+# Lints YAML, validates schemas, and enforces OPA policies.
 #
 # CI authority: GitLab CI is the authoritative pipeline (full validate/sync-check/rollback).
-# This GitHub Actions workflow runs yaml-lint and client-side manifest validation only —
-# it does NOT require cluster access and runs entirely on GitHub-hosted runners.
+# This GitHub Actions workflow runs yaml-lint, schema validation, policy checks, and
+# client-side manifest dry-runs — no cluster access required; runs on GitHub-hosted runners.
 #
 # No secrets required for these jobs.
 
@@ -20,7 +20,7 @@ jobs:
     name: YAML lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
       - name: Install yq
         run: |
@@ -37,14 +37,67 @@ jobs:
           [ "$FAILED" -eq 0 ] || exit 1
           echo "All YAML valid."
 
+  kubeconform:
+    name: Schema validation (kubeconform)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kubeconform
+        run: |
+          curl -sSLo /tmp/kubeconform.tar.gz \
+            https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz
+          tar -xzf /tmp/kubeconform.tar.gz -C /usr/local/bin kubeconform
+
+      - name: Validate manifests against k8s 1.36 schema
+        # --ignore-missing-schemas silently skips CRDs we don't have schemas for
+        # (ArgoCD Application, ExternalSecret, Certificate, PrometheusRule, etc.).
+        # Native k8s kinds (Deployment, Service, CronJob, NetworkPolicy, …) are checked strictly.
+        # Helm values files (values.yaml, kustomization.yaml) are excluded — not k8s manifests.
+        run: |
+          find gitops/workloads -name '*.yaml' \
+            ! -name 'values.yaml' \
+            ! -name 'kustomization.yaml' \
+            -print0 | \
+            xargs -0 kubeconform \
+              -kubernetes-version 1.36.0 \
+              -ignore-missing-schemas \
+              -summary \
+              -output text
+
+  policy-check:
+    name: OPA policy check (conftest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install conftest
+        run: |
+          # conftest release assets include the version in the filename, so we must
+          # resolve the latest tag first rather than guessing the full asset name.
+          VER=$(curl -sSfL https://api.github.com/repos/open-policy-agent/conftest/releases/latest \
+            | grep '"tag_name"' | sed 's/.*"v\([0-9.]*\)".*/\1/')
+          curl -sSfLo /tmp/conftest.tar.gz \
+            "https://github.com/open-policy-agent/conftest/releases/download/v${VER}/conftest_${VER}_Linux_x86_64.tar.gz"
+          tar -xzf /tmp/conftest.tar.gz -C /usr/local/bin conftest
+
+      - name: Run OPA policies against workload manifests
+        # Policies: no floating :latest tags, no privileged containers, resource limits required.
+        # Exceptions for known deferred items are in ci/data/exceptions.yaml.
+        run: |
+          find gitops/workloads -name '*.yaml' -print0 | \
+            xargs -0 conftest test \
+              --policy ci/policies \
+              --data ci/data/exceptions.yaml
+
   dry-run-apply:
     name: kubectl dry-run (client-side)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
 
       - name: Install kubectl
-        uses: azure/setup-kubectl@v5
+        uses: azure/setup-kubectl@v4
 
       - name: Client-side dry-run all workload manifests
         # --dry-run=client validates manifest structure without a live cluster.
