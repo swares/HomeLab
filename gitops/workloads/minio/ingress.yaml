@@ -1,0 +1,52 @@
+---
+# Minio API endpoint — used by OpenTofu S3 backend and any S3-compatible clients
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio-api
+  namespace: minio
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    cert-manager.io/cluster-issuer: lab-ca
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [minio.apps.lab.home.arpa]
+      secretName: minio-api-tls
+  rules:
+    - host: minio.apps.lab.home.arpa
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: minio-api
+                port: { number: 9000 }
+---
+# Minio console — web UI for bucket and object management
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: minio-console
+  namespace: minio
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    cert-manager.io/cluster-issuer: lab-ca
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [minio-console.apps.lab.home.arpa]
+      secretName: minio-console-tls
+  rules:
+    - host: minio-console.apps.lab.home.arpa
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: minio-console
+                port: { number: 9001 }
