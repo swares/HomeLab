@@ -25,6 +25,9 @@ spec:
                   mkdir -p /usr/src/app/upload/backups &&
                   pg_dump -h immich-postgres -U immich -d immich --clean --if-exists
                   | gzip > /usr/src/app/upload/backups/immich-$(date +%F).sql.gz
+              resources:
+                requests: { cpu: 10m, memory: 64Mi }
+                limits: { cpu: 500m, memory: 256Mi }
               volumeMounts: [{ name: library, mountPath: /usr/src/app/upload }]
           volumes:
             - { name: library, persistentVolumeClaim: { claimName: immich-library } }
