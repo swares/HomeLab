@@ -19,7 +19,7 @@ spec:
       containers:
         - name: whisper
           # renovate: datasource=docker depName=fedirz/faster-whisper-server
-          image: fedirz/faster-whisper-server:latest-cpu
+          image: fedirz/faster-whisper-server:0.6.0-rc.3-cpu
           ports:
             - containerPort: 8000
           env:
