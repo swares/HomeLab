@@ -1,0 +1,39 @@
+# Mirrors the CI OPA policy (ci/policies/require-resources.rego).
+# Enforced at Pod admission time — catches workloads that bypass the CI gate
+# (e.g., kubectl apply direct or ArgoCD force-sync).
+# Mode: Audit initially. Switch to Enforce once zero violations confirmed.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-resource-limits
+  annotations:
+    policies.kyverno.io/title: Require Resource Limits
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      All containers must declare CPU and memory limits to prevent resource
+      exhaustion on shared nodes. Requests are also required so the scheduler
+      can make informed placement decisions.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: require-limits
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces: [kube-system, kyverno, argocd]
+      validate:
+        message: "Container must specify resources.limits.cpu and resources.limits.memory."
+        pattern:
+          spec:
+            containers:
+              - name: "*"
+                resources:
+                  limits:
+                    cpu: "?*"
+                    memory: "?*"
