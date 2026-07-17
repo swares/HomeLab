@@ -73,10 +73,8 @@ jobs:
 
       - name: Install conftest
         run: |
-          # conftest release assets include the version in the filename, so we must
-          # resolve the latest tag first rather than guessing the full asset name.
-          VER=$(curl -sSfL https://api.github.com/repos/open-policy-agent/conftest/releases/latest \
-            | grep '"tag_name"' | sed 's/.*"v\([0-9.]*\)".*/\1/')
+          # renovate: datasource=github-releases depName=open-policy-agent/conftest
+          VER=0.57.0
           curl -sSfLo /tmp/conftest.tar.gz \
             "https://github.com/open-policy-agent/conftest/releases/download/v${VER}/conftest_${VER}_Linux_x86_64.tar.gz"
           tar -xzf /tmp/conftest.tar.gz -C /usr/local/bin conftest
