@@ -59,7 +59,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | M5Stack escalation router | ✓ | M5Stack | edge front-end; 3-tier escalation |
 | Whisper STT | ✓ | k3s · whisper namespace (n150-1, CPU) | `https://stt.apps.lab.home.arpa/v1/audio/transcriptions`; base model; TLS via lab-ca |
 | Embedding model (nomic-embed-text) | ● | Ollama on H4 | configured in LiteLLM as `openai/nomic-embed-text`; bge-small via OpenVINO deferred |
-| Vector DB (Qdrant / Chroma) | ○ | k3s | RAG store |
+| Vector DB (Qdrant / Chroma) | ○ | k3s | RAG store — deferred; embeddings ready (nomic-embed-text via Ollama) but no RAG use case yet |
 | Ollama / llama.cpp | ✓ | k3s · ai-gateway namespace (opi5pro-1, arm64) | fallback engine + nomic-embed-text embeddings; `ollama/ollama:latest` (pin pending OPi pull verification) |
 
 ## Software dev
