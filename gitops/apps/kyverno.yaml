@@ -1,0 +1,47 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kyverno
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://kyverno.github.io/kyverno/
+    chart: kyverno
+    # renovate: datasource=helm registryUrl=https://kyverno.github.io/kyverno/ depName=kyverno
+    targetRevision: 3.3.4
+    helm:
+      valuesObject:
+        # Single-node k3s homelab — 1 replica per controller is sufficient.
+        # Failure policy is Ignore: Kyverno downtime never blocks workload deploys.
+        admissionController:
+          replicas: 1
+          serviceMonitor:
+            enabled: true   # scrape by kube-prometheus-stack
+        backgroundController:
+          replicas: 1
+          serviceMonitor:
+            enabled: true
+        cleanupController:
+          replicas: 1
+          serviceMonitor:
+            enabled: true
+        reportsController:
+          replicas: 1
+          serviceMonitor:
+            enabled: true
+        # If Kyverno is unavailable, webhooks fail open (don't block pods).
+        # Acceptable trade-off for a homelab; tighten to Fail once stable.
+        webhookFailurePolicy: Ignore
+        webhooksCleanup:
+          enabled: true
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: kyverno
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true   # required for Kyverno's large CRDs

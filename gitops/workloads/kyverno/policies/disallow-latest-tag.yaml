@@ -1,0 +1,53 @@
+# Mirrors the CI OPA policy (ci/policies/no-latest-tag.rego) but enforced at
+# admission time. Operates on Pods (so it catches all workload kinds).
+# Mode: Audit — reports violations without blocking; switch to Enforce once the
+# baseline is clean (check: kubectl get policyreport -A).
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-latest-tag
+  annotations:
+    policies.kyverno.io/title: Disallow Latest Tag
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Images must reference a pinned, immutable tag. :latest is non-deterministic
+      and makes rollbacks impossible. Untagged images implicitly pull :latest.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: require-image-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces: [kube-system, kyverno, argocd]
+      validate:
+        message: "Image must include an explicit tag (e.g. image:1.2.3 — not untagged)."
+        pattern:
+          spec:
+            containers:
+              - image: "*:*"
+            =(initContainers):
+              - image: "*:*"
+    - name: disallow-latest-tag
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces: [kube-system, kyverno, argocd]
+      validate:
+        message: "Image tag ':latest' is not allowed — pin to a specific version."
+        pattern:
+          spec:
+            containers:
+              - image: "!*:latest"
+            =(initContainers):
+              - image: "!*:latest"

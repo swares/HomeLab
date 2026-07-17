@@ -1,0 +1,36 @@
+# Mirrors the CI OPA policy (ci/policies/no-privileged.rego).
+# Privileged containers share the host kernel and can escalate to node root.
+# Mode: Audit initially. Switch to Enforce once zero violations confirmed.
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: disallow-privileged-containers
+  annotations:
+    policies.kyverno.io/title: Disallow Privileged Containers
+    policies.kyverno.io/category: Pod Security Standards (Baseline)
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/description: >-
+      Privileged containers share the host kernel namespaces and can escalate
+      to root on the node. Use specific Linux capabilities instead.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: disallow-privileged
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      exclude:
+        any:
+          - resources:
+              namespaces: [kube-system, kyverno, argocd]
+      validate:
+        message: "Privileged containers are not allowed — use specific capabilities instead."
+        deny:
+          conditions:
+            any:
+              - key: "{{ request.object.spec.[containers, initContainers][].securityContext.privileged }}"
+                operator: AnyIn
+                value:
+                  - true
