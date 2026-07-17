@@ -1,0 +1,9 @@
+# Exceptions for CI policy checks.
+# Each entry must include a comment explaining why it is exempt
+# and what action will remove the exception.
+
+# Images allowed to use a floating :latest or latest-* tag.
+# See ci/policies/no-latest-tag.rego.
+no_latest_tag_exceptions:
+  - "ollama/ollama"                 # Renovate PR pending; pin blocked until 0.32.0 confirmed pulled on OPi nodes
+  - "fedirz/faster-whisper-server"  # latest-cpu tag; versioned CPU tag needs investigation before pinning
