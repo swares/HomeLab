@@ -1,7 +1,7 @@
 # Mirrors the CI OPA policy (ci/policies/require-resources.rego).
 # Enforced at Pod admission time — catches workloads that bypass the CI gate
 # (e.g., kubectl apply direct or ArgoCD force-sync).
-# Mode: Audit initially. Switch to Enforce once zero violations confirmed.
+# Mode: Enforce — zero violations confirmed in audit baseline.
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
@@ -15,7 +15,7 @@ metadata:
       exhaustion on shared nodes. Requests are also required so the scheduler
       can make informed placement decisions.
 spec:
-  validationFailureAction: Audit
+  validationFailureAction: Enforce
   background: true
   rules:
     - name: require-limits
