@@ -35,6 +35,14 @@ spec:
         webhookFailurePolicy: Ignore
         webhooksCleanup:
           enabled: true
+        # bitnami/kubectl was removed from Docker Hub in 2024 — override to OCI registry.
+        cleanupJobs:
+          admissionReports:
+            image:
+              registry: oci.bitnami.com
+          clusterAdmissionReports:
+            image:
+              registry: oci.bitnami.com
   destination:
     server: https://kubernetes.default.svc
     namespace: kyverno
