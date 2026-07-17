@@ -1,0 +1,92 @@
+# ArgoCD Notifications — webhook integration.
+# Sends a JSON POST to the URL stored in argocd-notifications-secret.webhook-url
+# on sync failure or workload health degradation.
+#
+# BEFORE DEPLOYING — write the webhook URL to Vault:
+#   vault kv patch secret/lab/argocd webhook-url=https://<your-endpoint>
+#
+# The webhook receives a JSON payload with: event, app name, ArgoCD URL, message.
+# Compatible with Home Assistant webhooks, n8n, ntfy, Gotify, or any HTTP listener.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-notifications-cm
+  namespace: argocd
+data:
+  # ── Triggers ──────────────────────────────────────────────────────────────
+  trigger.on-sync-failed: |
+    - when: app.status.operationState.phase in ['Error', 'Failed']
+      send: [app-sync-failed]
+      oncePer: app.status.operationState.syncResult.revision
+
+  trigger.on-health-degraded: |
+    - when: app.status.health.status == 'Degraded'
+      send: [app-health-degraded]
+      oncePer: app.status.health.status
+
+  trigger.on-sync-succeeded: |
+    - when: app.status.operationState.phase in ['Succeeded']
+      send: [app-sync-succeeded]
+      oncePer: app.status.operationState.syncResult.revision
+
+  # ── Templates ─────────────────────────────────────────────────────────────
+  template.app-sync-failed: |
+    webhook:
+      homelab:
+        method: POST
+        path: /
+        body: |
+          {
+            "event": "sync-failed",
+            "app": "{{.app.metadata.name}}",
+            "project": "{{.app.spec.project}}",
+            "revision": "{{.app.status.sync.revision}}",
+            "url": "{{.context.argocdUrl}}/applications/{{.app.metadata.name}}",
+            "message": "{{.app.status.operationState.message}}"
+          }
+
+  template.app-health-degraded: |
+    webhook:
+      homelab:
+        method: POST
+        path: /
+        body: |
+          {
+            "event": "health-degraded",
+            "app": "{{.app.metadata.name}}",
+            "project": "{{.app.spec.project}}",
+            "url": "{{.context.argocdUrl}}/applications/{{.app.metadata.name}}",
+            "health_message": "{{.app.status.health.message}}"
+          }
+
+  template.app-sync-succeeded: |
+    webhook:
+      homelab:
+        method: POST
+        path: /
+        body: |
+          {
+            "event": "sync-succeeded",
+            "app": "{{.app.metadata.name}}",
+            "revision": "{{.app.status.sync.revision}}",
+            "url": "{{.context.argocdUrl}}/applications/{{.app.metadata.name}}"
+          }
+
+  # ── Service ───────────────────────────────────────────────────────────────
+  # webhook-url is injected from argocd-notifications-secret (ExternalSecret)
+  service.webhook.homelab: |
+    url: $webhook-url
+    headers:
+      - name: Content-Type
+        value: application/json
+
+  # ── Default subscriptions (apply to ALL Applications) ────────────────────
+  # on-sync-succeeded is intentionally excluded — too noisy for a lab.
+  # Add it per-application via annotation if desired:
+  #   notifications.argoproj.io/subscribe.on-sync-succeeded.homelab: ""
+  subscriptions: |
+    - recipients:
+        - webhook:homelab
+      triggers:
+        - on-sync-failed
+        - on-health-degraded
