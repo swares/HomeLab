@@ -1,0 +1,67 @@
+# ApplicationSet: git directory generator for standard workloads.
+#
+# Automatically creates an ArgoCD Application for every directory under
+# gitops/workloads/ where the destination namespace == the directory name.
+#
+# Convention: directory name == Kubernetes namespace.
+# To add a new workload, create gitops/workloads/<name>/ — ArgoCD picks it
+# up on the next sync without a separate gitops/apps/<name>.yaml commit.
+#
+# Excluded (individual Application files remain for these):
+#   ai-backends    → namespace is ai-gateway, not ai-backends
+#   argocd         → manages ArgoCD itself; chicken-and-egg risk
+#   cert-manager   → name conflicts with the Helm-managed cert-manager app
+#   coredns-custom → namespace is kube-system
+#   gitlab-runner  → multi-source (Helm chart + git overlay)
+#   kube-vip       → namespace is kube-system
+#   kyverno        → name conflicts with the Helm-managed kyverno app
+#   monitoring     → name conflicts with the Helm-managed monitoring app
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: workloads
+  namespace: argocd
+spec:
+  generators:
+    - git:
+        repoURL: git@github.com:swares/HomeLab.git
+        revision: main
+        directories:
+          - path: gitops/workloads/*
+          - path: gitops/workloads/ai-backends
+            exclude: true
+          - path: gitops/workloads/argocd
+            exclude: true
+          - path: gitops/workloads/cert-manager
+            exclude: true
+          - path: gitops/workloads/coredns-custom
+            exclude: true
+          - path: gitops/workloads/gitlab-runner
+            exclude: true
+          - path: gitops/workloads/kube-vip
+            exclude: true
+          - path: gitops/workloads/kyverno
+            exclude: true
+          - path: gitops/workloads/monitoring
+            exclude: true
+  template:
+    metadata:
+      name: "{{path.basename}}"
+      namespace: argocd
+    spec:
+      project: default
+      source:
+        repoURL: git@github.com:swares/HomeLab.git
+        targetRevision: main
+        path: "{{path}}"
+        directory:
+          recurse: true   # safe for flat dirs; required for workloads with subdirs
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{path.basename}}"
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true

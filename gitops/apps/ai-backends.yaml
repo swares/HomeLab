@@ -1,0 +1,15 @@
+# Kept as individual Application — namespace (ai-gateway) ≠ directory name (ai-backends).
+# ai-gateway is managed by the workloads ApplicationSet (workloads-appset.yaml).
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: { name: ai-backends, namespace: argocd }
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:swares/HomeLab.git
+    targetRevision: main
+    path: gitops/workloads/ai-backends
+  destination: { server: https://kubernetes.default.svc, namespace: ai-gateway }
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }
+    syncOptions: ["CreateNamespace=true"]
