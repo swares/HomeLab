@@ -1,0 +1,49 @@
+# One-shot Job — creates the tofu-state bucket after Minio first deploys.
+# Runs once; ArgoCD prune won't delete a completed Job.
+# If the bucket already exists, mc mb --ignore-existing is a no-op.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-bucket-init
+  namespace: minio
+  annotations:
+    argocd.argoproj.io/hook: PostSync
+    argocd.argoproj.io/hook-delete-policy: HookSucceeded
+spec:
+  template:
+    spec:
+      restartPolicy: OnFailure
+      nodeSelector:
+        kubernetes.io/hostname: n150-1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: mc
+          # renovate: datasource=docker depName=minio/mc
+          image: minio/mc:RELEASE.2025-04-16T18-25-19Z
+          command:
+            - /bin/sh
+            - -c
+            - |
+              mc alias set local http://minio-api:9000 "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"
+              mc mb --ignore-existing local/tofu-state
+              echo "Bucket tofu-state ready."
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: root-user
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: root-password
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
