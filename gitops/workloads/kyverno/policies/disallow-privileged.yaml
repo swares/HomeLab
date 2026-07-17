@@ -1,6 +1,6 @@
 # Mirrors the CI OPA policy (ci/policies/no-privileged.rego).
 # Privileged containers share the host kernel and can escalate to node root.
-# Mode: Audit initially. Switch to Enforce once zero violations confirmed.
+# Mode: Enforce — zero violations confirmed in audit baseline.
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
@@ -13,7 +13,7 @@ metadata:
       Privileged containers share the host kernel namespaces and can escalate
       to root on the node. Use specific Linux capabilities instead.
 spec:
-  validationFailureAction: Audit
+  validationFailureAction: Enforce
   background: true
   rules:
     - name: disallow-privileged
