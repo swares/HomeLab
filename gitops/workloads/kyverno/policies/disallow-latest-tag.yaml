@@ -1,7 +1,7 @@
 # Mirrors the CI OPA policy (ci/policies/no-latest-tag.rego) but enforced at
 # admission time. Operates on Pods (so it catches all workload kinds).
-# Mode: Audit — reports violations without blocking; switch to Enforce once the
-# baseline is clean (check: kubectl get policyreport -A).
+# Mode: Enforce — baseline clean; PolicyExceptions cover known deferred tags
+# (ollama/ollama:latest, fedirz/faster-whisper-server:latest-cpu).
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
@@ -14,7 +14,7 @@ metadata:
       Images must reference a pinned, immutable tag. :latest is non-deterministic
       and makes rollbacks impossible. Untagged images implicitly pull :latest.
 spec:
-  validationFailureAction: Audit
+  validationFailureAction: Enforce
   background: true
   rules:
     - name: require-image-tag
