@@ -48,7 +48,7 @@ spec:
                   name: semaphore-secrets
                   key: db-password
             - name: SEMAPHORE_DB
-              value: semaphore
+              value: semaphore?sslmode=disable
 
             # Temp path for playbook execution
             - name: SEMAPHORE_PLAYBOOK_PATH
