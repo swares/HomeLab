@@ -331,4 +331,4 @@ Requires per-VM inventory vars (`kvm_host`, `libvirt_vm_name`, `health_check_url
 | Vault TLS | Medium | Currently plain HTTP; add before exposing beyond LAN |
 | ~~octopi OS upgrade (Raspbian Buster → Bookworm)~~ | ✅ Done (2026-07-13) | Bookworm + Pi-hole v6.4.3/FTL v6.7 confirmed running |
 | ~~zswap on n150-1/n150-2~~ | ✅ Done (2026-07-03) | zswap enabled: zstd compressor, zsmalloc zpool, 20% max pool |
-| Shared storage (n150-1 ↔ n150-2) | Low | NFS or Ceph enables VM live migration between hypervisors |
+| ~~Shared storage (n150-1 ↔ n150-2)~~ | ✅ Done (2026-07-03) | NFS `/srv/libvirt-shared` exported from H4; libvirt-shared pool active on both nodes; VM live migration ready |

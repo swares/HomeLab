@@ -133,13 +133,14 @@ The lab is a flat **192.168.1.0/24** network. **DNS is the linchpin of the insta
 k3s needs `api.lab.home.arpa → 192.168.1.200` (kube-vip VIP) and
 `*.apps.lab.home.arpa → 192.168.1.160` (H4 Traefik ingress).
 
-Three DNS servers provide redundancy:
+Four DNS servers provide redundancy:
 
 | Role | Host | IP | Engine |
 |------|------|----|--------|
-| Primary | RPi 3B #2 (octopi) | `192.168.1.148` | Pi-hole (Bookworm pending) |
-| Secondary | RPi 4B | `192.168.1.116` | Pi-hole v6 |
+| Primary | RPi 3B #2 (octopi) | `192.168.1.148` | Pi-hole v6.4.3 (Bookworm, confirmed 2026-07-13) |
+| Secondary | RPi 4B | `192.168.1.116` | Pi-hole v6 (Bookworm) |
 | Tertiary | OPi Zero 2W #1 | `192.168.1.184` | dnsmasq (fallback) |
+| Quaternary | OPi Zero 2W #3 | `192.168.1.217` | dnsmasq (Armbian Trixie, 2026-07-10) |
 
 Inside the cluster, CoreDNS has a custom zone (`coredns-custom` ConfigMap in kube-system)
 that answers all `*.apps.lab.home.arpa` queries with `192.168.1.160`, ensuring pods on any
@@ -198,3 +199,20 @@ Grouped services and the hosts that provide them:
 An **interactive, filterable** version (toggle hardware classes, select-all/clear) is at
 [service-map.html](service-map.html) — open it in a browser. A **host-centric** companion
 (one card per box, everything it runs, same filters) is at [host-map.html](host-map.html).
+
+### Key cluster services (as of 2026-07-18)
+
+| Service | Namespace | Notes |
+|---------|-----------|-------|
+| Argo CD | `argocd` | GitOps; app-of-apps + git-directory ApplicationSet |
+| Immich | `immich` | Photos/video; NFS ReadWriteMany library PV |
+| Home Assistant | `home-assistant` | HA automation; MQTT consumer |
+| lldap | `lldap` | Lightweight LDAP; migrated from ldap-1 VM (2026-07-04) |
+| Authelia | `authelia` | OIDC/SSO; PostgreSQL backend |
+| LiteLLM + AI backends | `ai-gateway` | RKLLama (NPU), Ollama (fallback), m5stack-adapter, Whisper |
+| Semaphore | `semaphore` | Ansible UI; runs playbooks from inside the cluster |
+| Minio | `minio` | S3 object store; holds OpenTofu state |
+| Kyverno | `kyverno` | Policy enforcement (3 ClusterPolicies, Enforce mode) |
+| kube-prometheus-stack | `monitoring` | Prometheus + Grafana + Alertmanager + Loki + Alloy |
+| External Secrets | `external-secrets` | Syncs Vault KV v2 → k8s Secrets |
+| cert-manager | `cert-manager` | `lab-ca` ClusterIssuer; signs `*.apps.lab.home.arpa` TLS |
