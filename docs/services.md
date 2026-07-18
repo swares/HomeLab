@@ -34,7 +34,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
 | KVM / libvirt | ✓ | n150-1 (.42) + n150-2 (.21) | bare-metal Ubuntu 24.04 hypervisors; cloud-init VMs |
-| NFS storage for VMs | ○ | H4 exports → n150 hosts | shared VM disk storage |
+| NFS storage for VMs | ✓ | H4 exports `/srv/libvirt-shared` → n150-1 + n150-2 | `libvirt-shared` pool active on both nodes; enables VM live migration |
 | n150-3 (yikw) | ✓ | Windows HTPC | TV/browse; not a hypervisor |
 
 ## Platform / CaaS (L2)
@@ -79,7 +79,8 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
 | Ansible | ✓ | control node | host config; `ansible/playbooks/`; vault-encrypted secrets |
-| OpenTofu (DNS pilot) | ● | `tofu/dns/` | Pi-hole DNS records via `ryanwholey/pihole ~>0.2`; state in Minio `tofu-state` bucket; node IPs need updating before first apply |
+| OpenTofu — VMs | ✓ | `tofu/vms/` | gitlab-1 VM codified (UUID `6ea193a5`); `ignore_changes = all` + `prevent_destroy`; state in Minio `tofu-state/vms/terraform.tfstate`; init with `~/.tofu-backend.hcl` |
+| OpenTofu — DNS | ● | `tofu/dns/` | Parked — `ryanwholey/pihole v0.2` uses Pi-hole v5 session API; incompatible with Pi-hole v6 on octopi. DNS managed via Ansible `playbooks/dns.yml` instead. |
 | KVM + cloud-init | ✓ | n150-1/2 | VMs via `virt-install`; SSH-ready |
 | rpi-imager / cloud-init | ● | flashing | SD-card SBCs |
 | PlatformIO / ESPHome / OTA | ● | firmware | microcontrollers |
