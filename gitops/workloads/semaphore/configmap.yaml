@@ -9,9 +9,12 @@ metadata:
 data:
   config.json: |
     {
-      "dialect": "bolt",
-      "bolt": {
-        "path": "/data/database.boltdb"
+      "dialect": "postgres",
+      "postgres": {
+        "host": "semaphore-postgres",
+        "port": 5432,
+        "user": "semaphore",
+        "name": "semaphore"
       },
       "tmp_path": "/tmp/semaphore",
       "web_host": "https://semaphore.apps.lab.home.arpa",
