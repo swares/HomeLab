@@ -59,12 +59,15 @@
         comment: Prometheus node exporter
       when: ansible_os_family == 'Archlinux'
 
+    - name: Collect service facts
+      ansible.builtin.service_facts:
+
     - name: Enable and start node_exporter
       ansible.builtin.systemd:
         name: prometheus-node-exporter
         enabled: true
         state: restarted
-      when: (deb_install is not skipped) or (arch_install is not skipped)
+      when: "'prometheus-node-exporter.service' in ansible_facts.services"
 
     - name: Allow node_exporter port through ufw (Debian, if active)
       community.general.ufw:
