@@ -47,11 +47,13 @@ spec:
           ports:
             - containerPort: 3000
           env:
-            # Database — SQLite (BoltDB is deprecated in v2.18+)
+            # Database — BoltDB (pure Go, no CGo/VFS; deprecated in UI but functional)
+            # SQLite fails with CANTOPEN (14) under RuntimeDefault seccomp — file locking
+            # syscalls (F_OFD_GETLK etc.) appear to be blocked. BoltDB avoids that path.
             - name: SEMAPHORE_DB_DIALECT
-              value: sqlite
+              value: bolt
             - name: SEMAPHORE_DB
-              value: /data/database.sqlite
+              value: /data/database.boltdb
 
             # Temp path for playbook execution
             - name: SEMAPHORE_PLAYBOOK_PATH
