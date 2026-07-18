@@ -1,7 +1,7 @@
 # Update & Patching Coverage
 
 Current state of automated and manual update paths across every layer of the lab.
-Last updated: 2026-07-11.
+Last updated: 2026-07-18.
 
 ---
 

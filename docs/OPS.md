@@ -203,17 +203,39 @@ standalone_vms:
 
 All cluster changes go through git — never `kubectl apply` directly.
 
-### 1. Create the manifests
+The `workloads` ApplicationSet (`gitops/apps/workloads-appset.yaml`) auto-discovers
+every directory under `gitops/workloads/` and creates an ArgoCD Application for it.
+**Convention: directory name == Kubernetes namespace.**
 
-Create `gitops/workloads/<name>/` with Deployment, Service, Ingress, and Namespace manifests.
-Copy an existing app yaml from `gitops/apps/` for the ArgoCD Application.
+### Standard workload (namespace == directory name)
+
+No `gitops/apps/<name>.yaml` needed. Just create the manifests and open a PR.
 
 ```bash
+git checkout -b add-<name>
 mkdir -p gitops/workloads/<name>
 # Create deployment.yaml, service.yaml, ingress.yaml, namespace.yaml
+git add gitops/workloads/<name>
+git commit -m "feat: add <name> workload"
+git push origin add-<name>
+gh pr create && # merge
 ```
 
-Ingress template:
+ArgoCD picks up the new directory within ~30 seconds of merge and creates the Application
+automatically. No further commits needed.
+
+### Special case (namespace ≠ directory name, or Helm/multi-source)
+
+Create a standalone Application in `gitops/apps/<name>.yaml` AND add the directory to
+the exclude list in `gitops/apps/workloads-appset.yaml`. See `ai-backends.yaml` as
+the canonical example (directory `ai-backends`, namespace `ai-gateway`).
+
+Workloads currently excluded from the ApplicationSet:
+`ai-backends`, `argocd`, `cert-manager`, `coredns-custom`, `gitlab-runner`,
+`kube-vip`, `kyverno`, `monitoring`, `reloader`
+
+### Ingress template
+
 ```yaml
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -222,7 +244,13 @@ metadata:
   namespace: <name>
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    cert-manager.io/cluster-issuer: lab-ca
 spec:
+  ingressClassName: traefik
+  tls:
+    - hosts: [<name>.apps.lab.home.arpa]
+      secretName: <name>-tls
   rules:
     - host: <name>.apps.lab.home.arpa
       http:
@@ -241,27 +269,7 @@ StorageClass for PVCs is `local-path` (k3s built-in). Confirm with:
 kubectl get sc
 ```
 
-### 2. Create the ArgoCD Application
-
-```bash
-# Copy any existing app yaml from gitops/apps/ and edit: name, namespace, path
-cp gitops/apps/lldap.yaml gitops/apps/<name>.yaml
-# Edit: name, namespace, path (gitops/workloads/<name>)
-```
-
-### 3. Open a PR and merge
-
-```bash
-git checkout -b add-<name>
-git add gitops/workloads/<name> gitops/apps/<name>.yaml
-git commit -m "feat: add <name> workload"
-git push origin add-<name>
-# Open PR on GitHub → merge
-```
-
-ArgoCD reconciles within ~30 seconds of merge.
-
-### 4. Verify
+### Verify
 
 ```bash
 kubectl get pods -n <name>

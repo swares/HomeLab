@@ -48,24 +48,29 @@ named `web` resolves as `web.apps.lab.home.arpa`.
 
 ## GitOps reconcile loop
 
-The cluster's desired state is this repo. Argo's `app-of-apps` root watches `gitops/apps/`;
-each file there is itself an `Application` pointing at a directory under
-`gitops/workloads/`. With `selfHeal` and `prune` on, the live cluster is continuously
-forced to match git.
+The cluster's desired state is this repo. Argo's `app-of-apps` root watches `gitops/apps/`.
+Most workloads are managed by a **git-directory ApplicationSet** (`workloads-appset.yaml`)
+that auto-creates an Application for every directory under `gitops/workloads/` where the
+directory name equals the target namespace. Adding a new standard workload requires only
+a new `gitops/workloads/<name>/` directory — no `gitops/apps/` entry needed.
+Special cases (namespace ≠ dirname, Helm sources, infrastructure apps) keep individual
+Application files in `gitops/apps/`. With `selfHeal` and `prune` on, the live cluster is
+continuously forced to match git.
 
 ```mermaid
 flowchart LR
     C[Claude / you] -->|edit + PR| G[(git: main)]
     G -->|watched by| R[Argo: root app-of-apps]
-    R --> A1[App: authelia]
-    R --> A2[App: immich]
-    R --> A3[App: ...]
-    A1 & A2 & A3 -->|sync| K[k3s cluster]
+    R --> AS[ApplicationSet: workloads<br/>git directory generator]
+    R --> A1[App: ai-backends]
+    R --> A2[App: kyverno / monitoring / ...]
+    AS -->|one App per dir| W[App: authelia · immich · semaphore · ...]
+    A1 & A2 & W -->|sync| K[k3s cluster]
     K -->|drift detected| H{selfHeal}
     H -->|revert to git| K
     classDef g fill:#15111f,stroke:#a78bfa,color:#e6edf3;
     classDef k fill:#1a1113,stroke:#ff4d4d,color:#e6edf3;
-    class G,R,A1,A2,A3 g;
+    class G,R,AS,A1,A2,W g;
     class K,H k;
 ```
 
