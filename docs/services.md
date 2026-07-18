@@ -19,6 +19,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | cert-manager + lab CA | ✓ | k3s | `lab-ca` ClusterIssuer (self-signed root); signs `*.apps.lab.home.arpa` TLS certs |
 | NAS (NFS / SMB) | ✓ | H4 (.160) | `smbd` + `nfs-kernel-server`; **do not restart** |
 | restic backups | ✓ | H4 (md1 8TB → md0 ~5.45TB) | NAS + Immich library daily; etcd weekly; offsite via `backup-offsite.timer` |
+| Minio (object store) | ✓ | k3s · minio namespace (n150-1) | S3-compatible; `minio.apps.lab.home.arpa` (API) + `minio-console.apps.lab.home.arpa`; `tofu-state` bucket holds OpenTofu state; creds from Vault `secret/lab/minio` |
 | smartd / mdadm monitor | ✓ | H4 | SMART 199 + media attrs; email + mdadm alerts on degraded mirror |
 | Grafana | ✓ | k3s | `grafana.apps.lab.home.arpa` |
 | Prometheus | ✓ | k3s · monitoring namespace (n150-1) | kube-prometheus-stack; `prometheus.apps.lab.home.arpa`; 30d / 40GB retention |
@@ -41,10 +42,11 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
 | k3s (3 servers + 2 agents) | ✓ | H4 (.160) + n150-1 (.42) + n150-2 (.21) servers · opi5pro-1 (.168) + opi5pro-2 (.172) arm64 agents | HA 3-node cluster; kube-vip VIP 192.168.1.200; `local-path` StorageClass on NVMe |
-| Argo CD | ✓ | k3s | GitOps; app-of-apps from `gitops/apps/`; selfHeal + prune on |
+| Argo CD | ✓ | k3s | GitOps; app-of-apps + `workloads` ApplicationSet (git directory generator); selfHeal + prune on; notifications → M5Stack webhook on sync-fail/degraded |
 | Traefik ingress | ✓ | k3s | k3s default; all `*.apps.lab.home.arpa` Ingresses; TLS via cert-manager |
 | Helm + Kustomize | ● | CASC | used by ArgoCD |
-| Kyverno / OPA (policy) | ○ | k3s | |
+| Kyverno (policy) | ✓ | k3s | 3 ClusterPolicies in Enforce mode: `disallow-privileged-containers`, `disallow-latest-tag`, `require-resource-limits` |
+| Semaphore (Ansible UI) | ✓ | k3s · semaphore namespace (n150-1) | `semaphore.apps.lab.home.arpa`; BoltDB replaced by SQLite; creds from Vault `secret/lab/semaphore` |
 | Linkerd (service mesh) | ○ | k3s | optional |
 
 ## AI / Inference
@@ -60,7 +62,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | Whisper STT | ✓ | k3s · whisper namespace (n150-1, CPU) | `https://stt.apps.lab.home.arpa/v1/audio/transcriptions`; base model; TLS via lab-ca |
 | Embedding model (nomic-embed-text) | ● | Ollama on H4 | configured in LiteLLM as `openai/nomic-embed-text`; bge-small via OpenVINO deferred |
 | Vector DB (Qdrant / Chroma) | ○ | k3s | RAG store — deferred; embeddings ready (nomic-embed-text via Ollama) but no RAG use case yet |
-| Ollama / llama.cpp | ✓ | k3s · ai-gateway namespace (opi5pro-1, arm64) | fallback engine + nomic-embed-text embeddings; `ollama/ollama:latest` (pin pending OPi pull verification) |
+| Ollama / llama.cpp | ✓ | k3s · ai-gateway namespace (opi5pro-1/2, arm64) | fallback engine + nomic-embed-text embeddings; pinned to `ollama/ollama:0.32.0`; both nodes pre-staged before pin |
 
 ## Software dev
 
@@ -77,6 +79,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
 | Ansible | ✓ | control node | host config; `ansible/playbooks/`; vault-encrypted secrets |
+| OpenTofu (DNS pilot) | ● | `tofu/dns/` | Pi-hole DNS records via `ryanwholey/pihole ~>0.2`; state in Minio `tofu-state` bucket; node IPs need updating before first apply |
 | KVM + cloud-init | ✓ | n150-1/2 | VMs via `virt-install`; SSH-ready |
 | rpi-imager / cloud-init | ● | flashing | SD-card SBCs |
 | PlatformIO / ESPHome / OTA | ● | firmware | microcontrollers |
