@@ -76,5 +76,7 @@
         proto: tcp
         src: 192.168.1.0/24
         comment: Prometheus node_exporter
-      when: ansible_os_family == 'Debian'
+      when:
+        - ansible_os_family == 'Debian'
+        - "'ufw.service' in ansible_facts.services or 'ufw' in ansible_facts.services"
       ignore_errors: true
