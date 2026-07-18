@@ -1,7 +1,7 @@
 # Hardware Inventory & Roles
 
 Subnet: `192.168.1.0/24`. Gateway: `192.168.1.1`.
-Last verified: 2026-07-10.
+Last verified: 2026-07-18.
 
 > **Security:** Default passwords (`pi`/`odroid`/`root`) have been rotated on all managed
 > hosts via `ansible/playbooks/rotate-passwords.yml`. Credentials are in Ansible Vault —
@@ -18,7 +18,7 @@ Last verified: 2026-07-10.
 | **N150 mini PC #2** | Intel N150 4C x86 | 16 GB | `192.168.1.21` (br0) | — | KVM hypervisor · Ubuntu 24.04 |
 | **N150 mini PC #3 (HTPC)** | Intel N150 4C x86 | 16 GB | — | `192.168.1.176` | Living-room HTPC |
 | **RPi 5** | Cortex-A76 4C | 8 GB | `192.168.1.128` | `192.168.1.124` (avoid) | HashiCorp Vault |
-| **RPi 4B** | Cortex-A72 4C | 8 GB | `192.168.1.116` | — | Home Assistant host (Debian 12 Bookworm) |
+| **RPi 4B** | Cortex-A72 4C | 8 GB | `192.168.1.116` | — | Pi-hole secondary DNS (Debian 12 Bookworm) |
 | **RPi 3B #2** | Cortex-A53 4C | 1 GB | `192.168.1.148` | `192.168.1.152` (avoid) | DNS primary (Pi-hole v6.4.3, Bookworm) |
 | **RPi 3B #1** | Cortex-A53 4C | 1 GB | — | — | ⚠ on-board power fault — retired |
 | **Odroid-XU3 #1** | Exynos5422 8C | 2 GB | `192.168.1.64` | — | Build agent (Python <3.8 — excluded from Ansible auto-updates) |
@@ -33,6 +33,7 @@ Last verified: 2026-07-10.
 
 | VM | Host | IP | OS | Role |
 |----|------|----|----|------|
+| **gitlab-1** | n150-1 | `192.168.1.50` | Ubuntu 22.04 | GitLab CE Omnibus · `gitlab.lab.home.arpa` · 80 GiB qcow2 at `/var/lib/libvirt/images/gitlab-1.qcow2` · MAC `52:54:00:6b:ab:01` · UUID `6ea193a5-61f9-4b65-8ee1-a90b343aec5f` · codified in `tofu/vms/` |
 | **ldap-1** | n150-1 | `192.168.1.70` | Ubuntu 24.04 | ~~lldap v0.6.3~~ **decommissioned 2026-07-04** — lldap migrated to k3s `lldap` namespace |
 
 ## Network
@@ -130,10 +131,18 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 - ✅ n150-1/n150-2 sudo password: Ansible-Vault-encrypted in group_vars/kvm_hosts/secrets.yml; sync-secrets-to-vault.yml now backs it up to secret/lab/hosts (2026-07-03)
 - ✅ ArgoCD deploy key: sync-secrets-to-vault.yml backs up ~/.ssh/argocd-deploy-key to secret/lab/argocd (2026-07-03)
 - ✅ zswap enabled on n150-1/n150-2: zstd compressor, zsmalloc zpool, 20% max pool (2026-07-03)
-- N150 #3: WinRM credentials (wrong password on file)
-- ✅ Authelia → PostgreSQL: postgres.yaml added, configmap+deployment updated, replicas:2 — pending password generation + git push (2026-07-03)
+- ✅ N150 #3: WinRM credentials corrected (2026-07-13)
+- ✅ Authelia → PostgreSQL: postgres.yaml added, configmap+deployment updated (2026-07-03)
 - ✅ Shared NFS storage between n150-1/n150-2: /srv/libvirt-shared, libvirt-shared pool active on both nodes, SSH key exchange complete — VM live migration ready (2026-07-03)
 - ✅ Monitoring stack (Prometheus, Grafana, Alertmanager, Loki) migrated from odroid-nas to n150-1 (2026-07-04)
 - ✅ immich-library PV: hostPath+nodeAffinity → NFS ReadWriteMany; immich-server now schedules on any node (2026-07-04)
-- ✅ lldap migrated from ldap-1 KVM VM (192.168.1.70) to k3s Deployment in lldap namespace; ldap-1 VM stopped (2026-07-04)
-- ✅ MQTT HA: opi-zero2w-4 (.99) deployed as secondary broker bridging all topics to/from opi-zero2w-2 (.188); M5Stack firmware has automatic failover (2
+- ✅ lldap migrated from ldap-1 KVM VM (192.168.1.70) to k3s Deployment in lldap namespace; ldap-1 VM decommissioned (2026-07-04)
+- ✅ MQTT HA: opi-zero2w-4 (.99) deployed as secondary broker bridging all topics to/from opi-zero2w-2 (.188); M5Stack firmware has automatic failover (2026-07-10)
+- ✅ Kyverno: 3 ClusterPolicies in Enforce mode (disallow-latest-tag, require-resource-limits, disallow-privileged) (2026-07-14)
+- ✅ ArgoCD notifications + ApplicationSet git-directory generator deployed (2026-07-14)
+- ✅ Semaphore Ansible UI live at semaphore.apps.lab.home.arpa; 5 task templates (2026-07-18)
+- ✅ OpenTofu state backend: Minio `tofu-state` bucket; vms module codifies gitlab-1 (2026-07-18)
+- ✅ n150-1 KVM host fixes: bridge.conf, qemu-bridge-helper setuid, AppArmor NUMA rules captured in bootstrap-kvm.yml (2026-07-18)
+- ⚠ sudo password on n150-1/n150-2 exposed in terminal output (2026-07-18) — rotate via rotate-passwords.yml
+- Kyverno cleanup pending: Ollama image pin + Whisper versioned tag (required by disallow-latest-tag policy)
+- Authelia health stuck Progressing in ArgoCD — investigate(2

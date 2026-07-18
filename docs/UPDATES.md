@@ -15,7 +15,7 @@ Last updated: 2026-07-18.
 | Pi-hole application | Ansible `update-non-apt.yml -t pihole` in GitHub Actions | Weekly (Sunday 03:00 Central)¹ | No |
 | HashiCorp Vault binary | apt (HashiCorp repo) — included in OS play; seal-check play runs after | Weekly¹ | Yes — unseal manually if sealed after restart |
 | **KVM VMs (gitlab-1, etc.)** | **`sandbox-vm-update.yml` — clone-test-promote pipeline** | **Manual / on-demand** | **Yes — human runs promote step** |
-| Windows OS (n150-1/2/3) | None — Windows Update runs uncontrolled | Uncontrolled | Manual if policy required |
+| Windows OS (n150-3 / yikw) | None — Windows Update runs uncontrolled | Uncontrolled | Manual if policy required |
 
 ¹ GitHub Actions schedule runs on the **self-hosted runner on H4** (`runs-on: [self-hosted, lab]`)
 which has direct LAN access. Register the runner:
@@ -219,7 +219,7 @@ to confirm before assuming External Secrets and dependent workloads are healthy.
 
 ---
 
-## 6. Windows OS (n150-1, n150-2, n150-3)
+## 6. Windows OS (n150-3 / yikw only — n150-1/2 are Ubuntu)
 
 **Not currently automated.** Windows Update runs on its own schedule (or not, depending
 on local policy). The Ansible `windows-bootstrap.yml` playbook handles initial setup but
@@ -331,4 +331,4 @@ Requires per-VM inventory vars (`kvm_host`, `libvirt_vm_name`, `health_check_url
 | Vault TLS | Medium | Currently plain HTTP; add before exposing beyond LAN |
 | ~~octopi OS upgrade (Raspbian Buster → Bookworm)~~ | ✅ Done (2026-07-13) | Bookworm + Pi-hole v6.4.3/FTL v6.7 confirmed running |
 | ~~zswap on n150-1/n150-2~~ | ✅ Done (2026-07-03) | zswap enabled: zstd compressor, zsmalloc zpool, 20% max pool |
-| Shared storage (n150-1 ↔ n150-2) | Low | NFS or Ceph enables VM live migration between hypervisors |
+| ~~Shared storage (n150-1 ↔ n150-2)~~ | ✅ Done (2026-07-03) | NFS `/srv/libvirt-shared` exported from H4; libvirt-shared pool active on both nodes; VM live migration ready |

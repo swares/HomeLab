@@ -1,8 +1,8 @@
 # CLAUDE.md — operating rules for this lab
 
-You are helping operate a home lab whose core is an **Odroid-H4 Ultra** that is *both* a
-NAS and a single-node **k3s** cluster (Ubuntu 22.04). Read this before acting. Full context
-is in `docs/` (start with `ARCHITECTURE.md`).
+You are helping operate a home lab whose core is an **Odroid-H4 Ultra** NAS, part of a
+**3-node HA k3s cluster** (H4 + n150-1 + n150-2 as servers; opi5pro-1/2 as ARM64 agents).
+Read this before acting. Full context is in `docs/` (start with `ARCHITECTURE.md`).
 
 ## How changes are made
 
@@ -65,7 +65,7 @@ is in `docs/` (start with `ARCHITECTURE.md`).
 
 The H4 is the core (k3s server + NAS, Ubuntu 22.04, `192.168.1.160`). The two
 **Orange Pi 5 Pro** boards (8C/16GB/NPU) are k3s agents / AI inference hosts; RPi 5
-runs Vault; RPi 4B runs Pi-hole (secondary DNS, 192.168.1.116); lldap runs as a k3s Deployment in the `lldap` namespace (ldap-1 VM decommissioned
+runs Vault; RPi 4B runs Pi-hole (secondary DNS, 192.168.1.116); Home Assistant runs as a k3s Deployment in the `home-assistant` namespace; lldap runs as a k3s Deployment in the `lldap` namespace (ldap-1 VM decommissioned
 2026-07-04); the XU3 is a build agent. DNS needs a permanent host.
 M5Stack + OPi NPUs are edge inference endpoints, not cluster nodes.
 The map's plaintext credentials must be rotated. See `docs/HARDWARE.md`.
