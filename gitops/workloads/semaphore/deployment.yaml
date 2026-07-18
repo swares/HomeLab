@@ -52,7 +52,7 @@ spec:
             # SQLite fails with CANTOPEN (14) under RuntimeDefault seccomp — file locking
             # syscalls (F_OFD_GETLK etc.) appear to be blocked. BoltDB avoids that path.
             - name: SEMAPHORE_DB_DIALECT
-              value: sqlite
+              value: bolt
             - name: SEMAPHORE_DB
               value: /data/database.boltdb
 
@@ -115,6 +115,10 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
+            # RuntimeDefault blocks a syscall SQLite needs (likely mmap flags or fallocate).
+            # Unconfined here to confirm seccomp is the root cause before writing a custom profile.
+            seccompProfile:
+              type: Unconfined
 
           readinessProbe:
             httpGet: { path: /api/ping, port: 3000 }
