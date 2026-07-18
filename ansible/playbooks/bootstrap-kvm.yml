@@ -140,6 +140,49 @@
       changed_when: pool_cmd.rc == 0
       failed_when: pool_cmd.rc != 0 and 'already active' not in pool_cmd.stderr
 
+    # ── QEMU bridge helper ────────────────────────────────────────────────────
+    - name: Ensure /etc/qemu directory exists
+      ansible.builtin.file:
+        path: /etc/qemu
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Allow br0 in QEMU bridge ACL
+      ansible.builtin.copy:
+        dest: /etc/qemu/bridge.conf
+        content: "allow {{ bridge_name }}\n"
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Set setuid bit on qemu-bridge-helper
+      ansible.builtin.file:
+        path: /usr/lib/qemu/qemu-bridge-helper
+        mode: 'u+s'
+
+    # ── AppArmor: allow QEMU bridge-helper to read NUMA node info ─────────────
+    - name: Ensure /etc/apparmor.d/local exists
+      ansible.builtin.file:
+        path: /etc/apparmor.d/local
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Allow qemu-bridge-helper to read NUMA node paths
+      ansible.builtin.copy:
+        dest: /etc/apparmor.d/local/usr.sbin.libvirtd
+        content: |
+          # Allow qemu-bridge-helper to enumerate NUMA nodes (required on multi-node hosts)
+          /sys/devices/system/node/ r,
+          /sys/devices/system/node/** r,
+        owner: root
+        group: root
+        mode: '0644'
+      notify: reload libvirtd apparmor profile
+
     # ── Report ────────────────────────────────────────────────────────────────
     - name: Report
       ansible.builtin.debug:
@@ -151,3 +194,7 @@
   handlers:
     - name: apply netplan
       ansible.builtin.command: netplan apply
+
+    - name: reload libvirtd apparmor profile
+      ansible.builtin.command: apparmor_parser -r /etc/apparmor.d/usr.sbin.libvirtd
+      failed_when: false
