@@ -22,6 +22,7 @@ spec:
         runAsNonRoot: true
         runAsUser: 1000
         fsGroup: 1000
+        fsGroupChangePolicy: "Always"   # force kubelet to chown volumes to fsGroup on every mount
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: semaphore
@@ -106,6 +107,10 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
+            # RuntimeDefault blocks a syscall SQLite needs (likely mmap flags or fallocate).
+            # Unconfined here to confirm seccomp is the root cause before writing a custom profile.
+            seccompProfile:
+              type: Unconfined
 
           readinessProbe:
             httpGet: { path: /api/ping, port: 3000 }
