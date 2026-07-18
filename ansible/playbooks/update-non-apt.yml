@@ -234,9 +234,15 @@
           WARNING: VAULT IS SEALED on {{ inventory_hostname }}.
           Run: vault operator unseal (3 key shares required)
           Address: {{ vault_addr }}
-      when: seal_status.json.sealed | bool
+      when:
+        - seal_status is not skipped
+        - seal_status.json is defined
+        - seal_status.json.sealed | bool
 
     - name: Vault is unsealed
       ansible.builtin.debug:
         msg: "Vault on {{ inventory_hostname }} is unsealed. Version: {{ vault_version.stdout }}"
-      when: not (seal_status.json.sealed | bool)
+      when:
+        - seal_status is not skipped
+        - seal_status.json is defined
+        - not (seal_status.json.sealed | bool)
