@@ -19,10 +19,9 @@ spec:
       nodeSelector:
         kubernetes.io/hostname: n150-1   # x86; ansible runs here
       securityContext:
-        runAsNonRoot: true
-        runAsUser: 1000
-        fsGroup: 1000
-        fsGroupChangePolicy: "Always"   # force kubelet to chown volumes to fsGroup on every mount
+        # runAsUser/runAsNonRoot omitted — the semaphore image runs as its own
+        # internal non-root user (uid 1001). Forcing uid 1000 breaks SSH git clone
+        # because there is no /etc/passwd entry for that uid.
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: semaphore
@@ -107,10 +106,6 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: [ALL] }
-            # RuntimeDefault blocks a syscall SQLite needs (likely mmap flags or fallocate).
-            # Unconfined here to confirm seccomp is the root cause before writing a custom profile.
-            seccompProfile:
-              type: Unconfined
 
           readinessProbe:
             httpGet: { path: /api/ping, port: 3000 }
