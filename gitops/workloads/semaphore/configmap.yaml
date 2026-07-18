@@ -9,9 +9,9 @@ metadata:
 data:
   config.json: |
     {
-      "dialect": "sqlite",
-      "sqlite": {
-        "path": "/data/database.sqlite"
+      "dialect": "bolt",
+      "bolt": {
+        "path": "/data/database.boltdb"
       },
       "tmp_path": "/tmp/semaphore",
       "web_host": "https://semaphore.apps.lab.home.arpa",
