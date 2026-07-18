@@ -3,9 +3,12 @@ terraform {
 
   required_providers {
     pihole = {
-      # Community provider — supports Pi-hole v5 API.
-      # Pi-hole v6 changed the API; if you upgrade Pi-hole, check:
-      # https://registry.terraform.io/providers/ryanwholey/pihole/latest
+      # ryanwholey/pihole v0.2 supports Pi-hole v5 API only.
+      # Pi-hole v6 changed the auth mechanism (session → Bearer token);
+      # this provider fails with "session ID not found in response".
+      # BLOCKED: no v6-compatible provider confirmed available as of 2026-07-18.
+      # DNS is managed via ansible/playbooks/dns.yml in the interim.
+      # Re-evaluate when a Pi-hole v6 provider is available.
       source  = "ryanwholey/pihole"
       # renovate: datasource=github-releases depName=ryanwholey/terraform-provider-pihole
       version = "~> 0.2"
