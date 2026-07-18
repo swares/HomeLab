@@ -132,6 +132,17 @@
       changed_when: false
       failed_when: false
 
+    - name: Read k3s node token from server
+      ansible.builtin.slurp:
+        src: /var/lib/rancher/k3s/server/node-token
+      register: k3s_token_raw
+      delegate_to: "{{ groups['k3s_server'][0] }}"
+      become: true
+
+    - name: Set k3s_agent_token fact
+      ansible.builtin.set_fact:
+        k3s_agent_token: "{{ k3s_token_raw.content | b64decode | trim }}"
+
   tasks:
     - name: Skip if already at target version
       ansible.builtin.meta: end_host
