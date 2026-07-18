@@ -13,6 +13,9 @@ spec:
     metadata:
       labels: { app: semaphore }
     spec:
+      # Disable k8s service-env injection — k8s injects SEMAPHORE_PORT=tcp://...
+      # which Semaphore reads as its Port field and panics on the tcp:// prefix.
+      enableServiceLinks: false
       nodeSelector:
         kubernetes.io/hostname: n150-1   # x86; ansible runs here
       securityContext:
