@@ -29,6 +29,7 @@
         update_cache: true
         cache_valid_time: 3600
       when: ansible_os_family == 'Debian'
+      register: deb_install
 
     - name: Install prometheus-node-exporter (Arch)
       community.general.pacman:
@@ -36,6 +37,7 @@
         state: present
         update_cache: true
       when: ansible_os_family == 'Archlinux'
+      register: arch_install
 
     # Arch package service unit runs as User=prometheus-node-exporter which
     # doesn't exist on minimal installs — create it as a locked system account.
@@ -62,6 +64,7 @@
         name: prometheus-node-exporter
         enabled: true
         state: restarted
+      when: (deb_install is not skipped) or (arch_install is not skipped)
 
     - name: Allow node_exporter port through ufw (Debian, if active)
       community.general.ufw:
