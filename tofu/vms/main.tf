@@ -6,51 +6,29 @@
 # Import (first-time setup):
 #   tofu import libvirt_domain.gitlab_1 gitlab-1
 #
-# Disk and network are NOT managed here (they pre-exist on the host).
-# Only the domain definition is imported so CPU/RAM/autostart changes
-# go through git.
+# Disk, network, and console config live in the domain XML on the host.
+# This declaration tracks identity + compute sizing so changes go through git.
 
 # ── gitlab-1 ──────────────────────────────────────────────────────────────────
 # GitLab CE — Ubuntu 22.04 VM on n150-1
-# IP: 192.168.1.50 (static via DHCP reservation)
+# IP: 192.168.1.50 (DHCP reservation)
 # Disk: /var/lib/libvirt/images/gitlab-1.qcow2 (80 GiB virtual, ~23 GiB used)
+# MAC: 52:54:00:6b:ab:01  Bridge: br0
 
 resource "libvirt_domain" "gitlab_1" {
-  name   = "gitlab-1"
-  uuid   = "6ea193a5-61f9-4b65-8ee1-a90b343aec5f"
-  memory = 8192   # MiB
-  vcpu   = 4
-
+  name      = "gitlab-1"
+  # uuid: 6ea193a5-61f9-4b65-8ee1-a90b343aec5f (read-only, set by libvirt)
+  type      = "kvm"
+  memory    = 8192   # MiB
+  vcpu      = 4
   autostart = true
+  running   = true
 
-  disk {
-    file = "/var/lib/libvirt/images/gitlab-1.qcow2"
-  }
-
-  # cloud-init seed ISO — present on disk, not managed by tofu
-  disk {
-    file   = "/var/lib/libvirt/images/gitlab-1-seed.iso"
-    scsi   = false
-  }
-
-  network_interface {
-    bridge     = "br0"
-    mac        = "52:54:00:6b:ab:01"
-    wait_for_lease = false
-  }
-
-  console {
-    type        = "pty"
-    target_port = "0"
-    target_type = "serial"
-  }
-
-  graphics {
-    type   = "vnc"
-    listen_type = "address"
-  }
-
-  cpu {
-    mode = "host-passthrough"
+  lifecycle {
+    # Track identity + prevent accidental destroy only.
+    # Full domain config (devices, cpu, clock, networking) lives in the
+    # domain XML managed by libvirt on n150-1 — not here.
+    prevent_destroy = true
+    ignore_changes  = all
   }
 }
