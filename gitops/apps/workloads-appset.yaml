@@ -16,6 +16,7 @@
 #   kube-vip       → namespace is kube-system
 #   kyverno        → name conflicts with the Helm-managed kyverno app
 #   monitoring     → name conflicts with the Helm-managed monitoring app
+#   reloader       → uses kustomize remote URL; directory mode cannot run kustomize
 apiVersion: argoproj.io/v1alpha1
 kind: ApplicationSet
 metadata:
@@ -43,6 +44,8 @@ spec:
           - path: gitops/workloads/kyverno
             exclude: true
           - path: gitops/workloads/monitoring
+            exclude: true
+          - path: gitops/workloads/reloader
             exclude: true
   template:
     metadata:
