@@ -22,11 +22,15 @@ spec:
         runAsNonRoot: true
         runAsUser: 1000
         fsGroup: 1000
+        fsGroupChangePolicy: "Always"   # force kubelet to chown volumes to fsGroup on every mount
         seccompProfile: { type: RuntimeDefault }
       initContainers:
         - name: fix-perms
           image: busybox:1.36
-          command: ["sh", "-c", "chown 1000:1000 /data"]
+          # Recursive chown so both the dir and any existing files get corrected.
+          # Run as root with default capabilities — drop:ALL suppresses CHOWN on some
+          # runtimes and the chown then silently fails.
+          command: ["sh", "-c", "chown -R 1000:1000 /data && echo 'chown done' && ls -la /data"]
           volumeMounts:
             - name: data
               mountPath: /data
@@ -34,9 +38,6 @@ spec:
             runAsUser: 0
             runAsNonRoot: false
             allowPrivilegeEscalation: false
-            capabilities:
-              drop: [ALL]
-              add: [CHOWN, FOWNER, DAC_OVERRIDE]
           resources:
             requests: { cpu: 10m, memory: 16Mi }
             limits: { cpu: 100m, memory: 64Mi }
