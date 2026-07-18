@@ -27,11 +27,11 @@ spec:
           ports:
             - containerPort: 3000
           env:
-            # Database — BoltDB (no external postgres required)
+            # Database — SQLite (BoltDB is deprecated in v2.18+)
             - name: SEMAPHORE_DB_DIALECT
-              value: bolt
+              value: sqlite
             - name: SEMAPHORE_DB
-              value: /data/database.bolt
+              value: /data/database.sqlite
 
             # Temp path for playbook execution
             - name: SEMAPHORE_PLAYBOOK_PATH
@@ -76,6 +76,10 @@ spec:
               mountPath: /data
             - name: tmp
               mountPath: /tmp/semaphore
+            - name: config
+              mountPath: /etc/semaphore/config.json
+              subPath: config.json
+              readOnly: true
 
           resources:
             requests:
@@ -104,3 +108,6 @@ spec:
             claimName: semaphore-data
         - name: tmp
           emptyDir: {}
+        - name: config
+          configMap:
+            name: semaphore-config
