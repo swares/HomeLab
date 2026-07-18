@@ -1,0 +1,25 @@
+# ArgoCD Application: reloader
+#
+# Uses kustomize to pull the upstream manifest via remote URL in kustomization.yaml.
+# Excluded from workloads-appset because directory mode cannot run kustomize.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: reloader
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:swares/HomeLab.git
+    targetRevision: main
+    path: gitops/workloads/reloader
+    # No directory: block — ArgoCD auto-detects kustomization.yaml and runs kustomize
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: reloader
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
