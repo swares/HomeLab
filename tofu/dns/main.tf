@@ -34,17 +34,17 @@ resource "pihole_dns_record" "odroid_h4" {
 
 resource "pihole_dns_record" "opi5pro_1" {
   domain = "opi5pro-1.lab.home.arpa"
-  ip     = "192.168.1.161"   # update to match your actual OPi IPs
+  ip     = "192.168.1.168"
 }
 
 resource "pihole_dns_record" "opi5pro_2" {
   domain = "opi5pro-2.lab.home.arpa"
-  ip     = "192.168.1.162"   # update to match your actual OPi IPs
+  ip     = "192.168.1.172"
 }
 
 resource "pihole_dns_record" "rpi5" {
   domain = "vault.lab.home.arpa"
-  ip     = "192.168.1.170"   # RPi 5 — update to match actual IP
+  ip     = "192.168.1.128"
 }
 
 resource "pihole_dns_record" "rpi4b" {
