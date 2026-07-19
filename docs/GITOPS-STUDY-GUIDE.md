@@ -31,16 +31,20 @@ The lab is built in four layers, each managed by a different tool:
 │  Layer 4 — Workloads                                     │
 │  ArgoCD reconciles gitops/ → k3s cluster                │
 │  (Authelia, Immich, Grafana, LiteLLM, Whisper …)        │
+│  Kyverno admission policies enforce image + security     │
 ├─────────────────────────────────────────────────────────┤
 │  Layer 3 — Kubernetes (k3s)                             │
 │  Installed and upgraded via Ansible                      │
 │  Traefik ingress · local-path storage · CoreDNS         │
+│  3-server HA cluster (H4 + n150-1 + n150-2, etcd quorum)│
 ├─────────────────────────────────────────────────────────┤
 │  Layer 2 — OS / Host config                             │
 │  Ansible playbooks: packages, sysctl, NFS, RAID, users  │
+│  Semaphore web UI at semaphore.apps.lab.home.arpa        │
 ├─────────────────────────────────────────────────────────┤
-│  Layer 1 — Hardware                                      │
+│  Layer 1 — Hardware + VMs                               │
 │  Odroid-H4 Ultra · N150 nodes · OPi 5 Pro · RPi 5/4B   │
+│  KVM VMs on n150-1/2; gitlab-1 codified in tofu/vms/    │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -85,6 +89,23 @@ k3s_version: "v1.30.2+k3s1"
 ## 4. The GitOps Reconciliation Loop
 
 Once the cluster is running, ArgoCD takes over management of everything inside it.
+
+### Application discovery — ApplicationSet
+
+Standard workloads are discovered automatically via the **git directory generator** in
+`gitops/apps/workloads-appset.yaml`. Any directory added under `gitops/workloads/` becomes
+an ArgoCD Application without a manual `gitops/apps/` entry:
+
+```
+gitops/workloads/
+  my-new-app/          ← ArgoCD detects this automatically
+    deployment.yaml
+    service.yaml
+```
+
+The `gitops/apps/` directory is reserved for Helm chart Applications and system-level
+components (kyverno, cert-manager, external-secrets, monitoring stack) that need special
+Helm values or install options. Standard manifests go straight into `gitops/workloads/`.
 
 ```mermaid
 flowchart LR
@@ -210,7 +231,39 @@ it, and when.
 
 ---
 
-## 7. Rollbacks
+## 7. Admission Policy — Kyverno
+
+All workload changes pass through **Kyverno** before they reach the cluster. Three
+ClusterPolicies are in **Enforce** mode — violations are rejected at admission, not just
+flagged after the fact:
+
+| Policy | What it checks |
+|---|---|
+| `disallow-latest-tag` | Every container image must have an explicit, pinned tag (not `:latest` or untagged) |
+| `require-resource-limits` | Every container must declare `resources.limits.cpu` and `resources.limits.memory` |
+| `disallow-privileged-containers` | `privileged: true` is banned; fix with proper `securityContext` instead |
+
+These are checked by ArgoCD's dry-run CI step and enforced again at apply time. If a
+Renovate PR pins a new image to `:latest`, CI fails before it can be merged.
+
+**What to do when a new workload is rejected:**
+
+```bash
+# Kyverno will tell you exactly which rule failed and why
+kubectl describe pod <pod> -n <namespace> | grep "admission webhook"
+
+# Common fixes:
+# 1. Pin the image tag:  image: myapp:1.2.3  (not myapp or myapp:latest)
+# 2. Add resource limits to every container in the spec
+# 3. Remove privileged: true; use capabilities instead if needed
+```
+
+Exempted namespaces: `kube-system`, `kyverno`, `argocd` (cluster infrastructure that
+predates or bootstraps policy enforcement).
+
+---
+
+## 8. Rollbacks
 
 Because the cluster state is entirely derived from git, rolling back is just reverting a commit.
 
@@ -250,7 +303,7 @@ the audit log clean.
 
 ---
 
-## 8. Storage & Data Protection
+## 9. Storage & Data Protection
 
 The lab runs two storage tiers with independent failure domains for data safety.
 
@@ -285,7 +338,7 @@ where a hot-tier change and a cold-tier failure happen simultaneously.
 
 ---
 
-## 9. Secrets Management
+## 10. Secrets Management
 
 Secrets never live in plain text in git. The chain:
 
@@ -304,7 +357,7 @@ flowchart LR
 
 ---
 
-## 10. Observability
+## 11. Observability
 
 The monitoring stack (kube-prometheus-stack) gives three layers of visibility:
 
@@ -329,7 +382,7 @@ External hosts (VMs, OPis, DNS servers) that are not k3s nodes are scraped via
 
 ---
 
-## 11. How This Enables High Uptime
+## 12. How This Enables High Uptime
 
 High uptime in a homelab is harder than in a datacenter — one failure domain, consumer
 hardware, no on-call team. GitOps compensates with automation that catches and corrects
@@ -400,7 +453,7 @@ on-call rotation — because the software layer compensates for the hardware con
 
 ---
 
-## 12. Routine Maintenance
+## 13. Routine Maintenance
 
 Most maintenance is automated. What remains for a human:
 
@@ -478,7 +531,7 @@ vault operator unseal   # enter unseal key
 
 ---
 
-## 13. Troubleshooting Guide
+## 14. Troubleshooting Guide
 
 ### Diagnostic hierarchy
 
@@ -632,6 +685,55 @@ kubectl run -it --rm debug --image=curlimages/curl --restart=Never -- \
 
 ---
 
+### Workload rejected by Kyverno admission webhook
+
+Symptoms: `kubectl apply` or ArgoCD sync fails with "admission webhook ... denied the request".
+
+```bash
+# The error message names the policy and rule
+# e.g. "Image tag ':latest' is not allowed"
+
+# Common fixes:
+# 1. Latest tag → pin to a specific version
+#    image: myapp:latest  →  image: myapp:1.2.3
+
+# 2. Missing resource limits → add to every container
+#    resources:
+#      requests: { cpu: 100m, memory: 128Mi }
+#      limits:   { cpu: 500m, memory: 256Mi }
+
+# 3. Privileged container → use capabilities instead
+#    securityContext:
+#      privileged: false
+#      capabilities:
+#        add: [NET_BIND_SERVICE]
+
+# Check if background scan has other violations in the cluster
+kubectl get policyreport -A
+```
+
+---
+
+### ExternalSecrets not syncing (API version mismatch)
+
+If ESO manifests use `v1beta1` but the CRD only has `v1alpha1`, ExternalSecrets will fail
+to create. This can happen after a chart upgrade if ArgoCD doesn't automatically upgrade CRDs.
+
+```bash
+# Check what versions the CRD has
+kubectl get crd externalsecrets.external-secrets.io \
+  -o jsonpath='{.spec.versions[*].name}'
+
+# If v1beta1 is missing, force-upgrade the CRD
+kubectl apply --server-side --force-conflicts \
+  -f https://raw.githubusercontent.com/external-secrets/external-secrets/v0.14.4/config/crds/bases/external-secrets.io_externalsecrets.yaml
+
+# Then re-sync the affected app
+argocd app sync <app-name>
+```
+
+---
+
 ### Backup timer missed
 
 ```bash
@@ -668,15 +770,19 @@ ansible-playbook ansible/site.yml --limit <hostname> --tags k3s
 
 ---
 
-## 14. Quick Reference — Change Runbook
+## 15. Quick Reference — Change Runbook
 
 | What you want to do | How to do it |
 |---|---|
-| Deploy a new workload | Add manifests to `gitops/workloads/<name>/`, add an Application to `gitops/apps/`, open PR |
-| Update a container image | Edit the image tag in the relevant YAML, open PR (or let Renovate do it) |
+| Deploy a new workload (manifests) | Add directory to `gitops/workloads/<name>/` — ApplicationSet picks it up automatically; no `gitops/apps/` entry needed |
+| Deploy a Helm chart workload | Add an Application to `gitops/apps/` with chart + values; ApplicationSet does not cover Helm |
+| Update a container image | Edit the image tag in the relevant YAML, open PR (or let Renovate do it) — must be a pinned tag, not `:latest` |
 | Change a config value | Edit the ConfigMap/values in `gitops/workloads/`, open PR |
 | Roll back a change | `git revert <sha>`, push to main — ArgoCD reconciles |
-| Change host-level config | Edit Ansible playbook, run `--check` first, then apply |
+| Change host-level config | Edit Ansible playbook, run `--check` first, then apply via Semaphore or CLI |
+| Run an Ansible task via UI | Semaphore at `semaphore.apps.lab.home.arpa` — task templates for all common plays |
 | Upgrade k3s | Let Renovate open the PR, then run Ansible drain cycle manually before merging |
+| Add a KVM VM | Define in `tofu/vms/main.tf`, import UUID with `tofu import`, open PR |
 | Emergency: cluster is broken | Check `kubectl get events -A`, check ArgoCD sync status, `git revert` if needed |
+| Emergency: workload rejected at admission | Check Kyverno: pin image tag, add resource limits, remove `privileged: true` |
 | Emergency: data loss | Restore from restic on cold tier; verify `backup-nas` timer last run first |
