@@ -1,7 +1,6 @@
 # Mirrors the CI OPA policy (ci/policies/no-latest-tag.rego) but enforced at
 # admission time. Operates on Pods (so it catches all workload kinds).
-# Mode: Enforce — baseline clean; PolicyExceptions cover known deferred tags
-# (ollama/ollama:latest, fedirz/faster-whisper-server:latest-cpu).
+# Mode: Enforce — all workloads pinned; zero PolicyExceptions in cluster.
 apiVersion: kyverno.io/v1
 kind: ClusterPolicy
 metadata:
