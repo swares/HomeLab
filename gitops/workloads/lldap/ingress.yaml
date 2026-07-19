@@ -6,6 +6,7 @@ metadata:
   annotations:
     traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
+    traefik.ingress.kubernetes.io/router.middlewares: authelia-forwardauth@kubernetescrd
     cert-manager.io/cluster-issuer: lab-ca
 spec:
   ingressClassName: traefik
