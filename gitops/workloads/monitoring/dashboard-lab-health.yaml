@@ -1607,7 +1607,7 @@ data:
                 "type": "prometheus",
                 "uid": "${datasource}"
               },
-              "expr": "label_replace(up{job=~\"node-exporter.*\"} == 0, \"ip\", \"$1\", \"instance\", \"([^:]+):.+\")",
+              "expr": "label_replace(min_over_time(up{job=~\"node-exporter.*\"}[5m]) == 0, \"ip\", \"$1\", \"instance\", \"([^:]+):.+\")",
               "instant": true,
               "legendFormat": "{{instance}}",
               "refId": "A"
