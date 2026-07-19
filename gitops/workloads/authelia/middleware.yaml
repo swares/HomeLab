@@ -1,0 +1,20 @@
+# Traefik ForwardAuth middleware — gates any ingress annotated with
+# traefik.ingress.kubernetes.io/router.middlewares: authelia-forwardauth@kubernetescrd
+# Unauthenticated requests are redirected to Authelia's login page.
+# Access policy: default_policy one_factor (see configmap.yaml access_control).
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: forwardauth
+  namespace: authelia
+spec:
+  forwardAuth:
+    # Use internal service URL to avoid the ingress round-trip.
+    # Traefik → authelia-svc:9091 is allowed by allow-ingress-from-traefik NetworkPolicy.
+    address: http://authelia-svc.authelia.svc.cluster.local:9091/api/authz/forward-auth
+    trustForwardHeader: true
+    authResponseHeaders:
+      - Remote-User
+      - Remote-Groups
+      - Remote-Name
+      - Remote-Email
