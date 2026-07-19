@@ -95,7 +95,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install kubectl
-        uses: azure/setup-kubectl@v4
+        uses: azure/setup-kubectl@v5
 
       - name: Client-side dry-run all workload manifests
         # --dry-run=client validates manifest structure without a live cluster.
