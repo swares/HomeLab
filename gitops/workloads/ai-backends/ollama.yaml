@@ -36,7 +36,7 @@ spec:
       containers:
         - name: ollama
           # renovate: datasource=docker depName=ollama/ollama
-          image: ollama/ollama:0.32.0
+          image: ollama/ollama:0.32.1
           imagePullPolicy: IfNotPresent  # OPi nodes can't reach Docker Hub; use cached image
           args: ["serve"]
           env:
