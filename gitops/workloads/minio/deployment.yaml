@@ -36,6 +36,26 @@ spec:
                 secretKeyRef:
                   name: minio-credentials
                   key: root-password
+            # OIDC SSO via Authelia — users log in once and land in MinIO Console.
+            # After first login, run:
+            #   mc admin policy attach local consoleAdmin --user "<preferred_username>"
+            - name: MINIO_IDENTITY_OPENID_CONFIG_URL
+              value: https://authelia.apps.lab.home.arpa/.well-known/openid-configuration
+            - name: MINIO_IDENTITY_OPENID_CLIENT_ID
+              value: minio
+            - name: MINIO_IDENTITY_OPENID_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: minio-credentials
+                  key: oidc-client-secret
+            - name: MINIO_IDENTITY_OPENID_REDIRECT_URI
+              value: https://minio-console.apps.lab.home.arpa/oauth_callback
+            - name: MINIO_IDENTITY_OPENID_SCOPES
+              value: openid,profile,email
+            - name: MINIO_IDENTITY_OPENID_CLAIM_NAME
+              value: preferred_username
+            - name: MINIO_IDENTITY_OPENID_DISPLAY_NAME
+              value: Authelia
           ports:
             - name: api
               containerPort: 9000
