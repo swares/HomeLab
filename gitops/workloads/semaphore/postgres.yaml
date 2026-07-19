@@ -23,7 +23,7 @@ spec:
       containers:
         - name: postgres
           # renovate: datasource=docker depName=postgres
-          image: postgres:16.9
+          image: postgres:16.14
           env:
             - name: POSTGRES_DB
               value: semaphore
