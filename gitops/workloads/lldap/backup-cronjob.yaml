@@ -22,7 +22,7 @@ spec:
             runAsUser: 0
           containers:
             - name: backup
-              image: restic/restic:0.17.3
+              image: restic/restic:0.19.1
               imagePullPolicy: IfNotPresent
               command:
                 - /bin/sh
