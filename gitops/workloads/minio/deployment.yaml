@@ -39,11 +39,8 @@ spec:
             # OIDC SSO via Authelia — users log in once and land in MinIO Console.
             # After first login, run:
             #   mc admin policy attach local consoleAdmin --user "<preferred_username>"
-            # Use internal HTTP URL to avoid lab-CA TLS verification.
-            # The issuer in the discovery doc (https://authelia.apps.lab.home.arpa)
-            # is still used for the browser-facing OIDC flow.
             - name: MINIO_IDENTITY_OPENID_CONFIG_URL
-              value: http://authelia-svc.authelia.svc.cluster.local:9091/.well-known/openid-configuration
+              value: https://authelia.apps.lab.home.arpa/.well-known/openid-configuration
             - name: MINIO_IDENTITY_OPENID_CLIENT_ID
               value: minio
             - name: MINIO_IDENTITY_OPENID_CLIENT_SECRET
@@ -67,6 +64,8 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: lab-ca
+              mountPath: /etc/minio/certs/CAs
           resources:
             requests:
               cpu: 100m
@@ -89,3 +88,6 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: minio-data
+        - name: lab-ca
+          configMap:
+            name: lab-ca-cert
