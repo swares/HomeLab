@@ -39,6 +39,8 @@ spec:
             # OIDC SSO via Authelia — users log in once and land in MinIO Console.
             # After first login, run:
             #   mc admin policy attach local consoleAdmin --user "<preferred_username>"
+            - name: MINIO_CERTS_DIR
+              value: /etc/minio/certs
             - name: MINIO_IDENTITY_OPENID_CONFIG_URL
               value: https://authelia.apps.lab.home.arpa/.well-known/openid-configuration
             - name: MINIO_IDENTITY_OPENID_CLIENT_ID
