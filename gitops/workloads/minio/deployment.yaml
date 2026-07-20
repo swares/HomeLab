@@ -41,8 +41,6 @@ spec:
             #   mc admin policy attach local consoleAdmin --user "<preferred_username>"
             - name: MINIO_CERTS_DIR
               value: /etc/minio/certs
-            - name: SSL_CERT_FILE
-              value: /etc/minio/certs/CAs/lab-ca.crt
             - name: MINIO_IDENTITY_OPENID_CONFIG_URL
               value: https://authelia.apps.lab.home.arpa/.well-known/openid-configuration
             - name: MINIO_IDENTITY_OPENID_CLIENT_ID
@@ -69,7 +67,8 @@ spec:
             - name: data
               mountPath: /data
             - name: lab-ca
-              mountPath: /etc/minio/certs/CAs
+              mountPath: /etc/pki/tls/certs/lab-ca.crt
+              subPath: lab-ca.crt
           resources:
             requests:
               cpu: 100m
