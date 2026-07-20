@@ -13,6 +13,11 @@ spec:
     metadata:
       labels: { app: minio }
     spec:
+      hostAliases:
+        - ip: "10.43.10.71"
+          hostnames:
+            - authelia.apps.lab.home.arpa
+            - minio-console.apps.lab.home.arpa
       nodeSelector:
         kubernetes.io/hostname: n150-1   # NVMe-backed; keep state close to other PVCs
       securityContext:
