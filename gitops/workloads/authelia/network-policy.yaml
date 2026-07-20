@@ -87,3 +87,22 @@ spec:
               app: authelia-postgres
       ports:
         - port: 5432
+---
+# Allow MinIO to reach Authelia directly for OIDC discovery, token exchange, and userinfo.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-minio-to-authelia
+  namespace: authelia
+spec:
+  podSelector:
+    matchLabels:
+      app: authelia
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: minio
+      ports:
+        - port: 9091
