@@ -3,6 +3,8 @@ kind: Deployment
 metadata:
   name: semaphore
   namespace: semaphore
+  annotations:
+    reloader.stakater.com/auto: "true"
 spec:
   replicas: 1
   selector:
@@ -120,5 +122,5 @@ spec:
         - name: tmp
           emptyDir: {}
         - name: config
-          configMap:
-            name: semaphore-config
+          secret:
+            secretName: semaphore-oidc-config
