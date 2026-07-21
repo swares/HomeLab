@@ -89,12 +89,19 @@ spec:
                   name: semaphore-secrets
                   key: access-key-encryption
 
+            # Trust the lab CA so Semaphore's Go TLS client can reach Authelia OIDC
+            - name: SSL_CERT_FILE
+              value: /etc/ssl/lab/ca.crt
+
           volumeMounts:
             - name: tmp
               mountPath: /tmp/semaphore
             - name: config
               mountPath: /etc/semaphore/config.json
               subPath: config.json
+              readOnly: true
+            - name: lab-ca
+              mountPath: /etc/ssl/lab
               readOnly: true
 
           resources:
@@ -124,3 +131,6 @@ spec:
         - name: config
           secret:
             secretName: semaphore-oidc-config
+        - name: lab-ca
+          configMap:
+            name: lab-ca-bundle
