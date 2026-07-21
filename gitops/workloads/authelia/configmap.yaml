@@ -103,7 +103,7 @@ data:
             authorization_policy: one_factor
             claims_policy: include_profile_in_id_token
             redirect_uris:
-              - https://zot.apps.lab.home.arpa/auth/callback/authelia
+              - https://registry.apps.lab.home.arpa/auth/callback/authelia
             scopes: [openid, profile, email]
             response_types: [code]
             grant_types: [authorization_code]
