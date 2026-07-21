@@ -53,7 +53,7 @@ data:
         clients:
           - client_id: immich
             client_name: Immich
-            client_secret: '$argon2id$v=19$m=65536,t=3,p=4$YFWLmwWMeMoqN57B0CfBVw$li61nn0GzHqY9QlyLw26gV3BZGXz8n5Z8gcpcbz2Oi8'
+            client_secret: '$argon2id$v=19$m=65536,t=3,p=4$HBCXwVVTGTn/P+oOmBgirw$FQzJIiMMgZ6oBCVa0UmxnB12JGsHT3vVuHVptjKVKRQ'
             authorization_policy: one_factor
             redirect_uris:
               - https://immich.apps.lab.home.arpa/auth/login
