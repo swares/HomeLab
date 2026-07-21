@@ -25,6 +25,24 @@ spec:
         runAsUser: 1000
         fsGroup: 1000
         seccompProfile: { type: RuntimeDefault }
+      initContainers:
+        - name: ca-inject
+          # Appends lab CA to the system bundle so all Go TLS clients trust it.
+          # renovate: datasource=docker depName=minio/minio
+          image: minio/minio:RELEASE.2025-04-22T22-12-26Z
+          command: [sh, -c, "cat /etc/ssl/certs/ca-certificates.crt /tmp/lab-ca.crt > /injected/ca-certificates.crt"]
+          volumeMounts:
+            - name: lab-ca
+              mountPath: /tmp/lab-ca.crt
+              subPath: lab-ca.crt
+            - name: injected-certs
+              mountPath: /injected
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: [ALL] }
       containers:
         - name: minio
           # renovate: datasource=docker depName=minio/minio
@@ -71,9 +89,9 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
-            - name: lab-ca
-              mountPath: /etc/ssl/certs/lab-ca.crt
-              subPath: lab-ca.crt
+            - name: injected-certs
+              mountPath: /etc/ssl/certs/ca-certificates.crt
+              subPath: ca-certificates.crt
           resources:
             requests:
               cpu: 100m
@@ -99,3 +117,5 @@ spec:
         - name: lab-ca
           configMap:
             name: lab-ca-cert
+        - name: injected-certs
+          emptyDir: {}
