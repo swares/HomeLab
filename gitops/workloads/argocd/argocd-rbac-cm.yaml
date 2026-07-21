@@ -1,0 +1,15 @@
+# ArgoCD RBAC — maps Authelia/LLDAP groups to ArgoCD roles.
+#
+# Default: readonly for any authenticated user.
+# lldap_admin group → ArgoCD admin role.
+# scopes: '[groups]' tells ArgoCD to read the 'groups' claim from the OIDC token.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-rbac-cm
+  namespace: argocd
+data:
+  policy.default: role:readonly
+  policy.csv: |
+    g, lldap_admin, role:admin
+  scopes: '[groups]'

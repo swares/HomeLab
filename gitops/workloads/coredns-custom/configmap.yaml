@@ -1,6 +1,9 @@
 # Extends k3s CoreDNS with:
-# 1. Wildcard zone for *.apps.lab.home.arpa → 192.168.1.160 (Traefik ingress).
-# 2. Forward zone for lab.home.arpa → lab DNS servers (Pi-hole + dnsmasq secondaries).
+# 1. Wildcard zone for *.apps.lab.home.arpa → 192.168.1.160 (Traefik ingress VIP).
+# 2. In-cluster overrides for services that pods reach server-side (bypasses hairpin NAT).
+#    More-specific zones win over the wildcard — CoreDNS picks the longest suffix match.
+#    Traefik ClusterIP: 10.43.10.71 (kubectl get svc -n kube-system traefik).
+# 3. Forward zone for lab.home.arpa → lab DNS servers (Pi-hole + dnsmasq secondaries).
 #    This lets pods resolve any *.lab.home.arpa hostname (e.g. gitlab, cores3, h4-core).
 #    apps.lab.home.arpa is more specific and wins over the forward zone for ingress names.
 apiVersion: v1
@@ -15,6 +18,16 @@ data:
             answer "{{ .Name }} 60 IN A 192.168.1.160"
         }
         cache 30
+    }
+  # In-cluster services that pods reach server-side need to resolve to the
+  # Traefik ClusterIP, not the kube-vip VIP (hairpin NAT doesn't work on this cluster).
+  # Add entries here for each ingress hostname pods need to reach internally.
+  lab-apps-internal.server: |
+    authelia.apps.lab.home.arpa:53 {
+        hosts {
+            10.43.10.71 authelia.apps.lab.home.arpa
+        }
+        fallthrough
     }
   lab.server: |
     lab.home.arpa:53 {

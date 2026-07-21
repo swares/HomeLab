@@ -89,3 +89,16 @@ data:
             token_endpoint_auth_method: client_secret_post
             userinfo_signed_response_alg: none
             consent_mode: implicit
+
+          - client_id: argocd
+            client_name: ArgoCD
+            client_secret: '$argon2id$v=19$m=65536,t=3,p=4$xO6HsIWnymwkGt2M8ORyhw$5m6hls5C3m8FDYG+YpiEXRDgBAdYxPR459+gP+EKaf4'
+            authorization_policy: one_factor
+            redirect_uris:
+              - https://argocd.apps.lab.home.arpa/auth/callback
+            scopes: [openid, profile, email, groups]
+            response_types: [code]
+            grant_types: [authorization_code]
+            token_endpoint_auth_method: client_secret_post
+            userinfo_signed_response_alg: none
+            consent_mode: implicit

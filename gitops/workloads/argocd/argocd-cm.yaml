@@ -1,0 +1,35 @@
+# ArgoCD main config — OIDC via Authelia.
+#
+# rootCA: lab CA cert so argocd-server trusts Authelia's TLS certificate.
+# clientSecret: injected into argocd-secret via ExternalSecret (argocd-oidc-secret.yaml).
+# RBAC policy is in argocd-rbac-cm.yaml.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+data:
+  url: https://argocd.apps.lab.home.arpa
+  oidc.config: |
+    name: Authelia
+    issuer: https://authelia.apps.lab.home.arpa
+    clientID: argocd
+    clientSecret: $oidc.authelia.clientSecret
+    requestedScopes:
+      - openid
+      - profile
+      - email
+      - groups
+    rootCA: |
+      -----BEGIN CERTIFICATE-----
+      MIIBsTCCAVegAwIBAgIRAN53bKssljTKdZlvULLQY2AwCgYIKoZIzj0EAwIwODEW
+      MBQGA1UEChMNbGFiLmhvbWUuYXJwYTEeMBwGA1UEAxMVTGFiIEhvbWUgQXJwYSBS
+      b290IENBMB4XDTI2MDYyNTE2MDM0OVoXDTM2MDYyMjE2MDM0OVowODEWMBQGA1UE
+      ChMNbGFiLmhvbWUuYXJwYTEeMBwGA1UEAxMVTGFiIEhvbWUgQXJwYSBSb290IENB
+      MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE8c25duQQLhXNuzAYD//hdGSWLLgb
+      q1GxJgXDgQTBzGjvNQBE7+zmegsAp0F1zeKxuoKVmk7P0nH6wN9spSU5ZqNCMEAw
+      DgYDVR0PAQH/BAQDAgKkMA8GA1UdEwEB/wQFMAMBAf8wHQYDVR0OBBYEFDUhRVqX
+      kNSPV0q366wsgxlwn6YFMAoGCCqGSM49BAMCA0gAMEUCIQCnahnm/jD8KE2+LJtQ
+      L/NzAlf4OYxgUA8Li0+KzBRoWgIgOBlLs2JQnxpl/wCmHC/+FSns7MEMuKJBunN4
+      XBmEM8o=
+      -----END CERTIFICATE-----
