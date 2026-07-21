@@ -52,9 +52,63 @@ spec:
               enabled: true          # auto-import dashboards from ConfigMaps
             datasources:
               enabled: true
+          hostAliases:
+            - ip: "10.43.10.71"
+              hostnames:
+                - authelia.apps.lab.home.arpa
+          initContainers:
+            - name: ca-inject
+              image: alpine:3.19
+              command: [sh, -c, "cat /etc/ssl/certs/ca-certificates.crt /tmp/lab-ca.crt > /injected/ca-certificates.crt"]
+              volumeMounts:
+                - name: lab-ca
+                  mountPath: /tmp/lab-ca.crt
+                  subPath: lab-ca.crt
+                - name: injected-certs
+                  mountPath: /injected
+              resources:
+                requests: {cpu: 10m, memory: 16Mi}
+                limits: {cpu: 100m, memory: 64Mi}
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities: {drop: [ALL]}
+          extraVolumes:
+            - name: lab-ca
+              configMap:
+                name: lab-ca-cert
+            - name: injected-certs
+              emptyDir: {}
+          extraVolumeMounts:
+            - name: injected-certs
+              mountPath: /etc/ssl/certs/ca-certificates.crt
+              subPath: ca-certificates.crt
+          extraSecretMounts:
+            - name: grafana-oidc
+              secretName: grafana-admin-secret
+              mountPath: /etc/grafana/secrets
+              readOnly: true
+              defaultMode: 0440
           grafana.ini:
             server:
               root_url: "https://grafana.apps.lab.home.arpa"
+            auth.generic_oauth:
+              enabled: "true"
+              name: Authelia
+              icon: signin
+              client_id: grafana
+              client_secret: "$__file{/etc/grafana/secrets/oidc-client-secret}"
+              scopes: "openid profile email groups"
+              empty_scopes: "false"
+              auth_url: https://authelia.apps.lab.home.arpa/api/oidc/authorization
+              token_url: https://authelia.apps.lab.home.arpa/api/oidc/token
+              api_url: https://authelia.apps.lab.home.arpa/api/oidc/userinfo
+              login_attribute_path: preferred_username
+              groups_attribute_path: groups
+              name_attribute_path: name
+              use_pkce: "false"
+              auto_login: "false"
+              role_attribute_path: "'Admin'"
+              allow_sign_up: "true"
 
         # ---- Prometheus ----
         prometheus:

@@ -77,3 +77,15 @@ data:
             token_endpoint_auth_method: client_secret_post
             userinfo_signed_response_alg: none
             consent_mode: implicit
+          - client_id: grafana
+            client_name: Grafana
+            client_secret: '$argon2id$v=19$m=65536,t=3,p=4$JK/Ey/67Zp2C2jdOZoOlDw$p1e4b6SQy5AG4a13zj94T+JIw6f4Q0lxgzIaoRw6WDM'
+            authorization_policy: one_factor
+            redirect_uris:
+              - https://grafana.apps.lab.home.arpa/login/generic_oauth
+            scopes: [openid, profile, email, groups]
+            response_types: [code]
+            grant_types: [authorization_code]
+            token_endpoint_auth_method: client_secret_post
+            userinfo_signed_response_alg: none
+            consent_mode: implicit
