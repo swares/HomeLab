@@ -56,32 +56,14 @@ spec:
             - ip: "10.43.10.71"
               hostnames:
                 - authelia.apps.lab.home.arpa
-          initContainers:
-            - name: ca-inject
-              image: alpine:3.19
-              command: [sh, -c, "cat /etc/ssl/certs/ca-certificates.crt /tmp/lab-ca.crt > /injected/ca-certificates.crt"]
-              volumeMounts:
-                - name: lab-ca
-                  mountPath: /tmp/lab-ca.crt
-                  subPath: lab-ca.crt
-                - name: injected-certs
-                  mountPath: /injected
-              resources:
-                requests: {cpu: 10m, memory: 16Mi}
-                limits: {cpu: 100m, memory: 64Mi}
-              securityContext:
-                allowPrivilegeEscalation: false
-                capabilities: {drop: [ALL]}
           extraVolumes:
             - name: lab-ca
               configMap:
                 name: lab-ca-cert
-            - name: injected-certs
-              emptyDir: {}
           extraVolumeMounts:
-            - name: injected-certs
-              mountPath: /etc/ssl/certs/ca-certificates.crt
-              subPath: ca-certificates.crt
+            - name: lab-ca
+              mountPath: /etc/grafana/certs/lab-ca.crt
+              subPath: lab-ca.crt
           extraSecretMounts:
             - name: grafana-oidc
               secretName: grafana-admin-secret
@@ -109,6 +91,7 @@ spec:
               auto_login: "false"
               role_attribute_path: "'Admin'"
               allow_sign_up: "true"
+              tls_client_ca: /etc/grafana/certs/lab-ca.crt
 
         # ---- Prometheus ----
         prometheus:
