@@ -45,6 +45,13 @@ data:
 
     identity_providers:
       oidc:
+        claims_policies:
+          include_profile_in_id_token:
+            id_token:
+              - email
+              - email_verified
+              - name
+              - preferred_username
         jwks:
           - key_id: main
             algorithm: RS256
@@ -94,6 +101,7 @@ data:
             client_name: Semaphore
             client_secret: '$argon2id$v=19$m=65536,t=3,p=4$ak41fOyxfpxcZ8l6HyvSDA$yzIglnptMfbfxsjg+bSHBY24c2ajT4Pa2drTTzu3Xs0'
             authorization_policy: one_factor
+            claims_policy: include_profile_in_id_token
             redirect_uris:
               - https://semaphore.apps.lab.home.arpa/api/auth/oidc/authelia/redirect
             scopes: [openid, profile, email]
