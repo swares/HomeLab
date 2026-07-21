@@ -3,6 +3,8 @@ kind: Deployment
 metadata:
   name: zot
   namespace: registry
+  annotations:
+    reloader.stakater.com/auto: "true"
 spec:
   replicas: 1
   strategy:
@@ -24,6 +26,9 @@ spec:
           # renovate: datasource=docker depName=ghcr.io/project-zot/zot
           image: ghcr.io/project-zot/zot:v2.1.18
           args: ["serve", "/etc/zot/config.json"]
+          env:
+            - name: SSL_CERT_FILE
+              value: /etc/ssl/lab/ca.crt
           ports:
             - containerPort: 5000
           securityContext:
@@ -37,6 +42,9 @@ spec:
               readOnly: true
             - name: data
               mountPath: /var/lib/registry
+            - name: lab-ca
+              mountPath: /etc/ssl/lab
+              readOnly: true
           readinessProbe:
             tcpSocket: { port: 5000 }   # /v2/ returns 401 with auth enabled
             initialDelaySeconds: 5
@@ -54,7 +62,9 @@ spec:
               cpu: "500m"
       volumes:
         - name: config
-          configMap: { name: zot-config }
+          secret: { secretName: zot-oidc-config }
+        - name: lab-ca
+          configMap: { name: lab-ca-bundle }
         - name: htpasswd
           secret: { secretName: zot-htpasswd }
         - name: data

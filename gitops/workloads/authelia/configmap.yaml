@@ -97,6 +97,20 @@ data:
             userinfo_signed_response_alg: none
             consent_mode: implicit
 
+          - client_id: zot
+            client_name: Zot Registry
+            client_secret: '$argon2id$v=19$m=65536,t=3,p=4$Ro4ELmePXJFwTwBlWNxFGQ$bw3XbjvJ5/S9CXRF4wcnhjc7Cn7uiUM8FIeBj9T7om0'
+            authorization_policy: one_factor
+            claims_policy: include_profile_in_id_token
+            redirect_uris:
+              - https://zot.apps.lab.home.arpa/auth/callback/authelia
+            scopes: [openid, profile, email]
+            response_types: [code]
+            grant_types: [authorization_code]
+            token_endpoint_auth_method: client_secret_post
+            userinfo_signed_response_alg: none
+            consent_mode: implicit
+
           - client_id: semaphore
             client_name: Semaphore
             client_secret: '$argon2id$v=19$m=65536,t=3,p=4$ak41fOyxfpxcZ8l6HyvSDA$yzIglnptMfbfxsjg+bSHBY24c2ajT4Pa2drTTzu3Xs0'
