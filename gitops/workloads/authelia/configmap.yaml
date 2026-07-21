@@ -95,7 +95,7 @@ data:
             client_secret: '$argon2id$v=19$m=65536,t=3,p=4$ak41fOyxfpxcZ8l6HyvSDA$yzIglnptMfbfxsjg+bSHBY24c2ajT4Pa2drTTzu3Xs0'
             authorization_policy: one_factor
             redirect_uris:
-              - https://semaphore.apps.lab.home.arpa/api/auth/oidc-redirect
+              - https://semaphore.apps.lab.home.arpa/api/auth/oidc/authelia/redirect
             scopes: [openid, profile, email]
             response_types: [code]
             grant_types: [authorization_code]
