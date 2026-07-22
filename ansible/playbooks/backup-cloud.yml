@@ -115,7 +115,7 @@
           )
           [[ -d /mnt/cold-8t/vault-snapshots ]] && SOURCES+=(/mnt/cold-8t/vault-snapshots)
 
-          log "Running restic backup to R2 (${#SOURCES[@]} source paths)..."
+          log "Running restic backup to R2..."
           restic backup "${SOURCES[@]}" --tag cloud --host h4-core
 
           log "Pruning old cloud snapshots..."
