@@ -1,0 +1,170 @@
+---
+# Daily cloud backup of critical cluster state to Cloudflare R2 (free tier, 10 GB).
+#
+# What gets backed up (all small, total well under 2 GB):
+#   - k3s etcd snapshots           (/mnt/cold-8t/k3s-etcd-snapshots)
+#   - lldap database snapshots     (/mnt/cold-8t/lldap-snapshots)
+#   - Vault raft snapshots         (/mnt/cold-8t/vault-snapshots, if present)
+#   - Postgres dumps               (Authelia, Immich, Semaphore — via kubectl exec)
+#
+# Prerequisites:
+#   1. Create R2 bucket named 'homelab-backup' in the Cloudflare dashboard.
+#   2. Create an R2 API token with Object Read & Write on that bucket.
+#   3. Store credentials in Vault (one-time, already done):
+#        vault kv put secret/lab/cloudflare-r2 \
+#          account-id=<CF_ACCOUNT_ID> \
+#          access-key-id=<R2_KEY_ID> \
+#          secret-access-key=<R2_SECRET> \
+#          restic-password=<GENERATED_PASSWORD>
+#
+# Running this playbook requires a Vault token with read on secret/lab/cloudflare-r2.
+# Pass via Semaphore environment variable VAULT_TOKEN, or:
+#   VAULT_TOKEN=hvs.xxx ansible-playbook ansible/playbooks/backup-cloud.yml
+
+- name: Configure cloud backup of critical cluster state to Cloudflare R2
+  hosts: microshift
+  become: true
+  vars:
+    vault_addr: "http://192.168.1.128:8200"
+    cloud_env_file: /etc/restic/cloud.env
+    cloud_password_file: /etc/restic/cloud-password
+    backup_script: /usr/local/bin/backup-cloud.sh
+
+  tasks:
+    - name: Ensure /etc/restic exists
+      ansible.builtin.file:
+        path: /etc/restic
+        state: directory
+        mode: "0700"
+        owner: root
+        group: root
+
+    - name: Read R2 credentials from Vault
+      ansible.builtin.shell:
+        cmd: vault kv get -format=json secret/lab/cloudflare-r2
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      register: vault_r2_raw
+      no_log: true
+      changed_when: false
+
+    - name: Parse R2 credentials
+      ansible.builtin.set_fact:
+        r2: "{{ (vault_r2_raw.stdout | from_json).data.data }}"
+      no_log: true
+
+    - name: Write cloud restic env file
+      ansible.builtin.copy:
+        dest: "{{ cloud_env_file }}"
+        mode: "0600"
+        owner: root
+        group: root
+        content: |
+          RESTIC_REPOSITORY=s3:https://{{ r2['account-id'] }}.r2.cloudflarestorage.com/homelab-backup
+          AWS_ACCESS_KEY_ID={{ r2['access-key-id'] }}
+          AWS_SECRET_ACCESS_KEY={{ r2['secret-access-key'] }}
+          RESTIC_PASSWORD_FILE={{ cloud_password_file }}
+      no_log: true
+
+    - name: Write cloud restic password file
+      ansible.builtin.copy:
+        dest: "{{ cloud_password_file }}"
+        mode: "0600"
+        owner: root
+        group: root
+        content: "{{ r2['restic-password'] }}"
+      no_log: true
+
+    - name: Install backup-cloud script
+      ansible.builtin.copy:
+        dest: "{{ backup_script }}"
+        mode: "0750"
+        owner: root
+        group: root
+        content: |
+          #!/bin/bash
+          set -euo pipefail
+          export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+          TMPDIR=$(mktemp -d -t backup-cloud-XXXXXX)
+          trap "rm -rf $TMPDIR" EXIT
+
+          log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
+
+          log "Dumping Authelia postgres..."
+          kubectl exec -n authelia deploy/authelia-postgres -- \
+            sh -c 'PGPASSWORD=$POSTGRES_PASSWORD pg_dump -U $POSTGRES_USER $POSTGRES_DB' \
+            | gzip > "$TMPDIR/authelia.sql.gz"
+
+          log "Dumping Semaphore postgres..."
+          kubectl exec -n semaphore deploy/semaphore-postgres -- \
+            sh -c 'PGPASSWORD=$POSTGRES_PASSWORD pg_dump -U $POSTGRES_USER $POSTGRES_DB' \
+            | gzip > "$TMPDIR/semaphore.sql.gz"
+
+          log "Dumping Immich postgres..."
+          kubectl exec -n immich deploy/immich-postgres -- \
+            sh -c 'PGPASSWORD=$POSTGRES_PASSWORD pg_dump -U $POSTGRES_USER $POSTGRES_DB' \
+            | gzip > "$TMPDIR/immich.sql.gz"
+
+          # Build source list — include vault-snapshots only if the directory exists
+          SOURCES=(
+            /mnt/cold-8t/k3s-etcd-snapshots
+            /mnt/cold-8t/lldap-snapshots
+            "$TMPDIR"
+          )
+          [[ -d /mnt/cold-8t/vault-snapshots ]] && SOURCES+=(/mnt/cold-8t/vault-snapshots)
+
+          log "Running restic backup to R2 (${#SOURCES[@]} source paths)..."
+          restic backup "${SOURCES[@]}" --tag cloud --host h4-core
+
+          log "Pruning old cloud snapshots..."
+          restic forget --prune \
+            --keep-daily 7 --keep-weekly 4 --keep-monthly 3
+
+          log "Cloud backup complete."
+
+    - name: Install backup-cloud systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/backup-cloud.service
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Daily cloud backup of critical cluster state to Cloudflare R2
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          Type=oneshot
+          EnvironmentFile={{ cloud_env_file }}
+          # Init the remote repo on first run; -/ means failure is non-fatal
+          ExecStartPre=-/usr/bin/restic init
+          ExecStart={{ backup_script }}
+          StandardOutput=journal
+          StandardError=journal
+
+    - name: Install backup-cloud systemd timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/backup-cloud.timer
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Daily cloud backup of critical cluster state (03:00 UTC)
+
+          [Timer]
+          OnCalendar=*-*-* 03:00:00
+          RandomizedDelaySec=300
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start cloud backup timer
+      ansible.builtin.systemd:
+        name: backup-cloud.timer
+        enabled: true
+        state: started
