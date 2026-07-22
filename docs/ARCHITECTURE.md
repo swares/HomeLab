@@ -216,3 +216,5 @@ An **interactive, filterable** version (toggle hardware classes, select-all/clea
 | kube-prometheus-stack | `monitoring` | Prometheus + Grafana + Alertmanager + Loki + Alloy |
 | External Secrets | `external-secrets` | Syncs Vault KV v2 → k8s Secrets |
 | cert-manager | `cert-manager` | `lab-ca` ClusterIssuer; signs `*.apps.lab.home.arpa` TLS |
+| Reloader (Stakater) | `reloader` | Watches ConfigMaps/Secrets; triggers pod restarts on change |
+| Zot OCI Registry | `registry` | registry.apps.lab.home.arpa — htpasswd auth; OIDC blocked in v2.1.x (see SSO.md) |

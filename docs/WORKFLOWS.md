@@ -37,6 +37,11 @@ For other manually-created k8s secrets, update with
 1. Branch off `main`.
 2. Create `gitops/workloads/<name>/` with Deployment, Service, Ingress, PVC as needed.
 3. Add `gitops/apps/<name>.yaml` — an ArgoCD Application pointing at the workload dir.
+
+   > **Note:** Standard workloads placed under `gitops/workloads/` are **auto-discovered** by
+   > the ApplicationSet (`workloads-appset.yaml`) and do **not** need a `gitops/apps/` entry.
+   > A `gitops/apps/` file is only required for Helm charts, namespace mismatches, or
+   > directories explicitly excluded from the appset.
 4. If the workload needs a secret, create it manually on the H4 and store values in Vault:
 
         kubectl create secret generic <name>-secrets -n <namespace> \

@@ -35,7 +35,7 @@ to build on** (don't build the NAS on a faulted disk link).
    client-scoping and the k8s API both need stable addresses). Confirm the gateway
    (`lab_gateway`, flagged *confirm* in the inventory) and the ingress VIP (`192.168.1.160`).
 4. 🔧 **Credentials.** Replace the map's shared password with **SSH keys** (`ansible_user`), and
-   generate real secrets — Vault init/unseal keys, the Pi-hole web hash, a Proxmox API token, the
+   generate real secrets — Vault init/unseal keys, the Pi-hole web hash, the
    restic repo password. Keep them out of Git (Ansible Vault now; HashiCorp Vault once it's up).
 
 ---
@@ -137,6 +137,8 @@ Goal: local inference behind one OpenAI-compatible gateway. See
 ---
 
 ## Phase 5 — L1 IaaS playground (Proxmox + OpenTofu)
+
+> **Archived** — Proxmox was not implemented. n150-1/n150-2 run bare-metal Ubuntu 24.04 with KVM/libvirt.
 
 Goal: the VM/devops sandbox. This is a **parallel track** — it doesn't block Phases 2–4. See
 [LAB-DESIGN → IaaS](LAB-DESIGN.md) and `terraform/README.md`.
