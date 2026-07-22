@@ -171,8 +171,12 @@ Goal: the VM/devops sandbox. This is a **parallel track** — it doesn't block P
    - AI: gateway lists models and answers a prompt.
    - Backups: a restic snapshot exists on md1 (`/mnt/cold-8t`), copied to the secondary.
 2. **Close the gaps** (from [SERVICES.md](SERVICES.md), priority order):
-   - ✅ **Offsite backup** — wired: `backup-offsite.timer` does a nightly `restic copy` to an
-     offsite repo. Set `offsite_restic_repo` + `/etc/restic/offsite.env` (creds from Vault).
+   - ✅ **Offsite backup (Track 1 — cluster state)** — `backup-cloud.timer` runs daily at 03:00,
+     pushing etcd snapshots, lldap/Vault snapshots, and Postgres dumps to Cloudflare R2 free tier.
+     Credentials in Vault at `secret/lab/cloudflare-r2`. Playbook: `ansible/playbooks/backup-cloud.yml`.
+   - 🔵 **Offsite backup (Track 2 — bulk photos/video ~1.5 TB)** — deferred. See RUNBOOK.md for
+     options (Backblaze B2 or R2 paid). The `backup-offsite.service` template is ready; needs
+     `offsite_restic_repo` set and `/etc/restic/offsite.env` populated.
    - ✅ **MQTT (Mosquitto)** — relocated to a lab Zero 2W (`make mqtt`).
    - 🔵 **UPS + NUT** — deferred by choice (future improvement).
    - 🟡 **Reverse proxy + internal CA + SSO** — once several web UIs are live.

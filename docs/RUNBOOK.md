@@ -139,6 +139,21 @@ Check cloud backup:
 
 **Never run `restic forget` or `restic prune` manually** — retention is managed by timers only.
 
+### Track 2 — offsite bulk photo/video backup (deferred)
+
+The ~1.5 TB photo/video library (`/mnt/cold-8t/immich` + `/srv/nas` originals) is currently
+protected only by the two on-prem cold RAID mirrors. Offsite backup of this data is **Track 2**
+and has not been implemented.
+
+When ready, options:
+- **Backblaze B2** — cheapest paid tier (~$0.006/GB/month, ~$9/month for 1.5 TB). Restic
+  speaks B2 natively; add a third `ExecStartPost` to `backup-nas.service` pointing to a B2 repo.
+- **Cloudflare R2 paid** — $0.015/GB/month after free 10 GB; zero egress fees.
+
+Decision gate: confirm total photo/video volume with `du -sh /mnt/cold-8t/immich /srv/nas`
+before committing to a provider. The existing `backup-offsite.service` template is already
+wired — set `offsite_restic_repo` in group_vars and provide `/etc/restic/offsite.env`.
+
 ---
 
 ## Vault operations
