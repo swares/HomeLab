@@ -25,7 +25,7 @@ Last verified: 2026-07-18.
 | **Orange Pi Zero 2W #1** | H618 A53 4C | 4 GB | — | `192.168.1.184` | DNS secondary (dnsmasq) |
 | **Orange Pi Zero 2W #2** | H618 A53 4C | 4 GB | — | `192.168.1.188` | MQTT broker (Mosquitto) |
 | **Orange Pi Zero 2W #3** | H618 A53 4C | 4 GB | — | `192.168.1.217` | DNS secondary · Armbian Trixie (Debian 13) |
-| **Orange Pi Zero 2W #4** | H618 A53 4C | 4 GB | — | `192.168.1.99` | Unassigned |
+| **Orange Pi Zero 2W #4** | H618 A53 4C | 4 GB | — | `192.168.1.99` | MQTT secondary broker |
 | **M5Stack LLM** | ESP32-S3 | — | — | USB | Edge AI inference |
 | **HostMon** | ESP32-S3 (Waveshare 4.3") | 8 MB PSRAM | LAN | — | Host prober + status panel |
 

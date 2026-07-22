@@ -1,5 +1,7 @@
 # Lab Design — a layered private cloud
 
+> **Note:** This document reflects the original design proposal. The implemented solution uses bare-metal Ubuntu 24.04 + KVM/libvirt on n150-1/n150-2, not Proxmox VE. See ARCHITECTURE.md for the actual implementation.
+
 How to make one heterogeneous fleet serve five goals at once: **AI research**,
 **Configuration-as-Code (CASC)**, **software development**, a **DevOps playground**, and
 **IaaS (OpenStack/OSP)**. The organizing idea is a **layered private cloud**: an IaaS

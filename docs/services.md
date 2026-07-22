@@ -46,6 +46,8 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | Traefik ingress | ✓ | k3s | k3s default; all `*.apps.lab.home.arpa` Ingresses; TLS via cert-manager |
 | Helm + Kustomize | ● | CASC | used by ArgoCD |
 | Kyverno (policy) | ✓ | k3s | 3 ClusterPolicies in Enforce mode: `disallow-privileged-containers`, `disallow-latest-tag`, `require-resource-limits` |
+| Reloader (Stakater) | ✓ | k3s · reloader namespace | auto-restarts pods when referenced ConfigMaps or Secrets change |
+| Zot OCI Registry | ✓ | k3s · registry namespace | `registry.apps.lab.home.arpa`; on-demand proxy for docker.io and ghcr.io; htpasswd auth; OIDC blocked in v2.1.x |
 | Semaphore (Ansible UI) | ✓ | k3s · semaphore namespace (n150-1) | `semaphore.apps.lab.home.arpa`; BoltDB replaced by SQLite; creds from Vault `secret/lab/semaphore` |
 | Linkerd (service mesh) | ○ | k3s | optional |
 
