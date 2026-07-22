@@ -17,8 +17,6 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/hostname: odroid-nas    # pin to H4; local-path PVC follows the pod
-      # Zot runs as root in its official image; no runAsNonRoot here.
-      # Revisit if a non-root Zot image is published.
       securityContext:
         seccompProfile: { type: RuntimeDefault }
       containers:
@@ -26,9 +24,6 @@ spec:
           # renovate: datasource=docker depName=ghcr.io/project-zot/zot
           image: ghcr.io/project-zot/zot:v2.1.18
           args: ["serve", "/etc/zot/config.json"]
-          env:
-            - name: SSL_CERT_FILE
-              value: /etc/ssl/lab/ca.crt
           ports:
             - containerPort: 5000
           securityContext:
@@ -42,11 +37,8 @@ spec:
               readOnly: true
             - name: data
               mountPath: /var/lib/registry
-            - name: lab-ca
-              mountPath: /etc/ssl/lab
-              readOnly: true
           readinessProbe:
-            tcpSocket: { port: 5000 }   # /v2/ returns 401 with auth enabled
+            tcpSocket: { port: 5000 }
             initialDelaySeconds: 5
             periodSeconds: 10
           livenessProbe:
@@ -62,9 +54,7 @@ spec:
               cpu: "500m"
       volumes:
         - name: config
-          secret: { secretName: zot-oidc-config }
-        - name: lab-ca
-          configMap: { name: lab-ca-bundle }
+          configMap: { name: zot-config }
         - name: htpasswd
           secret: { secretName: zot-htpasswd }
         - name: data
