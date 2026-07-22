@@ -542,11 +542,18 @@ restic check              # verify repo integrity
 ### Backup timer status
 
 ```bash
-systemctl status backup-nas.timer
-systemctl status backup-etcd.timer
+systemctl status backup-nas.timer backup-etcd.timer backup-cloud.timer
 
-# When did it last run?
+# When did each last run?
 journalctl -u backup-nas.service --since "7 days ago" | tail -30
+journalctl -u backup-cloud.service --since "7 days ago" | tail -20
+```
+
+### Check cloud (offsite) backup
+
+```bash
+# Verify snapshots exist in Cloudflare R2
+sudo bash -c 'set -a; source /etc/restic/cloud.env; set +a; restic snapshots'
 ```
 
 ### Confirm last backup succeeded before any storage operation

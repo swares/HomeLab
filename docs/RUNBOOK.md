@@ -118,13 +118,13 @@ Never `kubectl apply` directly against main — it drifts and ArgoCD reverts it.
 
 | Stream | When | What | Downtime |
 |--------|------|------|----------|
-| `backup-nas` | daily 01:30 | restic of `/srv/nas` + `/mnt/cold-8t/VMs` + `/mnt/cold-8t/immich` → cold-8t, then `restic copy` → cold-sec + offsite | none |
+| `backup-nas` | daily 01:30 | restic of `/srv/nas` + `/mnt/cold-8t/VMs` + `/mnt/cold-8t/immich` → cold-8t, then `restic copy` → cold-sec | none |
 | `backup-etcd` | daily | k3s SQLite state → `/mnt/cold-8t/k3s-etcd-snapshots/`, 7 copies retained | none |
 | `backup-vault` | daily 02:30 | Vault raft snapshot → `/mnt/cold-8t/vault-snapshots/`, 30-day retention | none |
-| `backup-lldap` | — | **ldap-1 VM decommissioned 2026-07-04.** lldap now runs as a k3s Deployment in the `lldap` namespace; SQLite data is on a `local-path` PVC. To back it up, add a k8s CronJob that copies the SQLite file from the PVC mount. | — |
+| `backup-cloud` | daily 03:00 | **Offsite (Track 1).** restic → Cloudflare R2 `homelab-backup` bucket. Sources: etcd snapshots + lldap snapshots + Vault snapshots + Postgres dumps (Authelia, Immich, Semaphore via `kubectl exec`). Credentials in Vault at `secret/lab/cloudflare-r2`. Playbook: `ansible/playbooks/backup-cloud.yml`. | none |
 | Immich DB dump | daily 01:30 | `pg_dump` via k8s CronJob → `/mnt/cold-8t/immich/backups/` (captured by restic above) | none |
 
-Check:
+Check cold-tier backups:
 
     export VAULT_ADDR=http://192.168.1.128:8200
     export RESTIC_PASSWORD=$(vault kv get -field=password secret/lab/restic)
@@ -132,7 +132,27 @@ Check:
     restic snapshots
     journalctl -u backup-nas.service --no-pager | tail -30
 
+Check cloud backup:
+
+    sudo bash -c 'set -a; source /etc/restic/cloud.env; set +a; restic snapshots'
+    journalctl -u backup-cloud.service --no-pager | tail -20
+
 **Never run `restic forget` or `restic prune` manually** — retention is managed by timers only.
+
+### Track 2 — offsite bulk photo/video backup (deferred)
+
+The ~1.5 TB photo/video library (`/mnt/cold-8t/immich` + `/srv/nas` originals) is currently
+protected only by the two on-prem cold RAID mirrors. Offsite backup of this data is **Track 2**
+and has not been implemented.
+
+When ready, options:
+- **Backblaze B2** — cheapest paid tier (~$0.006/GB/month, ~$9/month for 1.5 TB). Restic
+  speaks B2 natively; add a third `ExecStartPost` to `backup-nas.service` pointing to a B2 repo.
+- **Cloudflare R2 paid** — $0.015/GB/month after free 10 GB; zero egress fees.
+
+Decision gate: confirm total photo/video volume with `du -sh /mnt/cold-8t/immich /srv/nas`
+before committing to a provider. The existing `backup-offsite.service` template is already
+wired — set `offsite_restic_repo` in group_vars and provide `/etc/restic/offsite.env`.
 
 ---
 
@@ -276,8 +296,9 @@ Until it passes all three, keep backups landing on the secondary — don't promo
   set (DB dumps, configs, irreplaceable originals).
 - **Hot — NVMe 4 TB.** Live NAS (`lv_nas`) + k8s PVs (`local-path` StorageClass).
 
-Because the secondary can't hold the entire multi-TB library, the bulk library's redundant
-copy is the offsite restic + md1's own mirror. The secondary covers the small critical set.
+Because the secondary can't hold the entire multi-TB library, md1's RAID mirror is the
+only redundant copy of the bulk photo/video data (Track 2 offsite TBD). The secondary
+covers the small critical set; `backup-cloud` covers critical cluster state offsite.
 
 ### Migrate the ex-Synology secondary to a clean mirror
 
