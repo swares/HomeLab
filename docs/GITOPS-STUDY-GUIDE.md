@@ -142,6 +142,16 @@ the classic ops problem of "the cluster is different from what we think it is."
 **`automated: prune: true`** means resources deleted from git are also deleted from the
 cluster — no orphaned objects accumulate.
 
+### Config-reload without a sync — Reloader
+
+When a ConfigMap or Secret changes (new OIDC client, rotated credential), the Deployment
+itself hasn't changed so ArgoCD won't restart the pod. **Stakater Reloader** handles this:
+any Deployment annotated with `reloader.stakater.com/auto: "true"` is automatically
+restarted whenever a mounted ConfigMap or Secret changes.
+
+Authelia, Semaphore, and Zot all carry this annotation. Without it, a config change merged
+to main would silently sit in the ConfigMap while the pod keeps running the old config.
+
 ### Example — what happens when you commit a change
 
 ```mermaid
@@ -550,21 +560,30 @@ must resolve to `192.168.1.160`. If an Ingress stops working, check DNS first.
 ### ArgoCD shows Progressing / Degraded
 
 ```bash
-# Check which resources are not healthy
-kubectl get applications -n argocd
-kubectl describe application <name> -n argocd | grep -A 20 "Conditions:"
+# 1. Find which resource is non-healthy (blank health = not computed yet)
+kubectl get application <name> -n argocd -o json | \
+  jq '.status.resources[] | {kind, name, health}'
 
-# Force a hard refresh (clears stale health cache)
+# 2. Force a hard refresh (triggers re-evaluation of all resource health)
 kubectl annotate application <name> -n argocd \
   argocd.argoproj.io/refresh=hard --overwrite
 
-# Check events in the affected namespace
+# 3. Check app controller logs for this app
+kubectl logs -n argocd statefulset/argocd-application-controller --since=5m \
+  | grep '"application":"<name>"'
+
+# 4. Check events in the affected namespace
 kubectl get events -n <namespace> --sort-by='.lastTimestamp' | tail -20
 ```
 
 Common causes:
-- **PVC Pending** — local-path provisioner can't create the directory (check node
-  affinity, check the directory exists on the target node)
+- **PVC Pending (no consumer)** — a PVC manifest exists in git but no pod mounts it.
+  With `local-path` (WaitForFirstConsumer binding mode), the PVC stays Pending forever
+  because the provisioner waits for a pod to schedule. ArgoCD evaluates the PVC as
+  Progressing and rolls it up to the whole app. Fix: delete the orphaned PVC manifest
+  from git; ArgoCD prune removes it from the cluster on next sync.
+- **PVC Pending (provisioner error)** — local-path can't create the directory; check
+  node affinity and that the storage path exists on the target node.
 - **ImagePullBackOff** — new image tag doesn't exist yet, or registry is unreachable
 - **CrashLoopBackOff** — check `kubectl logs <pod> --previous` for the crash reason
 - **Stale health** — ArgoCD health cache not refreshed; use the hard refresh above
