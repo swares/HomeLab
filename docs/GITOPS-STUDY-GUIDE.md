@@ -337,10 +337,12 @@ The lab runs two storage tiers with independent failure domains for data safety.
 
 **Backup timers (systemd, never disabled):**
 
-| Timer | What it backs up | Destination |
-|---|---|---|
-| `backup-nas` | NAS data on NVMe | Cold RAID tier |
-| `backup-etcd` | k3s etcd snapshot | Cold RAID tier |
+| Timer | When | What it backs up | Destination |
+|---|---|---|---|
+| `backup-nas` | 01:30 | NAS data (`/srv/nas`, VMs, Immich library) | Cold RAID tier (md1 primary → md0 copy) |
+| `backup-etcd` | daily | k3s etcd snapshots | Cold RAID tier |
+| `backup-vault` | 02:30 | Vault raft snapshot | Cold RAID tier |
+| `backup-cloud` | 03:00 | **Offsite.** etcd snapshots + lldap + Vault snapshots + Postgres dumps (Authelia, Immich, Semaphore) | Cloudflare R2 (free 10 GB tier) |
 
 Before any storage change on the hot tier, the last backup timestamp is confirmed. This
 is the one manual gate in an otherwise automated system — it protects against the scenario
