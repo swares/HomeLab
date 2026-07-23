@@ -40,6 +40,9 @@ spec:
             limits:
               cpu: "2"
               memory: 2Gi
+          envFrom:
+            - secretRef:
+                name: litellm-cloud-ai   # GROQ_API_KEY, GEMINI_API_KEY from Vault
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
