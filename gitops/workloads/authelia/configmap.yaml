@@ -49,6 +49,7 @@ data:
           resources:
             - "^/v1/.*$"
             - "^/health/.*$"
+            - "^/openapi\\.json$"
           policy: bypass
 
     identity_providers:
