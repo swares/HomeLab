@@ -57,7 +57,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 |---------|:------:|-----------|-------|
 | RKLLama (NPU LLM) | ✓ | opi5pro-1 (.168) + opi5pro-2 (.172) | DeepSeek-R1-Distill-Qwen-1.5B_w8a8_g128; driver 0.9.6 limits NPU alloc to ~2.2 GB (blocks 3B+); upgrade to 0.9.7 to unlock |
 | OpenVINO Model Server | ● | H4 + N150 iGPUs | embeddings / STT / vision — suspended; crash-looping on n150-1, scaled to 0 pending fix |
-| LiteLLM gateway | ✓ | k3s · `ai.apps.lab.home.arpa` | unifies backends |
+| LiteLLM gateway | ✓ | k3s · `ai.apps.lab.home.arpa` | unifies backends; cloud fallback: Groq llama-3.3-70b + Gemini 2.0 Flash (free tier, auto-fallback on chat/chat-cpu failure); keys in Vault at `secret/lab/cloud-ai` |
 | m5stack-adapter | ✓ | k3s · odroid-nas node | OpenAI shim for M5Stack; image 0.1.1 (2026-07-11); models: m5, m5-llm, m5-claude |
 | Claude Code orchestrator | ✓ | opi5pro-1 | escalation Tier 3; HTTPS :8443; TLS self-signed; Claude Code 2.1.204 |
 | M5Stack escalation router | ✓ | M5Stack | edge front-end; 3-tier escalation |
