@@ -1,0 +1,73 @@
+---
+# journald.yml — cap systemd journal size on all Linux hosts.
+#
+# Default Ubuntu/Debian installs have no SystemMaxUse limit; journals grow
+# unbounded and can fill the root filesystem. On n150-1 this caused disk
+# pressure and a Grafana/monitoring namespace mass-eviction (2026-07-23).
+#
+# Limits applied:
+#   SystemMaxUse=500M   — total journal storage cap
+#   SystemKeepFree=1G   — always keep 1G free on the filesystem
+#
+# Run:
+#   ansible-playbook -i inventory/hosts.yml playbooks/journald.yml \
+#     --vault-password-file .vault_pass --check
+#   ansible-playbook -i inventory/hosts.yml playbooks/journald.yml \
+#     --vault-password-file .vault_pass
+#
+# Limit to a single host:
+#   ansible-playbook ... -l n150-1
+
+- name: Cap systemd journal size on all Linux hosts
+  hosts: all:!x86_nodes:!embedded:!standalone_vms
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Skip non-systemd hosts
+      ansible.builtin.meta: end_host
+      when: ansible_service_mgr != "systemd"
+
+    - name: Ensure journald drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/journald.conf.d
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+
+    - name: Write journald size cap drop-in
+      ansible.builtin.copy:
+        dest: /etc/systemd/journald.conf.d/max-use.conf
+        mode: "0644"
+        owner: root
+        group: root
+        content: |
+          # Managed by Ansible — ansible/playbooks/journald.yml
+          # Caps journal to 500M and keeps 1G free on filesystem.
+          # Without this, Ubuntu defaults to 10% of filesystem (4.9G on n150-1's
+          # 49G root) which caused disk pressure + pod eviction on 2026-07-23.
+          [Journal]
+          SystemMaxUse=500M
+          SystemKeepFree=1G
+      register: journald_conf
+
+    - name: Restart systemd-journald to apply new limits
+      ansible.builtin.systemd:
+        name: systemd-journald
+        state: restarted
+      when: journald_conf.changed
+
+    - name: Vacuum journals to enforce new size limit immediately
+      ansible.builtin.command: journalctl --vacuum-size=500M
+      when: journald_conf.changed
+      changed_when: true
+
+    - name: Report current journal disk usage
+      ansible.builtin.command: journalctl --disk-usage
+      register: disk_usage
+      changed_when: false
+
+    - name: Show journal usage on {{ inventory_hostname }}
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ disk_usage.stdout }}"
