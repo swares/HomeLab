@@ -177,6 +177,10 @@ Goal: the VM/devops sandbox. This is a **parallel track** — it doesn't block P
    - 🔵 **Offsite backup (Track 2 — bulk photos/video ~1.5 TB)** — deferred. See RUNBOOK.md for
      options (Backblaze B2 or R2 paid). The `backup-offsite.service` template is ready; needs
      `offsite_restic_repo` set and `/etc/restic/offsite.env` populated.
+   - ✅ **healthchecks.io dead-man's switch** — all 4 backup services ping healthchecks.io on
+     success via `ExecStartPost=/usr/local/bin/hc-ping <check>` drop-ins. `h4-heartbeat.timer`
+     fires every 5 min as a host-alive check. Ping URLs in Vault at `secret/lab/healthchecks`.
+     Playbook: `ansible/playbooks/healthchecks.yml`.
    - ✅ **MQTT (Mosquitto)** — relocated to a lab Zero 2W (`make mqtt`).
    - 🔵 **UPS + NUT** — deferred by choice (future improvement).
    - 🟡 **Reverse proxy + internal CA + SSO** — once several web UIs are live.

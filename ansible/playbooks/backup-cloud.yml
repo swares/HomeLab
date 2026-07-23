@@ -107,10 +107,14 @@
             sh -c 'PGPASSWORD=$POSTGRES_PASSWORD pg_dump -U $POSTGRES_USER $POSTGRES_DB' \
             | gzip > "$TMPDIR/immich.sql.gz"
 
+          log "Copying lldap SQLite database..."
+          LLDAP_POD=$(kubectl get pod -n lldap -l app=lldap \
+            -o jsonpath='{.items[0].metadata.name}')
+          kubectl cp "lldap/${LLDAP_POD}:/data/users.db" "$TMPDIR/lldap.db"
+
           # Build source list — include vault-snapshots only if the directory exists
           SOURCES=(
             /mnt/cold-8t/k3s-etcd-snapshots
-            /mnt/cold-8t/lldap-snapshots
             "$TMPDIR"
           )
           [[ -d /mnt/cold-8t/vault-snapshots ]] && SOURCES+=(/mnt/cold-8t/vault-snapshots)

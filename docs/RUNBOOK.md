@@ -96,10 +96,11 @@ refresh per secret with:
     kubectl get applications -n argocd    # all Synced/Healthy
     systemctl status backup-nas.timer backup-etcd.timer
     ssh swares@192.168.1.128 systemctl status backup-vault.timer   # rpi5
-    # Note: lldap is now a k3s Deployment (ldap-1 VM decommissioned 2026-07-04).
-    # The backup-lldap.timer on ldap-1 no longer exists. Back up lldap's SQLite PVC
-    # via a k8s CronJob if needed — the PV is on local-path NVMe on whichever node
-    # the lldap pod lands on.
+    # lldap is a k3s Deployment (ldap-1 VM decommissioned 2026-07-18);
+    # backed up daily at 02:30 by the lldap-backup CronJob in the lldap namespace
+    # (restic → /mnt/cold-8t/restic via NFS; also included in backup-cloud offsite).
+    kubectl get cronjob lldap-backup -n lldap
+    kubectl get jobs -n lldap --sort-by=.metadata.creationTimestamp | tail -5
 
 ---
 
@@ -121,7 +122,8 @@ Never `kubectl apply` directly against main — it drifts and ArgoCD reverts it.
 | `backup-nas` | daily 01:30 | restic of `/srv/nas` + `/mnt/cold-8t/VMs` + `/mnt/cold-8t/immich` → cold-8t, then `restic copy` → cold-sec | none |
 | `backup-etcd` | daily | k3s SQLite state → `/mnt/cold-8t/k3s-etcd-snapshots/`, 7 copies retained | none |
 | `backup-vault` | daily 02:30 | Vault raft snapshot → `/mnt/cold-8t/vault-snapshots/`, 30-day retention | none |
-| `backup-cloud` | daily 03:00 | **Offsite (Track 1).** restic → Cloudflare R2 `homelab-backup` bucket. Sources: etcd snapshots + lldap snapshots + Vault snapshots + Postgres dumps (Authelia, Immich, Semaphore via `kubectl exec`). Credentials in Vault at `secret/lab/cloudflare-r2`. Playbook: `ansible/playbooks/backup-cloud.yml`. | none |
+| `lldap-backup` (k8s CronJob) | daily 02:30 | lldap `users.db` (SQLite) → `/mnt/cold-8t/restic` via NFS restic repo. Secret: `lldap-backup-secrets` (ESO from `secret/lab/restic`). Manifest: `gitops/workloads/lldap/backup-cronjob.yaml`. | none |
+| `backup-cloud` | daily 03:00 | **Offsite (Track 1).** restic → Cloudflare R2 `homelab-backup` bucket. Sources: etcd snapshots + Vault snapshots + lldap SQLite (via `kubectl cp`) + Postgres dumps (Authelia, Immich, Semaphore via `kubectl exec`). Credentials in Vault at `secret/lab/cloudflare-r2`. Playbook: `ansible/playbooks/backup-cloud.yml`. | none |
 | Immich DB dump | daily 01:30 | `pg_dump` via k8s CronJob → `/mnt/cold-8t/immich/backups/` (captured by restic above) | none |
 
 Check cold-tier backups:

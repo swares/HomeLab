@@ -556,6 +556,26 @@ journalctl -u backup-cloud.service --since "7 days ago" | tail -20
 sudo bash -c 'set -a; source /etc/restic/cloud.env; set +a; restic snapshots'
 ```
 
+### Check healthchecks.io dead-man's switch
+
+All backup services and the H4 host-alive heartbeat ping healthchecks.io on success.
+View check status at https://healthchecks.io (5 checks: h4-core, backup-nas,
+backup-cloud, backup-etcd, backup-vault).
+
+```bash
+# Verify h4-heartbeat timer is running (fires every 5 min)
+systemctl status h4-heartbeat.timer
+
+# Tail a recent ping to confirm it's reaching healthchecks.io
+journalctl -u h4-heartbeat.service --since "10 minutes ago" --no-pager
+# Expect: hc-ping: h4-core OK
+
+# Re-run playbook if URLs change (vault kv patch secret/lab/healthchecks ...)
+VAULT_TOKEN=hvs.xxx ansible-playbook \
+  -i ansible/inventory/hosts.yml \
+  ansible/playbooks/healthchecks.yml
+```
+
 ### Confirm last backup succeeded before any storage operation
 
 ```bash
