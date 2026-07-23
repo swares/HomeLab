@@ -128,9 +128,15 @@ Goal: local inference behind one OpenAI-compatible gateway. See
 2. 🟡 **Verify the gateway** (LiteLLM, deployed by Argo in Phase 3) reaches the backends and the
    `m5stack-adapter`:
    ```bash
-   curl -sk https://<litellm-vip>/v1/models | jq '.data[].id'     # m5, m5-llm, m5-claude, etc.
+   curl -sk https://ai.apps.lab.home.arpa/v1/models | jq '.data[].id'
+   # expect: chat, chat-cpu, code, vision, fast, embeddings, cloud, m5, m5-llm, m5-claude
+   curl -sk https://ai.apps.lab.home.arpa/v1/chat/completions \
+     -H "Content-Type: application/json" \
+     -d '{"model":"cloud","messages":[{"role":"user","content":"ping"}]}' \
+     | jq '.choices[0].message.content'   # expect: "pong" via Groq or Gemini
    ```
-   Send a test chat completion and confirm `route_taken` surfaces (local / direct_api / escalated).
+   Cloud fallback (Groq llama-3.3-70b + Gemini 2.0 Flash) is wired as automatic fallback
+   for `chat` and `chat-cpu` failures. Keys in Vault at `secret/lab/cloud-ai`.
 3. 🔧 **M5Stack escalation router** — point it at the gateway/orchestrator; confirm the 3 tiers
    (local NPU → Claude API → Claude Code on the orchestrator) resolve as configured.
 

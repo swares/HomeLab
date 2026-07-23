@@ -179,8 +179,12 @@ Pi 5 Pro** — it's already the "brain" tier (RKLLama host model + Claude Code s
   Home Assistant via MQTT, so it's the natural home-automation assistant.
 - **Embeddings / STT / OCR / vision** → OpenVINO on the Intel iGPUs (the N150s earn their
   keep here). NPUs are poor at these; the iGPUs are fine.
-- **Overflow / big models** → optional cloud fallback through the same LiteLLM endpoint,
-  keyed, used only when a request won't fit locally.
+- **Cloud fallback** → `cloud` model in LiteLLM routes to Groq (llama-3.3-70b-versatile)
+  and Gemini (gemini-2.0-flash) on free-tier quotas. LiteLLM automatically falls back
+  to `cloud` when `chat` or `chat-cpu` fail (timeout, OOM, all replicas down). Keys in
+  Vault at `secret/lab/cloud-ai`; injected via ESO Secret `litellm-cloud-ai`.
+- **Paid cloud (big models)** → Claude API (`big` model, currently commented out in
+  configmap). Enable by adding `ANTHROPIC_API_KEY` to Vault and uncommenting.
 
 ## Honest caveats
 
