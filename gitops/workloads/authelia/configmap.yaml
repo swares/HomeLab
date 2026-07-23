@@ -42,6 +42,14 @@ data:
 
     access_control:
       default_policy: one_factor
+      rules:
+        # LiteLLM API paths bypass auth — callers use the internal ClusterIP or
+        # pass a LITELLM_MASTER_KEY bearer token; UI path (/) requires login.
+        - domain: ai.apps.lab.home.arpa
+          resources:
+            - "^/v1/.*$"
+            - "^/health/.*$"
+          policy: bypass
 
     identity_providers:
       oidc:
@@ -91,20 +99,6 @@ data:
             redirect_uris:
               - https://grafana.apps.lab.home.arpa/login/generic_oauth
             scopes: [openid, profile, email, groups]
-            response_types: [code]
-            grant_types: [authorization_code]
-            token_endpoint_auth_method: client_secret_post
-            userinfo_signed_response_alg: none
-            consent_mode: implicit
-
-          - client_id: zot
-            client_name: Zot Registry
-            client_secret: '$argon2id$v=19$m=65536,t=3,p=4$Ro4ELmePXJFwTwBlWNxFGQ$bw3XbjvJ5/S9CXRF4wcnhjc7Cn7uiUM8FIeBj9T7om0'
-            authorization_policy: one_factor
-            claims_policy: include_profile_in_id_token
-            redirect_uris:
-              - https://registry.apps.lab.home.arpa/auth/callback/dex
-            scopes: [openid, profile, email]
             response_types: [code]
             grant_types: [authorization_code]
             token_endpoint_auth_method: client_secret_post

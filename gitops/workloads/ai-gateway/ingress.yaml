@@ -7,6 +7,8 @@ metadata:
     traefik.ingress.kubernetes.io/router.entrypoints: web,websecure
     traefik.ingress.kubernetes.io/router.tls: "true"
     cert-manager.io/cluster-issuer: lab-ca
+    # ForwardAuth: UI requires Authelia login; /v1/ and /health/ bypass (see authelia configmap).
+    traefik.ingress.kubernetes.io/router.middlewares: authelia-forwardauth@kubernetescrd
 spec:
   ingressClassName: traefik
   tls:
