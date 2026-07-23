@@ -18,6 +18,7 @@ registrations. Client secrets are argon2id hashes; plaintext secrets live in Vau
 | Immich | `immich.apps.lab.home.arpa` | openid-client v6 / oauth4webapi; calls userinfo endpoint |
 | MinIO Console | `minio-console.apps.lab.home.arpa` | Env var config; calls userinfo endpoint |
 | Semaphore | `semaphore.apps.lab.home.arpa` | Config via ESO-rendered `config.json` Secret; `claims_policy: include_profile_in_id_token` required — go-oidc reads ID token only |
+| LiteLLM | `ai.apps.lab.home.arpa` | Traefik ForwardAuth (`authelia-forwardauth@kubernetescrd`). UI (`/`) requires one_factor login. `/v1/` and `/health/` bypass auth so API callers are unaffected. |
 
 ---
 
@@ -27,7 +28,7 @@ registrations. Client secrets are argon2id hashes; plaintext secrets live in Vau
 |---------|-----|--------|
 | Zot | `registry.apps.lab.home.arpa` | Zot v2.1.x only accepts `github`/`google`/`gitlab` as provider names. Generic OIDC (`authelia`, `dex`, etc.) crashes with *unsupported openid/oauth2 provider*. Also deprecated `clientid`/`clientsecret` inline — new `credentialsfile` approach not yet tested. Revisit on Zot upgrade. |
 | Home Assistant | `ha.apps.lab.home.arpa` | No native OIDC support. Would require a custom integration or Traefik ForwardAuth (which only gates the ingress, not HA's own auth layer). Not worth the complexity. |
-| LiteLLM | `ai.apps.lab.home.arpa` | Supports generic OIDC via `GENERIC_CLIENT_ID` / `GENERIC_CLIENT_SECRET` / endpoint env vars. Not yet implemented — straightforward next step. |
+| LiteLLM | `ai.apps.lab.home.arpa` | ForwardAuth at ingress level (see Completed above). Native OIDC via `GENERIC_CLIENT_ID` would require a database — not worth it for a single-user lab. |
 | Vault | No public ingress | Vault has a native OIDC auth method. Useful for ditching Vault tokens for day-to-day admin. Not yet implemented. |
 | LLDAP | `lldap.apps.lab.home.arpa` | LLDAP is the identity provider — SSO into it would be circular. Skip. |
 | Whisper/STT | `stt.apps.lab.home.arpa` | API only, no interactive web UI. |
