@@ -1,0 +1,210 @@
+---
+# Configure healthchecks.io dead-man's switch pings for all backup timers.
+#
+# Each backup service pings a unique healthchecks.io URL on success. If a
+# backup stops running, healthchecks.io alerts after the grace period.
+#
+# Prerequisites (one-time):
+#   1. Sign up at https://healthchecks.io (free tier covers 20 checks).
+#   2. Create four checks — recommended settings: Period 25h, Grace 1h:
+#        backup-cloud   (daily 03:00 UTC on h4-core)
+#        backup-nas     (daily 01:30 UTC on h4-core)
+#        backup-etcd    (daily on h4-core)
+#        backup-vault   (daily 02:30 UTC on rpi5)
+#   3. Store all four ping URLs in Vault:
+#        vault kv put secret/lab/healthchecks \
+#          backup-cloud=https://hc-ping.com/<uuid1> \
+#          backup-nas=https://hc-ping.com/<uuid2> \
+#          backup-etcd=https://hc-ping.com/<uuid3> \
+#          backup-vault=https://hc-ping.com/<uuid4>
+#
+# Run:
+#   VAULT_TOKEN=hvs.xxx ansible-playbook \
+#     -i ansible/inventory/hosts.yml \
+#     ansible/playbooks/healthchecks.yml
+#
+# Idempotent. Re-running after backup-cloud.yml does not lose the drop-in
+# because drop-ins are separate files from the managed service unit.
+
+# ─── H4 core: backup-cloud, backup-nas, backup-etcd ──────────────────────────
+- name: Configure healthchecks.io pings on H4
+  hosts: microshift
+  become: true
+  vars:
+    vault_addr: "http://192.168.1.128:8200"
+    hc_dir: /etc/healthchecks
+    h4_checks:
+      - backup-cloud
+      - backup-nas
+      - backup-etcd
+
+  tasks:
+    - name: Read healthchecks URLs from Vault
+      ansible.builtin.shell:
+        cmd: vault kv get -format=json secret/lab/healthchecks
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      register: hc_vault_raw
+      no_log: true
+      changed_when: false
+
+    - name: Parse healthchecks URLs
+      ansible.builtin.set_fact:
+        hc: "{{ (hc_vault_raw.stdout | from_json).data.data }}"
+      no_log: true
+
+    - name: Create /etc/healthchecks directory
+      ansible.builtin.file:
+        path: "{{ hc_dir }}"
+        state: directory
+        mode: "0750"
+        owner: root
+        group: root
+
+    - name: Write ping URL files
+      ansible.builtin.copy:
+        dest: "{{ hc_dir }}/{{ item }}.url"
+        content: "{{ hc[item] }}\n"
+        mode: "0640"
+        owner: root
+        group: root
+      loop: "{{ h4_checks }}"
+      no_log: true
+
+    - name: Install hc-ping helper
+      ansible.builtin.copy:
+        dest: /usr/local/bin/hc-ping
+        mode: "0755"
+        owner: root
+        group: root
+        content: |
+          #!/bin/bash
+          # Ping a healthchecks.io check by name.
+          # Non-fatal: a ping failure must never mask a backup failure.
+          CHECK="${1:?usage: hc-ping <check-name>}"
+          URL_FILE="/etc/healthchecks/${CHECK}.url"
+          if [ ! -f "$URL_FILE" ]; then
+            echo "hc-ping: no URL file for $CHECK -- skipping" >&2
+            exit 0
+          fi
+          URL=$(tr -d '[:space:]' < "$URL_FILE")
+          [ -n "$URL" ] || exit 0
+          curl -fsS --retry 3 --max-time 15 "$URL" > /dev/null 2>&1 \
+            && echo "hc-ping: $CHECK OK" \
+            || echo "hc-ping: $CHECK ping failed (non-fatal)" >&2
+          exit 0    # always exit 0; never fail the parent service
+
+    - name: Create systemd drop-in directories for H4 backup services
+      ansible.builtin.file:
+        path: "/etc/systemd/system/{{ item }}.service.d"
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+      loop: "{{ h4_checks }}"
+
+    - name: Install healthchecks drop-ins for H4 backup services
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item }}.service.d/healthchecks.conf"
+        mode: "0644"
+        owner: root
+        group: root
+        content: |
+          [Service]
+          ExecStartPost=/usr/local/bin/hc-ping {{ item }}
+      loop: "{{ h4_checks }}"
+      notify: reload systemd daemon
+
+  handlers:
+    - name: reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+# ─── rpi5: backup-vault ───────────────────────────────────────────────────────
+- name: Configure healthchecks.io ping on rpi5 (backup-vault)
+  hosts: vault
+  become: true
+  vars:
+    vault_addr: "http://192.168.1.128:8200"
+    hc_dir: /etc/healthchecks
+
+  tasks:
+    - name: Read healthchecks URLs from Vault
+      ansible.builtin.shell:
+        cmd: vault kv get -format=json secret/lab/healthchecks
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      register: hc_vault_raw
+      no_log: true
+      changed_when: false
+
+    - name: Parse healthchecks URLs
+      ansible.builtin.set_fact:
+        hc: "{{ (hc_vault_raw.stdout | from_json).data.data }}"
+      no_log: true
+
+    - name: Create /etc/healthchecks directory
+      ansible.builtin.file:
+        path: "{{ hc_dir }}"
+        state: directory
+        mode: "0750"
+        owner: root
+        group: root
+
+    - name: Write backup-vault ping URL file
+      ansible.builtin.copy:
+        dest: "{{ hc_dir }}/backup-vault.url"
+        content: "{{ hc['backup-vault'] }}\n"
+        mode: "0640"
+        owner: root
+        group: root
+      no_log: true
+
+    - name: Install hc-ping helper
+      ansible.builtin.copy:
+        dest: /usr/local/bin/hc-ping
+        mode: "0755"
+        owner: root
+        group: root
+        content: |
+          #!/bin/bash
+          # Ping a healthchecks.io check by name.
+          # Non-fatal: a ping failure must never mask a backup failure.
+          CHECK="${1:?usage: hc-ping <check-name>}"
+          URL_FILE="/etc/healthchecks/${CHECK}.url"
+          if [ ! -f "$URL_FILE" ]; then
+            echo "hc-ping: no URL file for $CHECK -- skipping" >&2
+            exit 0
+          fi
+          URL=$(tr -d '[:space:]' < "$URL_FILE")
+          [ -n "$URL" ] || exit 0
+          curl -fsS --retry 3 --max-time 15 "$URL" > /dev/null 2>&1 \
+            && echo "hc-ping: $CHECK OK" \
+            || echo "hc-ping: $CHECK ping failed (non-fatal)" >&2
+          exit 0    # always exit 0; never fail the parent service
+
+    - name: Create systemd drop-in directory for backup-vault
+      ansible.builtin.file:
+        path: /etc/systemd/system/backup-vault.service.d
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+
+    - name: Install healthchecks drop-in for backup-vault
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/backup-vault.service.d/healthchecks.conf
+        mode: "0644"
+        owner: root
+        group: root
+        content: |
+          [Service]
+          ExecStartPost=/usr/local/bin/hc-ping backup-vault
+      notify: reload systemd daemon
+
+  handlers:
+    - name: reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
