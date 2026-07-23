@@ -6,17 +6,20 @@
 #
 # Prerequisites (one-time):
 #   1. Sign up at https://healthchecks.io (free tier covers 20 checks).
-#   2. Create four checks — recommended settings: Period 25h, Grace 1h:
-#        backup-cloud   (daily 03:00 UTC on h4-core)
-#        backup-nas     (daily 01:30 UTC on h4-core)
-#        backup-etcd    (daily on h4-core)
-#        backup-vault   (daily 02:30 UTC on rpi5)
-#   3. Store all four ping URLs in Vault:
+#   2. Create checks with the recommended settings below:
+#        backup-cloud   Period 25h,  Grace 1h   (daily 03:00 UTC on h4-core)
+#        backup-nas     Period 25h,  Grace 1h   (daily 01:30 UTC on h4-core)
+#        backup-etcd    Period 8d,   Grace 4h   (weekly on h4-core)
+#        backup-vault   Period 25h,  Grace 1h   (daily 02:30 UTC on rpi5)
+#        h4-core        Period 5min, Grace 5min (host-alive heartbeat)
+#   3. Store all ping URLs in Vault:
 #        vault kv put secret/lab/healthchecks \
 #          backup-cloud=https://hc-ping.com/<uuid1> \
 #          backup-nas=https://hc-ping.com/<uuid2> \
 #          backup-etcd=https://hc-ping.com/<uuid3> \
-#          backup-vault=https://hc-ping.com/<uuid4>
+#          backup-vault=https://hc-ping.com/<uuid4> \
+#          h4-core=https://hc-ping.com/<uuid5>
+#      (use vault kv patch to add h4-core if the secret already exists)
 #
 # Run:
 #   VAULT_TOKEN=hvs.xxx ansible-playbook \
@@ -37,6 +40,7 @@
       - backup-cloud
       - backup-nas
       - backup-etcd
+      - h4-core
 
   tasks:
     - name: Read healthchecks URLs from Vault
@@ -102,7 +106,10 @@
         mode: "0755"
         owner: root
         group: root
-      loop: "{{ h4_checks }}"
+      loop:
+        - backup-cloud
+        - backup-nas
+        - backup-etcd
 
     - name: Install healthchecks drop-ins for H4 backup services
       ansible.builtin.copy:
@@ -113,8 +120,51 @@
         content: |
           [Service]
           ExecStartPost=/usr/local/bin/hc-ping {{ item }}
-      loop: "{{ h4_checks }}"
+      loop:
+        - backup-cloud
+        - backup-nas
+        - backup-etcd
       notify: reload systemd daemon
+
+    - name: Install h4-heartbeat systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/h4-heartbeat.service
+        mode: "0644"
+        owner: root
+        group: root
+        content: |
+          [Unit]
+          Description=H4 host-alive heartbeat ping to healthchecks.io
+
+          [Service]
+          Type=oneshot
+          ExecStart=/usr/local/bin/hc-ping h4-core
+          StandardOutput=null
+          StandardError=journal
+
+    - name: Install h4-heartbeat systemd timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/h4-heartbeat.timer
+        mode: "0644"
+        owner: root
+        group: root
+        content: |
+          [Unit]
+          Description=H4 host-alive heartbeat (every 5 minutes)
+
+          [Timer]
+          OnBootSec=1min
+          OnUnitActiveSec=5min
+
+          [Install]
+          WantedBy=timers.target
+      notify: reload systemd daemon
+
+    - name: Enable and start h4-heartbeat timer
+      ansible.builtin.systemd:
+        name: h4-heartbeat.timer
+        enabled: true
+        state: started
 
   handlers:
     - name: reload systemd daemon
