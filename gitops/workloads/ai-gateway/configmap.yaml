@@ -64,11 +64,32 @@ data:
         litellm_params: { model: openai/m5-llm,    api_base: http://m5stack-adapter:8080/v1, api_key: "none" }
       - model_name: m5-claude
         litellm_params: { model: openai/m5-claude, api_base: http://m5stack-adapter:8080/v1, api_key: "none" }
-      # Optional cloud overflow — supply a key via Secret, then uncomment.
+      # ── Cloud fallback (Groq + Gemini, free tier) ──────────────────────────────
+      # Sits between local inference and paid Claude API. LiteLLM automatically
+      # falls back here when chat / chat-cpu fail (timeout, OOM, all replicas down).
+      # Keys injected via litellm-cloud-ai Secret (ESO from secret/lab/cloud-ai).
+      # Free limits: Groq 6000 req/day; Gemini 1500 req/day on Flash.
+      - model_name: cloud
+        litellm_params:
+          model: groq/llama-3.3-70b-versatile
+          api_key: os.environ/GROQ_API_KEY
+      - model_name: cloud
+        litellm_params:
+          model: gemini/gemini-2.0-flash
+          api_key: os.environ/GEMINI_API_KEY
+
+      # ── Paid cloud (Claude) — last resort ──────────────────────────────────
+      # Uncomment and supply key to enable:
       # - model_name: big
       #   litellm_params: { model: anthropic/claude-sonnet-4-6, api_key: os.environ/ANTHROPIC_API_KEY }
+
     router_settings:
-      routing_strategy: simple-shuffle   # load-balances across opi1 + opi2
+      routing_strategy: simple-shuffle   # load-balances within each model group
       num_retries: 2
+      # Automatic fallback chain: local NPU → cloud (Groq/Gemini) → (big if enabled)
+      # LiteLLM tries these in order on any exception (timeout, rate-limit, OOM).
+      fallbacks:
+        - chat: [cloud]
+        - chat-cpu: [cloud]
     # NOTE: the M5Stack speaks the framework's /api/llm protocol, not OpenAI — front it with a
     # tiny adapter (or call it directly / via MQTT from Home Assistant). See AI-INFERENCE.md.
