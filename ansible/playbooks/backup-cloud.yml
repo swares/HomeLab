@@ -6,6 +6,7 @@
 #   - lldap database snapshots     (/mnt/cold-8t/lldap-snapshots)
 #   - Vault raft snapshots         (/mnt/cold-8t/vault-snapshots, if present)
 #   - Postgres dumps               (Authelia, Immich, Semaphore — via kubectl exec)
+#   - OpenTofu state               (tofu-state bucket in MinIO — aws s3 cp via S3 API)
 #
 # Prerequisites:
 #   1. Create R2 bucket named 'homelab-backup' in the Cloudflare dashboard.
@@ -31,6 +32,12 @@
     backup_script: /usr/local/bin/backup-cloud.sh
 
   tasks:
+    - name: Ensure awscli is installed (needed for MinIO tofu-state copy)
+      ansible.builtin.apt:
+        name: awscli
+        state: present
+        update_cache: false
+
     - name: Ensure /etc/restic exists
       ansible.builtin.file:
         path: /etc/restic
@@ -54,6 +61,21 @@
         r2: "{{ (vault_r2_raw.stdout | from_json).data.data }}"
       no_log: true
 
+    - name: Read MinIO credentials from Vault
+      ansible.builtin.shell:
+        cmd: vault kv get -format=json secret/lab/minio
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      register: vault_minio_raw
+      no_log: true
+      changed_when: false
+
+    - name: Parse MinIO credentials
+      ansible.builtin.set_fact:
+        minio: "{{ (vault_minio_raw.stdout | from_json).data.data }}"
+      no_log: true
+
     - name: Write cloud restic env file
       ansible.builtin.copy:
         dest: "{{ cloud_env_file }}"
@@ -65,6 +87,8 @@
           AWS_ACCESS_KEY_ID={{ r2['access-key-id'] }}
           AWS_SECRET_ACCESS_KEY={{ r2['secret-access-key'] }}
           RESTIC_PASSWORD_FILE={{ cloud_password_file }}
+          MINIO_ROOT_USER={{ minio['root-user'] }}
+          MINIO_ROOT_PASSWORD={{ minio['root-password'] }}
       no_log: true
 
     - name: Write cloud restic password file
@@ -111,6 +135,16 @@
           LLDAP_POD=$(kubectl get pod -n lldap -l app=lldap \
             -o jsonpath='{.items[0].metadata.name}')
           kubectl cp "lldap/${LLDAP_POD}:/data/users.db" "$TMPDIR/lldap.db"
+
+          log "Copying OpenTofu state from MinIO..."
+          mkdir -p "$TMPDIR/tofu-state"
+          AWS_ACCESS_KEY_ID="$MINIO_ROOT_USER" \
+          AWS_SECRET_ACCESS_KEY="$MINIO_ROOT_PASSWORD" \
+          aws s3 cp s3://tofu-state/ "$TMPDIR/tofu-state/" \
+            --endpoint-url https://minio.apps.lab.home.arpa \
+            --recursive \
+            --no-verify-ssl \
+            --quiet
 
           # Build source list — include vault-snapshots only if the directory exists
           SOURCES=(
