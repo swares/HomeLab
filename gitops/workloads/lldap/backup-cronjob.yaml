@@ -4,7 +4,11 @@ metadata:
   name: lldap-backup
   namespace: lldap
 spec:
-  schedule: "30 2 * * *"   # 02:30 daily — after backup-nas starts, before backup-vault
+  # 02:30 daily. NOTE: this overlaps the host backup-nas timer (01:30) writing to
+  # the SAME restic repo. Two restic processes on one repo contend for the repo
+  # lock. Tracked in docs/REVIEW-2026-07-24.md; left as-is here to keep this PR
+  # to the Postgres migration.
+  schedule: "30 2 * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
@@ -16,14 +20,24 @@ spec:
             app: lldap-backup
         spec:
           restartPolicy: OnFailure
-          # No nodeSelector — PV affinity schedules this to the correct node automatically.
-          # NFS volume is mounted by kubelet on the host; no SSH or pod-level egress needed.
+          # No PVC mount any more — lldap's data lives in Postgres as of
+          # 2026-07-25, so this dumps the database over the network instead of
+          # reading a SQLite file. That also means this job is no longer pinned
+          # by PV affinity and can run on any node.
           securityContext:
             runAsUser: 0
           containers:
             - name: backup
-              image: restic/restic:0.19.1
+              # postgres image for pg_dump; restic is fetched from the same
+              # alpine base. Using one image avoids an init container.
+              image: postgres:16-alpine
               imagePullPolicy: IfNotPresent
+              env:
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: lldap-secrets
+                      key: db_password
               command:
                 - /bin/sh
                 - -c
@@ -32,20 +46,35 @@ spec:
                   REPO="/restic-repo"
                   export RESTIC_PASSWORD_FILE=/secrets/restic-password
 
-                  # Initialize repo if not already (no-op if it exists)
+                  apk add --no-cache restic > /dev/null
+
                   restic -r "$REPO" snapshots > /dev/null 2>&1 || restic -r "$REPO" init
 
-                  echo "Starting lldap SQLite backup..."
-                  restic -r "$REPO" backup /data/users.db \
+                  echo "Dumping lldap database..."
+                  pg_dump -h lldap-postgres -U lldap -d lldap > /tmp/lldap.sql
+
+                  # A dump that is well-formed but EMPTY is more dangerous than a
+                  # missing one, because it looks like a successful backup. This
+                  # is the same failure shape as the 4 KB etcd "snapshots" and the
+                  # empty pg_dumps found on 2026-07-25 — assert on content.
+                  size=$(wc -c < /tmp/lldap.sql)
+                  if [ "$size" -lt 1000 ]; then
+                    echo "FAIL: dump is only ${size} bytes — refusing to back up an empty database" >&2
+                    exit 1
+                  fi
+                  grep -q "CREATE TABLE" /tmp/lldap.sql || {
+                    echo "FAIL: dump contains no CREATE TABLE statements" >&2
+                    exit 1
+                  }
+                  echo "  dump ok (${size} bytes)"
+
+                  restic -r "$REPO" backup /tmp/lldap.sql \
                     --tag lldap \
                     --host lldap-k8s
 
                   echo "Backup complete. Recent lldap snapshots:"
                   restic -r "$REPO" snapshots --tag lldap --last 5
               volumeMounts:
-                - name: lldap-data
-                  mountPath: /data
-                  readOnly: true
                 - name: backup-secrets
                   mountPath: /secrets
                   readOnly: true
@@ -59,10 +88,6 @@ spec:
                   cpu: 500m
                   memory: 256Mi
           volumes:
-            - name: lldap-data
-              persistentVolumeClaim:
-                claimName: lldap-data
-                readOnly: true
             - name: backup-secrets
               secret:
                 secretName: lldap-backup-secrets

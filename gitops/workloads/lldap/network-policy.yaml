@@ -78,8 +78,19 @@ spec:
       ports:
         - port: 22
           protocol: TCP
+    # Added 2026-07-25: the backup now runs pg_dump against Postgres rather than
+    # reading a SQLite file off a mounted PVC, so it needs to reach the database.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: lldap-postgres
+      ports:
+        - port: 5432
+          protocol: TCP
 ---
-# Allow lldap egress for DNS only (it doesn't call external services).
+# Allow lldap egress: DNS, plus Postgres now that state lives there (2026-07-25).
+# Without the 5432 rule the default-deny policy above silently blocks lldap from
+# reaching its own database and the pod never becomes ready.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -99,4 +110,34 @@ spec:
         - port: 53
           protocol: UDP
         - port: 53
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: lldap-postgres
+      ports:
+        - port: 5432
+          protocol: TCP
+---
+# Postgres accepts connections only from lldap itself and from the backup job.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-postgres-from-lldap
+  namespace: lldap
+spec:
+  podSelector:
+    matchLabels:
+      app: lldap-postgres
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: lldap
+        - podSelector:
+            matchLabels:
+              app: lldap-backup
+      ports:
+        - port: 5432
           protocol: TCP

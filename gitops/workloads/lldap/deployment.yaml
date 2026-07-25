@@ -7,7 +7,11 @@ spec:
   replicas: 1
   minReadySeconds: 30
   strategy:
-    type: Recreate             # SQLite is single-writer; never run two replicas concurrently
+    # Was Recreate because SQLite is single-writer. Now that state lives in
+    # Postgres, lldap itself is stateless and could roll normally — but keep
+    # Recreate for now: it is one small pod, rolling buys nothing, and Recreate
+    # keeps the restart behaviour identical to what has been running.
+    type: Recreate
   selector:
     matchLabels:
       app: lldap
@@ -40,17 +44,29 @@ spec:
                 secretKeyRef:
                   name: lldap-secrets
                   key: jwt_secret
+            # Postgres, not SQLite (2026-07-25). See postgres.yaml for why.
+            #
+            # DB_PASSWORD must be declared BEFORE LLDAP_DATABASE_URL — Kubernetes
+            # expands $(VAR) only from env vars defined earlier in this list.
+            #
+            # The password is interpolated into a URL, so it must contain no
+            # URL-reserved characters (@ : / ? # % &). Generate it with
+            # `openssl rand -hex 32`, which is hex and therefore always safe.
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: lldap-secrets
+                  key: db_password
             - name: LLDAP_DATABASE_URL
-              value: "sqlite:///data/users.db?mode=rwc"
+              value: "postgres://lldap:$(DB_PASSWORD)@lldap-postgres:5432/lldap"
             - name: LLDAP_HTTP_URL
               value: "https://lldap.apps.lab.home.arpa"
             - name: LLDAP_LDAP_PORT
               value: "3890"
             - name: LLDAP_HTTP_PORT
               value: "17170"
-          volumeMounts:
-            - name: data
-              mountPath: /data
+          # No volumeMounts. State lives in Postgres now, which is the entire
+          # point: this pod is stateless and can schedule on any node.
           readinessProbe:
             httpGet:
               path: /health
@@ -72,7 +88,7 @@ spec:
             limits:
               cpu: 200m
               memory: 128Mi
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: lldap-data
+      # `volumes:` removed with the SQLite migration. The lldap-data PVC is
+      # deliberately left in git (pvc.yaml) until the Postgres migration is
+      # verified — it still holds the old users.db and is the rollback path.
+      # Delete it in a follow-up PR once you are satisfied, not before.
