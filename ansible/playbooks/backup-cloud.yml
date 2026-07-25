@@ -46,6 +46,72 @@
         owner: root
         group: root
 
+    # ---- Preflight -----------------------------------------------------------
+    # Added 2026-07-25. The Vault reads below carry `no_log: true`, which hides the
+    # *error* as well as the secret — so an expired token surfaces only as
+    # "censored due to no_log", with no indication of the cause. These three checks
+    # print no secret values and turn that into a one-line diagnosis.
+    - name: Preflight — VAULT_TOKEN must be set
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'VAULT_TOKEN') | length > 0
+        fail_msg: >-
+          VAULT_TOKEN is empty. Pass a current token:
+          VAULT_TOKEN=<token> ansible-playbook -i ansible/inventory/hosts.yml
+          ansible/playbooks/backup-cloud.yml
+          — if running via Semaphore, check the environment on the task template;
+          tokens expire and the stored one may be stale.
+        quiet: true
+
+    - name: Preflight — probe Vault reachability and seal status
+      ansible.builtin.command:
+        cmd: vault status
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+      register: vault_status_probe
+      changed_when: false
+      failed_when: false
+      check_mode: false   # read-only; must run under --check or the assert below is vacuous
+      # Deliberately NOT no_log — `vault status` prints no secrets, and censoring
+      # this is precisely what made the expired-token failure undiagnosable.
+
+    - name: Preflight — Vault must be reachable and unsealed
+      ansible.builtin.assert:
+        that:
+          - vault_status_probe.rc is defined
+          - vault_status_probe.rc == 0
+        fail_msg: >-
+          Vault at {{ vault_addr }} is not usable — `vault status` returned
+          rc={{ vault_status_probe.rc }} (1 = unreachable or CLI error, 2 = sealed).
+          If sealed, check vault-unseal.service on rpi5.
+          {{ vault_status_probe.stderr | default('') }}
+        quiet: true
+
+    - name: Preflight — token must be able to read the R2 secret
+      ansible.builtin.shell:
+        cmd: vault kv get -field=account-id secret/lab/cloudflare-r2 >/dev/null
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      register: vault_read_probe
+      changed_when: false
+      failed_when: false
+      check_mode: false   # read-only; must run under --check
+      # stdout is redirected to /dev/null, so only error text can be captured here.
+
+    - name: Preflight — report token or permission problems clearly
+      ansible.builtin.assert:
+        that:
+          - vault_read_probe.rc is defined
+          - vault_read_probe.rc == 0
+        fail_msg: >-
+          Could not read secret/lab/cloudflare-r2 (rc={{ vault_read_probe.rc }}).
+          Likely an expired/revoked VAULT_TOKEN, a policy without read on that path,
+          or the secret not existing. Check with:
+          vault token lookup && vault kv list secret/lab
+          {{ vault_read_probe.stderr | default('') }}
+        quiet: true
+
     - name: Read R2 credentials from Vault
       ansible.builtin.shell:
         cmd: vault kv get -format=json secret/lab/cloudflare-r2
@@ -55,6 +121,7 @@
       register: vault_r2_raw
       no_log: true
       changed_when: false
+      check_mode: false
 
     - name: Parse R2 credentials
       ansible.builtin.set_fact:
@@ -70,6 +137,7 @@
       register: vault_minio_raw
       no_log: true
       changed_when: false
+      check_mode: false
 
     - name: Parse MinIO credentials
       ansible.builtin.set_fact:
@@ -108,93 +176,141 @@
         group: root
         content: |
           #!/bin/bash
-          set -euo pipefail
+          # Daily cloud backup of critical cluster state to Cloudflare R2.
+          #
+          # ORDERING IS DELIBERATE — read before rearranging.
+          #
+          # On 2026-07-25 a wedged crash reporter on n150-2 made one pod
+          # unreachable. Because this script ran `set -e` with the kubectl-dependent
+          # dumps FIRST, a single `kubectl cp` failure aborted the entire run — so
+          # the etcd snapshots and the k3s server token, which are plain file copies
+          # with no cluster dependency at all and are the most critical items here,
+          # never made it offsite. One flaky node cost a full day of cluster-state
+          # backups for a reason unrelated to cluster state.
+          #
+          # Now: dependency-free items are staged FIRST, every cluster-dependent dump
+          # is individually non-fatal, the restic backup ALWAYS runs, and the script
+          # exits non-zero at the end if anything was missed. A bad node costs you one
+          # component and an alert instead of everything.
+          #
+          # Note the absence of `set -e` — failures are accumulated, not fatal.
+          set -uo pipefail
           export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
-          # STABLE staging path — deliberately NOT mktemp.
-          #
-          # This directory is passed to `restic backup` as a source, so its name
-          # becomes part of the snapshot's path list. With mktemp the name was
-          # different every run (/tmp/backup-cloud-PX4ZQS, -pOvw3A, ...), and
-          # since `restic forget` groups by host+paths by default, every snapshot
-          # formed its own retention group. --keep-daily 7 --keep-weekly 4
-          # --keep-monthly 3 then dutifully kept the single member of each group,
-          # so R2 retention deleted nothing, ever, on a 10 GB free tier.
-          # A fixed path also means every snapshot has the same tree layout, so
-          # restore procedures can hardcode paths. See docs/BACKUP-RESTORE.md.
-          TMPDIR=/var/tmp/backup-cloud-stage
-          rm -rf "$TMPDIR"
-          mkdir -p "$TMPDIR"
-          chmod 700 "$TMPDIR"
-          trap "rm -rf $TMPDIR" EXIT
+          # Stable staging path (NOT mktemp, and NOT named TMPDIR — it is passed to
+          # restic as a source, so its name lands in the snapshot's path list; a
+          # varying name broke retention grouping, and shadowing TMPDIR would point
+          # the conventional temp variable at a directory this script rm -rf's).
+          STAGE=/var/tmp/backup-cloud-stage
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          chmod 700 "$STAGE"
+          trap 'rm -rf "$STAGE"' EXIT
 
-          log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
+          failures=0
+          log()  { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
+          warn() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] WARN: $*" >&2; failures=$((failures + 1)); }
 
-          log "Dumping Authelia postgres..."
-          kubectl exec -n authelia deploy/authelia-postgres -- \
-            sh -c 'PGPASSWORD=$POSTGRES_PASSWORD pg_dump -U $POSTGRES_USER $POSTGRES_DB' \
-            | gzip > "$TMPDIR/authelia.sql.gz"
+          # ---- Tier 1: no external dependencies. Never blocked by a sick node. ----
 
-          log "Dumping Semaphore postgres..."
-          kubectl exec -n semaphore deploy/semaphore-postgres -- \
-            sh -c 'PGPASSWORD=$POSTGRES_PASSWORD pg_dump -U $POSTGRES_USER $POSTGRES_DB' \
-            | gzip > "$TMPDIR/semaphore.sql.gz"
+          log "Staging k3s server token..."
+          if install -m 0600 /var/lib/rancher/k3s/server/token "$STAGE/k3s-server-token"; then
+            log "  token staged"
+          else
+            warn "could not stage /var/lib/rancher/k3s/server/token — etcd snapshots in this backup will be UNRESTORABLE on new hardware"
+          fi
 
-          log "Dumping Immich postgres..."
-          kubectl exec -n immich deploy/immich-postgres -- \
-            sh -c 'PGPASSWORD=$POSTGRES_PASSWORD pg_dump -U $POSTGRES_USER $POSTGRES_DB' \
-            | gzip > "$TMPDIR/immich.sql.gz"
+          log "Checking etcd snapshots on the cold tier..."
+          etcd_count=$(find /mnt/cold-8t/k3s-etcd-snapshots -maxdepth 1 -name 'etcd-snapshot-*' -size +1M 2>/dev/null | wc -l)
+          if [ "$etcd_count" -gt 0 ]; then
+            log "  $etcd_count snapshot(s) >1M present"
+          else
+            warn "no etcd snapshots >1M in /mnt/cold-8t/k3s-etcd-snapshots — check backup-etcd.service"
+          fi
+
+          # ---- Tier 2: needs the cluster. Each failure is isolated. ----
+
+          dump_pg() {   # namespace  deployment  output-file
+            local ns="$1" deploy="$2" out="$3"
+            log "Dumping $ns postgres..."
+            if kubectl exec -n "$ns" "deploy/$deploy" -- \
+                 sh -c 'PGPASSWORD=$POSTGRES_PASSWORD pg_dump -U $POSTGRES_USER $POSTGRES_DB' \
+                 | gzip > "$STAGE/$out"; then
+              # A dump that is well-formed but EMPTY is more dangerous than a
+              # missing one, because it looks fine: an empty pg_dump still gzips to
+              # a ~20-byte valid archive that passes both a size test and `gzip -t`.
+              # Same failure shape as the 4 KB etcd "snapshots" of July 2026, so
+              # check the DECOMPRESSED size, not the file size.
+              decompressed=$(gzip -dc "$STAGE/$out" 2>/dev/null | wc -c)
+              if gzip -t "$STAGE/$out" 2>/dev/null && [ "$decompressed" -ge 100 ]; then
+                log "  $out ok ($(stat -c %s "$STAGE/$out") bytes gz, ${decompressed} raw)"
+              else
+                rm -f "$STAGE/$out"
+                warn "$ns dump was empty or corrupt (${decompressed} bytes decompressed) — discarded"
+              fi
+            else
+              rm -f "$STAGE/$out"
+              warn "$ns postgres dump failed"
+            fi
+          }
+
+          dump_pg authelia  authelia-postgres  authelia.sql.gz
+          dump_pg semaphore semaphore-postgres semaphore.sql.gz
+          dump_pg immich    immich-postgres    immich.sql.gz
 
           log "Copying lldap SQLite database..."
           LLDAP_POD=$(kubectl get pod -n lldap -l app=lldap \
-            -o jsonpath='{.items[0].metadata.name}')
-          kubectl cp "lldap/${LLDAP_POD}:/data/users.db" "$TMPDIR/lldap.db"
+            -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+          if [ -z "$LLDAP_POD" ]; then
+            warn "no lldap pod found — skipping"
+          elif kubectl cp "lldap/${LLDAP_POD}:/data/users.db" "$STAGE/lldap.db"; then
+            log "  lldap.db ok ($(stat -c %s "$STAGE/lldap.db" 2>/dev/null || echo 0) bytes)"
+          else
+            rm -f "$STAGE/lldap.db"
+            warn "lldap copy failed — is its node reachable? (kubectl cp needs apiserver->kubelet on :10250)"
+          fi
 
           log "Copying OpenTofu state from MinIO..."
-          mkdir -p "$TMPDIR/tofu-state"
-          AWS_ACCESS_KEY_ID="$MINIO_ROOT_USER" \
-          AWS_SECRET_ACCESS_KEY="$MINIO_ROOT_PASSWORD" \
-          aws s3 cp s3://tofu-state/ "$TMPDIR/tofu-state/" \
-            --endpoint-url https://minio.apps.lab.home.arpa \
-            --recursive \
-            --no-verify-ssl \
-            --quiet
+          mkdir -p "$STAGE/tofu-state"
+          if AWS_ACCESS_KEY_ID="$MINIO_ROOT_USER" \
+             AWS_SECRET_ACCESS_KEY="$MINIO_ROOT_PASSWORD" \
+             aws s3 cp s3://tofu-state/ "$STAGE/tofu-state/" \
+               --endpoint-url https://minio.apps.lab.home.arpa \
+               --recursive --no-verify-ssl --quiet; then
+            log "  tofu-state ok"
+          else
+            warn "OpenTofu state copy from MinIO failed"
+          fi
 
-          # The k3s server token is REQUIRED to restore any etcd snapshot onto new
-          # hardware: k3s derives an AES-256 key from it (PBKDF2) to encrypt
-          # confidential data — CA private keys, bootstrap data — inside the
-          # datastore itself. Without it the snapshots in this very backup are
-          # unusable. It was previously backed up nowhere at all; it existed only on
-          # the three server nodes' local disks, so a total-site loss meant every
-          # etcd snapshot was decorative.
-          #
-          # SECURITY TRADEOFF, read before changing: snapshot + token together is
-          # full cluster compromise (see docs.k3s.io/cli/etcd-snapshot#security).
-          # They are co-located here only because this restic repo is encrypted as a
-          # whole, and its password lives in Vault and on the H4 — not in R2. Anyone
-          # able to decrypt this repo already holds the keys to everything in it.
-          # The offline break-glass envelope described in docs/BACKUP-RESTORE.md is
-          # still the primary recovery path; this is the convenience copy.
-          log "Copying k3s server token (required to restore etcd snapshots)..."
-          install -m 0600 /var/lib/rancher/k3s/server/token "$TMPDIR/k3s-server-token"
+          # ---- Always back up whatever we managed to gather ----
 
-          # Build source list — include vault-snapshots only if the directory exists
           SOURCES=(
             /mnt/cold-8t/k3s-etcd-snapshots
-            "$TMPDIR"
+            "$STAGE"
           )
           [[ -d /mnt/cold-8t/vault-snapshots ]] && SOURCES+=(/mnt/cold-8t/vault-snapshots)
 
           log "Running restic backup to R2..."
-          restic backup "${SOURCES[@]}" --tag cloud --host h4-core
+          if ! restic backup "${SOURCES[@]}" --tag cloud --host h4-core; then
+            log "FATAL: restic backup to R2 failed"
+            exit 1
+          fi
 
           log "Pruning old cloud snapshots..."
           # --group-by host,tags (not the default host,paths): all cloud snapshots
           # share host+tag, so they form ONE retention series. Belt-and-braces
-          # alongside the stable staging path above — if a future source path ever
-          # varies again, retention still works.
-          restic forget --prune --group-by host,tags \
-            --keep-daily 7 --keep-weekly 4 --keep-monthly 3
+          # alongside the stable staging path above — if a source path ever varies
+          # again, retention still works.
+          if ! restic forget --prune --group-by host,tags \
+               --keep-daily 7 --keep-weekly 4 --keep-monthly 3; then
+            warn "retention pass failed — snapshots will accumulate"
+          fi
+
+          if [ "$failures" -gt 0 ]; then
+            log "Cloud backup completed with $failures component failure(s) — the backup ran but is INCOMPLETE."
+            log "hc-ping will be skipped, so healthchecks.io will alert. See warnings above."
+            exit 1
+          fi
 
           log "Cloud backup complete."
 
