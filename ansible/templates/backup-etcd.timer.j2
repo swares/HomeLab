@@ -1,8 +1,15 @@
 [Unit]
-Description=Weekly k3s etcd state backup
+Description=Daily copy of k3s etcd snapshots to cold tier
 
 [Timer]
-OnCalendar=Sun *-*-* 03:00:00
+# Daily, not weekly. k3s retains only ~5 snapshots (2.5 days at its 12h default),
+# so a weekly copy would sample one arbitrary point per week and let the rest age
+# off the NVMe uncopied.
+#
+# 00:30 sits 30 min after k3s' 00:00 snapshot and well before backup-cloud (03:00),
+# which uploads this directory to R2 — so the offsite copy always sees fresh data.
+# The old Sun 03:00 slot collided with backup-cloud.
+OnCalendar=*-*-* 00:30:00
 Persistent=true
 
 [Install]

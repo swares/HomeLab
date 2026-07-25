@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly verification that backups are real (not merely running)
+RequiresMountsFor={{ cold_primary_mount }} {{ cold_secondary_mount }}
+
+[Service]
+Type=oneshot
+# Read-only. Never writes to, forgets from, or prunes any repository.
+# Exits non-zero if any check fails, so the healthchecks.io drop-in is skipped
+# and the dead-man switch fires.
+ExecStart=/usr/local/sbin/backup-verify.sh

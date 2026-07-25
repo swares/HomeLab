@@ -1,0 +1,103 @@
+#!/bin/bash
+# {{ ansible_managed | default('Managed by Ansible — do not edit by hand') }}
+#
+# Replicate the primary restic repo onto the secondary cold mirror, then apply
+# retention to that copy.
+#
+# WHY THIS IS A SCRIPT AND NOT AN ExecStartPost ONE-LINER
+#
+# 1. restic changed the copy command's argument semantics. Older versions
+#    (the H4 runs 0.12.1) copy FROM the -r repo INTO --repo2:
+#        restic -r SRC copy --repo2 DST --password-file2 PW
+#    Current restic documents the opposite shape — the destination is -r and the
+#    source is named explicitly:
+#        restic -r DST copy --from-repo SRC --from-password-file PW
+#    --repo2 no longer appears in the current documentation at all. An unattended
+#    `apt upgrade` that crosses that boundary could therefore silently reverse the
+#    copy direction and overwrite the primary from the secondary. Rather than rely
+#    on how any given version interprets --repo2, this script detects the version
+#    and uses the form that is unambiguous for it.
+#
+# 2. The old ExecStartPost was prefixed with '-', so systemd ignored its exit
+#    status. The copy could fail every night without ever surfacing. It is now
+#    fatal: if replication breaks, backup-nas.service fails, hc-ping does not run,
+#    and healthchecks.io raises the alarm.
+#
+# 3. Retention never ran against the copy, so it grew without bound (40 snapshots
+#    vs the primary's 19 as of 2026-07-25). The copy is deliberately kept DEEPER
+#    than the primary — it is the longer-history archive — but it is now bounded.
+#
+# NOTE FOR EDITORS: this is a Jinja2 template. Do not use bash's array-length
+# syntax (dollar-brace-hash-name); brace followed by hash opens a Jinja comment.
+
+set -euo pipefail
+
+SRC={{ restic_repo | quote }}
+DST={{ restic_copy_repo | quote }}
+PW={{ restic_password_file | quote }}
+
+KEEP_DAILY={{ copy_keep_daily }}
+KEEP_WEEKLY={{ copy_keep_weekly }}
+KEEP_MONTHLY={{ copy_keep_monthly }}
+
+if [ ! -r "$PW" ]; then
+  echo "FAIL: restic password file $PW is missing or unreadable." >&2
+  exit 1
+fi
+
+# ---- Which copy syntax does this restic understand? ------------------------
+# "restic 0.12.1 compiled with go1.18.1 on linux/amd64" -> 0.12.1
+version_string=$(restic version | awk '{print $2}')
+major=${version_string%%.*}
+remainder=${version_string#*.}
+minor=${remainder%%.*}
+
+# Must be numeric. A non-numeric value would make the [ -eq ] test below error
+# out; because that test sits inside an `if` condition, set -e would NOT catch it
+# and the script would silently fall through to the --from-repo branch.
+if ! [[ "$major" =~ ^[0-9]+$ ]] || ! [[ "$minor" =~ ^[0-9]+$ ]]; then
+  echo "FAIL: could not parse a numeric restic version from '$version_string'." >&2
+  echo "      Refusing to guess which copy syntax is safe." >&2
+  exit 1
+fi
+
+use_from_repo=1
+if [ "$major" -eq 0 ] && [ "$minor" -lt 14 ]; then
+  use_from_repo=0
+fi
+
+echo "restic ${version_string}: using $([ "$use_from_repo" -eq 1 ] && echo '--from-repo' || echo '--repo2') copy syntax"
+
+# ---- Ensure the destination repo exists ------------------------------------
+# NOTE: a repo initialised plainly will not share chunker parameters with the
+# source, so deduplication across the two repos is imperfect. That is acceptable
+# here (the copy is a mirror, not a space optimisation). If you ever rebuild the
+# secondary from scratch and care about size, init it with --copy-chunker-params
+# against the primary BEFORE the first copy — chunker params cannot be changed
+# after the fact.
+if ! restic -r "$DST" --password-file "$PW" cat config >/dev/null 2>&1; then
+  echo "destination repo $DST not initialised — initialising"
+  restic -r "$DST" --password-file "$PW" init
+fi
+
+# ---- Copy -------------------------------------------------------------------
+if [ "$use_from_repo" -eq 1 ]; then
+  restic -r "$DST" --password-file "$PW" \
+    copy --from-repo "$SRC" --from-password-file "$PW"
+else
+  restic -r "$SRC" --password-file "$PW" \
+    copy --repo2 "$DST" --password-file2 "$PW"
+fi
+
+# ---- Retention on the copy --------------------------------------------------
+# Deliberately deeper than the primary's 7/4/6 — this repo is the long-history
+# archive. Default grouping (host,paths) is correct here: the h4-core NAS
+# snapshots and the lldap-k8s snapshots are retained as separate series.
+# Per CLAUDE.md, retention lives in the backup units and nowhere else. Never run
+# forget/prune against these repos by hand.
+restic -r "$DST" --password-file "$PW" forget --prune \
+  --keep-daily "$KEEP_DAILY" \
+  --keep-weekly "$KEEP_WEEKLY" \
+  --keep-monthly "$KEEP_MONTHLY"
+
+echo "copy + retention complete for $DST"

@@ -1,0 +1,120 @@
+#!/bin/bash
+# {{ ansible_managed | default('Managed by Ansible — do not edit by hand') }}
+#
+# Weekly verification that the backups are not merely running, but real.
+#
+# This exists because three separate mechanisms in this lab were found reporting
+# success while doing nothing (2026-07-24 review, docs/REVIEW-2026-07-24.md):
+#   - backup-etcd snapshotted a SQLite file that no longer existed, producing
+#     4 KB files and pinging healthchecks.io green for a month;
+#   - backup-offsite rendered to a no-op that logged "skipping" and exited 0;
+#   - backup-cloud's retention never deleted anything because a random staging
+#     path put every snapshot in its own retention group.
+# In every case the *job* was healthy and the *outcome* was not. This script
+# checks outcomes.
+#
+# It is read-only. It never writes to, forgets from, or prunes any repository.
+#
+# NOTE FOR EDITORS: this is a Jinja2 template. Do not use bash's array-length
+# syntax (dollar-brace-hash-name); brace followed by hash opens a Jinja comment.
+
+set -uo pipefail   # NOT -e: we want every check to run, then report all failures
+
+PRIMARY={{ restic_repo | quote }}
+COPY={{ restic_copy_repo | quote }}
+PW={{ restic_password_file | quote }}
+CLOUD_ENV={{ cloud_env_file | quote }}
+ETCD_DIR={{ etcd_snapshot_dest | quote }}
+
+failures=0
+fail() { echo "FAIL: $*" >&2; failures=$((failures + 1)); }
+pass() { echo "ok:   $*"; }
+
+# ---- 1. Structural integrity of the two local repos ------------------------
+for repo in "$PRIMARY" "$COPY"; do
+  if restic -r "$repo" --password-file "$PW" check > /tmp/verify-check.$$ 2>&1; then
+    pass "restic check clean — $repo"
+  else
+    fail "restic check FAILED — $repo"
+    sed 's/^/        /' /tmp/verify-check.$$ >&2
+  fi
+  rm -f /tmp/verify-check.$$
+done
+
+# ---- 2. The two local repos should both have a recent snapshot -------------
+# The copy legitimately holds MORE snapshots than the primary (deeper retention),
+# so we compare recency, not counts.
+for repo in "$PRIMARY" "$COPY"; do
+  latest_epoch=$(restic -r "$repo" --password-file "$PW" snapshots --tag nas --json 2>/dev/null \
+    | tr ',' '\n' | grep -o '"time":"[^"]*"' | tail -1 | cut -d'"' -f4 \
+    | xargs -r -I{} date -d {} +%s 2>/dev/null)
+  if [ -z "${latest_epoch:-}" ]; then
+    fail "could not determine newest 'nas' snapshot in $repo"
+  else
+    age=$(( $(date +%s) - latest_epoch ))
+    if [ "$age" -gt {{ verify_max_snapshot_age_seconds }} ]; then
+      fail "newest 'nas' snapshot in $repo is ${age}s old (max {{ verify_max_snapshot_age_seconds }}s)"
+    else
+      pass "newest 'nas' snapshot in $repo is ${age}s old"
+    fi
+  fi
+done
+
+# ---- 3. Cold etcd snapshots are real, not the 4 KB ghosts ------------------
+newest_etcd=$(ls -1t -- "$ETCD_DIR"/etcd-snapshot-* 2>/dev/null | head -n 1)
+if [ -z "$newest_etcd" ]; then
+  fail "no etcd-snapshot-* files in $ETCD_DIR"
+else
+  etcd_size=$(stat -c %s -- "$newest_etcd")
+  if [ "$etcd_size" -lt {{ etcd_snapshot_min_bytes }} ]; then
+    fail "newest etcd snapshot is only ${etcd_size} bytes — the empty-file bug is back"
+  else
+    pass "newest etcd snapshot $(basename "$newest_etcd") is ${etcd_size} bytes"
+  fi
+fi
+
+# ---- 4. R2: integrity, and that it actually contains cluster state ---------
+# The content assertion is the important half. A clean `check` only proves the
+# repo is well-formed; it says nothing about whether the right files are in it.
+# backup-cloud sources /mnt/cold-8t/k3s-etcd-snapshots, so if that directory were
+# ever wrong again, R2 would faithfully back up the wrong thing and still pass.
+if [ ! -r "$CLOUD_ENV" ]; then
+  echo "warn: $CLOUD_ENV not present — skipping R2 checks (run backup-cloud.yml?)" >&2
+else
+  # shellcheck disable=SC1090
+  set -a; . "$CLOUD_ENV"; set +a
+
+  if restic check > /tmp/verify-cloud.$$ 2>&1; then
+    pass "restic check clean — R2"
+  else
+    fail "restic check FAILED — R2"
+    sed 's/^/        /' /tmp/verify-cloud.$$ >&2
+  fi
+  rm -f /tmp/verify-cloud.$$
+
+  etcd_in_cloud=$(restic ls latest "$ETCD_DIR" 2>/dev/null | grep -c 'etcd-snapshot-')
+  if [ "${etcd_in_cloud:-0}" -lt 1 ]; then
+    fail "newest R2 snapshot contains NO etcd-snapshot-* files under $ETCD_DIR"
+  else
+    pass "newest R2 snapshot contains ${etcd_in_cloud} etcd-snapshot-* files"
+  fi
+
+  # The k3s server token must be in the backup or the etcd snapshots above cannot
+  # be restored onto new hardware — k3s derives the datastore's encryption key
+  # from it. Until 2026-07-25 it was backed up nowhere.
+  if restic ls latest {{ cloud_stage_dir | quote }} 2>/dev/null | grep -q 'k3s-server-token'; then
+    pass "newest R2 snapshot contains the k3s server token"
+  else
+    fail "newest R2 snapshot has NO k3s server token — etcd snapshots are unrestorable on new hardware"
+  fi
+
+  cloud_count=$(restic snapshots --tag cloud --json 2>/dev/null | grep -o '"time":' | wc -l)
+  echo "info: R2 holds ${cloud_count} cloud snapshots"
+fi
+
+# ---- Verdict ----------------------------------------------------------------
+if [ "$failures" -gt 0 ]; then
+  echo "backup-verify: ${failures} check(s) FAILED" >&2
+  exit 1
+fi
+echo "backup-verify: all checks passed"

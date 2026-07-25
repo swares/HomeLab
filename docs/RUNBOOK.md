@@ -117,10 +117,15 @@ Never `kubectl apply` directly against main — it drifts and ArgoCD reverts it.
 
 ## Backups
 
+> **See [BACKUP-RESTORE.md](BACKUP-RESTORE.md)** for the authoritative reference —
+> full inventory, restore procedures, and validation commands. The table below is a
+> summary; the restore steps further down this file were found to be incorrect on
+> 2026-07-24 and are superseded by BACKUP-RESTORE.md §3.
+
 | Stream | When | What | Downtime |
 |--------|------|------|----------|
 | `backup-nas` | daily 01:30 | restic of `/srv/nas` + `/mnt/cold-8t/VMs` + `/mnt/cold-8t/immich` → cold-8t, then `restic copy` → cold-sec | none |
-| `backup-etcd` | daily | k3s SQLite state → `/mnt/cold-8t/k3s-etcd-snapshots/`, 7 copies retained | none |
+| `backup-etcd` | daily 00:30 | Copies k3s' own embedded-etcd snapshots (k3s writes them to `/var/lib/rancher/k3s/server/db/snapshots/` every 12h) → `/mnt/cold-8t/k3s-etcd-snapshots/`, 30 copies retained. Verifies size + freshness and **fails loudly** if either check trips. | none |
 | `backup-vault` | daily 02:30 | Vault raft snapshot → `/mnt/cold-8t/vault-snapshots/`, 30-day retention | none |
 | `lldap-backup` (k8s CronJob) | daily 02:30 | lldap `users.db` (SQLite) → `/mnt/cold-8t/restic` via NFS restic repo. Secret: `lldap-backup-secrets` (ESO from `secret/lab/restic`). Manifest: `gitops/workloads/lldap/backup-cronjob.yaml`. | none |
 | `backup-cloud` | daily 03:00 | **Offsite (Track 1).** restic → Cloudflare R2 `homelab-backup` bucket. Sources: etcd snapshots + Vault snapshots + lldap SQLite (via `kubectl cp`) + Postgres dumps (Authelia, Immich, Semaphore via `kubectl exec`). Credentials in Vault at `secret/lab/cloudflare-r2`. Playbook: `ansible/playbooks/backup-cloud.yml`. | none |
@@ -210,10 +215,15 @@ For immediate relief before the revert lands:
 
 ### Full cluster loss — etcd restore
 
-    sudo systemctl stop k3s
-    sudo k3s etcd-snapshot restore /mnt/cold-8t/etcd/<snapshot-name>
-    sudo systemctl start k3s
-    # ArgoCD re-syncs all workloads from git automatically
+> **The procedure that was here was wrong and has been removed.** It used a
+> `k3s etcd-snapshot restore` subcommand that does not exist, pointed at
+> `/mnt/cold-8t/etcd/` (the real directory is `/mnt/cold-8t/k3s-etcd-snapshots/`),
+> and gave single-node steps for a 3-server embedded-etcd cluster — where a restore
+> also requires wiping and rejoining the other two servers.
+>
+> **Use [BACKUP-RESTORE.md §3.2](BACKUP-RESTORE.md#32-restore-cluster-state-etcd--3-server-ha)**,
+> which is verified against the current k3s documentation. Restoring onto new
+> hardware additionally requires the k3s server token — see §2 of that document.
 
 ### NAS data loss — restic restore
 

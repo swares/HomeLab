@@ -1,9 +1,14 @@
 ---
 # Two backup streams onto the cold tier (8TB primary + 6TB copy), via host systemd timers:
-#   - daily : restic snapshot of live NAS data  (online, no downtime)
-#   - weekly: MicroShift data/etcd snapshot      (brief downtime in a 03:00 window)
+#   - daily 01:30: restic snapshot of live NAS data          (online, no downtime)
+#   - daily 00:30: copy of k3s' own etcd snapshots to cold   (online, no downtime)
 #
 # Cluster *config* is already safe in git (Argo); these cover *data* and *state*.
+#
+# Note on the etcd stream: k3s takes embedded-etcd snapshots itself and keeps them
+# on the NVMe. We do not snapshot — we replicate k3s' output onto the cold mirror
+# and verify it. See ansible/templates/backup-etcd.sh.j2 for the full history of
+# why this used to be a sqlite3 call and why it silently produced nothing.
 - name: Configure backups to the cold tier
   hosts: microshift
   become: true
@@ -11,8 +16,26 @@
     restic_repo: "{{ cold_primary_mount }}/restic"          # 8TB primary
     restic_password_file: /etc/restic/password   # vaulted; created out of band
     restic_copy_repo: "{{ cold_secondary_mount }}/restic"   # 6TB redundant copy
-    etcd_backup_dir: "{{ cold_primary_mount }}/microshift-backups"
     restic_offsite_repo: "{{ offsite_restic_repo | default('') }}"   # e.g. b2:bucket:lab — set via host/group vars or Vault; creds in /etc/restic/offsite.env
+
+    # --- k3s etcd snapshot replication ---
+    k3s_snapshot_dir: /var/lib/rancher/k3s/server/db/snapshots  # k3s writes here (NVMe)
+    etcd_snapshot_dest: "{{ cold_primary_mount }}/k3s-etcd-snapshots"
+    etcd_snapshot_keep: 30            # ~15 days at k3s' 12h cadence; ~1 GB at 32 MB each
+    etcd_snapshot_min_bytes: 1048576  # 1 MiB — a real snapshot is ~30 MB; 4 KB was the bug
+    etcd_snapshot_max_age_seconds: 90000  # 25h, matching the LabBackupEtcdSilent alert
+
+    # --- Retention for the cold-sec copy (M-new-1) ---
+    # Deliberately DEEPER than the primary's 7/4/6: cold-sec is the long-history
+    # archive, not a mirror. Until 2026-07-25 it was never pruned at all.
+    copy_keep_daily: 14
+    copy_keep_weekly: 8
+    copy_keep_monthly: 12
+
+    # --- Weekly verification ---
+    cloud_env_file: /etc/restic/cloud.env   # written by backup-cloud.yml
+    cloud_stage_dir: /var/tmp/backup-cloud-stage  # must match backup-cloud.yml's TMPDIR
+    verify_max_snapshot_age_seconds: 172800 # 48h — weekly check, daily backups
   tasks:
     - name: Install restic
       ansible.builtin.package:
@@ -26,6 +49,14 @@
         mode: "0700"
 
     # --- NAS data backup (restic, daily) ---
+    - name: Render restic copy-to-secondary script
+      ansible.builtin.template:
+        src: ../templates/backup-nas-copy.sh.j2
+        dest: /usr/local/sbin/backup-nas-copy.sh
+        owner: root
+        group: root
+        mode: "0750"
+
     - name: Render restic backup service + timer
       ansible.builtin.template:
         src: "../templates/{{ item }}.j2"
@@ -35,8 +66,16 @@
         - backup-nas.service
         - backup-nas.timer
 
-    # --- MicroShift state backup (weekly, maintenance window) ---
-    - name: Render etcd/data backup service + timer
+    # --- k3s etcd snapshot replication (daily) ---
+    - name: Render etcd snapshot copy script
+      ansible.builtin.template:
+        src: ../templates/backup-etcd.sh.j2
+        dest: /usr/local/sbin/backup-etcd.sh
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Render etcd backup service + timer
       ansible.builtin.template:
         src: "../templates/{{ item }}.j2"
         dest: "/etc/systemd/system/{{ item }}"
@@ -55,6 +94,24 @@
         - backup-offsite.service
         - backup-offsite.timer
 
+    # --- Weekly verification that the backups are real (not merely running) ---
+    - name: Render backup verification script
+      ansible.builtin.template:
+        src: ../templates/backup-verify.sh.j2
+        dest: /usr/local/sbin/backup-verify.sh
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Render backup verification service + timer
+      ansible.builtin.template:
+        src: "../templates/{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: "0644"
+      loop:
+        - backup-verify.service
+        - backup-verify.timer
+
     - name: Reload systemd
       ansible.builtin.systemd:
         daemon_reload: true
@@ -68,3 +125,4 @@
         - backup-nas.timer
         - backup-etcd.timer
         - backup-offsite.timer
+        - backup-verify.timer

@@ -9,7 +9,8 @@
 #   2. Create checks with the recommended settings below:
 #        backup-cloud   Period 25h,  Grace 1h   (daily 03:00 UTC on h4-core)
 #        backup-nas     Period 25h,  Grace 1h   (daily 01:30 UTC on h4-core)
-#        backup-etcd    Period 8d,   Grace 4h   (weekly on h4-core)
+#        backup-etcd    Period 25h,  Grace 1h   (daily 00:30 UTC on h4-core)
+#        backup-verify  Period 8d,   Grace 12h  (weekly Sun 04:00 UTC on h4-core)
 #        backup-vault   Period 25h,  Grace 1h   (daily 02:30 UTC on rpi5)
 #        h4-core        Period 5min, Grace 5min (host-alive heartbeat)
 #   3. Store all ping URLs in Vault:
@@ -40,6 +41,7 @@
       - backup-cloud
       - backup-nas
       - backup-etcd
+      - backup-verify
       - h4-core
 
   tasks:
@@ -74,6 +76,11 @@
         owner: root
         group: root
       loop: "{{ h4_checks }}"
+      # Skip checks that have no URL in Vault yet, so adding a new check to
+      # h4_checks does not break the play before the operator has created the
+      # healthchecks.io check and run `vault kv patch secret/lab/healthchecks`.
+      # hc-ping already no-ops safely when a .url file is absent.
+      when: item in hc
       no_log: true
 
     - name: Install hc-ping helper
@@ -110,6 +117,7 @@
         - backup-cloud
         - backup-nas
         - backup-etcd
+        - backup-verify
 
     - name: Install healthchecks drop-ins for H4 backup services
       ansible.builtin.copy:
@@ -124,6 +132,7 @@
         - backup-cloud
         - backup-nas
         - backup-etcd
+        - backup-verify
       notify: reload systemd daemon
 
     - name: Install h4-heartbeat systemd service

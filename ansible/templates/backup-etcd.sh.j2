@@ -1,0 +1,108 @@
+#!/bin/bash
+# {{ ansible_managed | default('Managed by Ansible — do not edit by hand') }}
+#
+# Replicate k3s embedded-etcd snapshots onto the cold tier.
+#
+# k3s takes its own etcd snapshots on a schedule (default every 12h, retention 5)
+# into ${SRC} on the NVMe. That is the *same failure domain* as the cluster they
+# protect, so this script's only job is to copy them onto the cold mirror. It does
+# NOT take snapshots itself — k3s owns that.
+#
+# History (2026-07-25): this unit previously ran
+#   sqlite3 /var/lib/rancher/k3s/server/db/state.db ".backup ..."
+# which was correct only while k3s used the SQLite datastore. The 2026-07-02 HA
+# migration switched the H4 to embedded etcd and renamed state.db to
+# state.db.migrated. sqlite3 then silently recreated an empty state.db and emitted
+# 4 KB "backups" every week while still exiting 0 — so the unit reported success,
+# healthchecks.io stayed green, and backup-cloud shipped the empty files offsite.
+# Every failure path below therefore exits non-zero on purpose: a backup that
+# cannot prove it worked must fail loudly.
+#
+# NOTE FOR EDITORS: this file is a Jinja2 template. Do not use bash's array-length
+# syntax (dollar-brace-hash-name) here — brace followed by hash opens a Jinja
+# comment and the template fails to render with "Missing end of comment tag".
+# That is why the retention logic below uses a mktemp listing rather than an array.
+
+set -euo pipefail
+
+SRC={{ k3s_snapshot_dir | quote }}
+DEST={{ etcd_snapshot_dest | quote }}
+KEEP={{ etcd_snapshot_keep }}
+MIN_BYTES={{ etcd_snapshot_min_bytes }}
+MAX_AGE={{ etcd_snapshot_max_age_seconds }}
+
+if [ ! -d "$SRC" ]; then
+  echo "FAIL: k3s snapshot dir $SRC does not exist." >&2
+  echo "      Is this host still an etcd server node? Check:" >&2
+  echo "        kubectl get node \$(hostname) -o jsonpath='{.metadata.labels}'" >&2
+  exit 1
+fi
+
+mkdir -p "$DEST"
+
+# ---- Copy anything not already on cold ------------------------------------
+# k3s retains only ~5 snapshots (2.5 days at the 12h default), so a daily run
+# that copies every not-yet-present file captures the full series without gaps.
+shopt -s nullglob
+copied=0
+seen=0
+for src_file in "$SRC"/etcd-snapshot-*; do
+  seen=$((seen + 1))
+  base=$(basename "$src_file")
+  [ -e "$DEST/$base" ] && continue
+  # Stage then rename, so an interrupted run never publishes a truncated file.
+  cp -p -- "$src_file" "$DEST/.${base}.partial"
+  mv -- "$DEST/.${base}.partial" "$DEST/$base"
+  copied=$((copied + 1))
+  echo "copied $base"
+done
+
+if [ "$seen" -eq 0 ]; then
+  echo "FAIL: no etcd-snapshot-* files in $SRC — k3s is not producing snapshots." >&2
+  echo "      Check: journalctl -u k3s | grep -i snapshot" >&2
+  exit 1
+fi
+
+# ---- Verify what actually landed ------------------------------------------
+# The old unit's fatal flaw was trusting exit 0. Prove freshness and size instead.
+listing=$(mktemp)
+trap 'rm -f -- "$listing"' EXIT
+ls -1t -- "$DEST"/etcd-snapshot-* > "$listing" 2>/dev/null || true
+
+count=$(wc -l < "$listing" | tr -d '[:space:]')
+newest=$(head -n 1 "$listing")
+
+if [ -z "$newest" ]; then
+  echo "FAIL: no snapshots present in $DEST after copy." >&2
+  exit 1
+fi
+
+size=$(stat -c %s -- "$newest")
+age=$(( $(date +%s) - $(stat -c %Y -- "$newest") ))
+
+if [ "$size" -lt "$MIN_BYTES" ]; then
+  echo "FAIL: newest snapshot $newest is only ${size} bytes (min ${MIN_BYTES})." >&2
+  echo "      A 4 KB file here means the empty-SQLite bug has regressed." >&2
+  exit 1
+fi
+
+if [ "$age" -gt "$MAX_AGE" ]; then
+  echo "FAIL: newest snapshot $newest is ${age}s old (max ${MAX_AGE}s)." >&2
+  echo "      k3s has stopped snapshotting even though old files remain." >&2
+  exit 1
+fi
+
+echo "ok: ${count} snapshots on cold, newest $(basename "$newest") (${size} bytes, ${age}s old), ${copied} new this run"
+
+# ---- Retention on the cold copy -------------------------------------------
+# Scoped to the etcd-snapshot-* glob inside $DEST only. Deliberately does NOT
+# match the legacy state-*.db files — those are removed by hand, once, after
+# review. Nothing here touches the restic repos; per CLAUDE.md, restic retention
+# lives exclusively in backup-nas.service.
+if [ "$count" -gt "$KEEP" ]; then
+  tail -n +$((KEEP + 1)) "$listing" | while IFS= read -r old; do
+    [ -n "$old" ] || continue
+    rm -f -- "$old"
+    echo "pruned $(basename "$old")"
+  done
+fi
