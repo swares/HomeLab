@@ -2,8 +2,13 @@
 # Lints YAML, validates schemas, and enforces OPA policies.
 #
 # CI authority: GitLab CI is the authoritative pipeline (full validate/sync-check/rollback).
-# This GitHub Actions workflow runs yaml-lint, schema validation, policy checks, and
-# client-side manifest dry-runs — no cluster access required; runs on GitHub-hosted runners.
+# This GitHub Actions workflow runs yaml-lint, schema validation and policy checks — all
+# genuinely offline, no cluster access required, on GitHub-hosted runners.
+#
+# NOTE: everything here must work with NO cluster. A check that needs the API server
+# will fail on every input, and if it also cannot report failure it will look green
+# forever — which is exactly what happened to the client-side dry-run job removed
+# below on 2026-07-25.
 #
 # No secrets required for these jobs.
 
@@ -102,41 +107,32 @@ jobs:
               --policy ci/policies \
               --data ci/data/exceptions.yaml
 
-  dry-run-apply:
-    name: kubectl dry-run (client-side)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Install kubectl
-        uses: azure/setup-kubectl@v5
-
-      - name: Client-side dry-run all workload manifests
-        # --dry-run=client validates manifest structure without a live cluster.
-        # Server-side validation (schema + admission) runs in GitLab CI on a self-hosted runner.
-        run: |
-          set -eu
-          # Two bugs fixed here on 2026-07-25, and they were hiding each other:
-          #
-          # 1. The loop ran on the right of a pipe, so FAILED=1 was set in a
-          #    subshell and discarded — this job could never fail.
-          # 2. The find had no exclusions, so it fed Helm values.yaml and
-          #    kustomization.yaml to `kubectl apply`, which cannot apply them.
-          #    Those failures were real but invisible because of (1). The
-          #    kubeconform and GitLab dry-run jobs already excluded them.
-          #
-          # Fixing only (1) would have turned this job red on the next commit.
-          find gitops/workloads -name '*.yaml' \
-            ! -name 'values.yaml' \
-            ! -name 'kustomization.yaml' \
-            -print > /tmp/manifests
-          failed=0
-          while IFS= read -r f; do
-            if ! out=$(kubectl apply --dry-run=client -f "$f" 2>&1); then
-              echo "FAIL: $f"
-              echo "$out" | sed 's/^/    /'
-              failed=1
-            fi
-          done < /tmp/manifests
-          [ "$failed" -eq 0 ] || { echo "Dry-run failed."; exit 1; }
-          echo "All $(wc -l < /tmp/manifests) manifests passed client-side dry-run."
+  # REMOVED 2026-07-25: `kubectl dry-run (client-side)`.
+  #
+  # The job claimed to "validate manifest structure without a live cluster". It
+  # cannot. `kubectl apply --dry-run=client` downloads the OpenAPI schema from the
+  # API server to validate against, so on a GitHub-hosted runner with no cluster
+  # every single file failed with:
+  #
+  #   failed to download openapi: Get "http://localhost:8080/openapi/v2":
+  #   dial tcp [::1]:8080: connect: connection refused
+  #
+  # It had therefore failed on every manifest since the day it was written, and
+  # nobody knew, because the loop ran in a subshell and the job could not report
+  # failure (see C4 in docs/REVIEW-2026-07-24.md). Making the job capable of
+  # failing is what finally surfaced it.
+  #
+  # It is deleted rather than patched with --validate=false, which would skip the
+  # OpenAPI check entirely and reduce the job to "is this parseable YAML" — already
+  # covered by yaml-lint, and covered far better by kubeconform.
+  #
+  # Division of responsibility, so nothing is silently uncovered:
+  #   yaml-lint    (here)      — parseable YAML
+  #   kubeconform  (here)      — offline schema validation, k8s 1.36, CRDs skipped
+  #   conftest     (here)      — offline OPA policy (no :latest, no privileged, limits)
+  #   dry-run      (GitLab CI) — --dry-run=server against the real cluster, where
+  #                              CRDs resolve and Kyverno admission actually runs
+  #
+  # If a kubectl-shaped check is ever wanted here again, the useful one is the
+  # Kyverno CLI (`kyverno apply gitops/workloads/kyverno/ --resource gitops/`),
+  # which evaluates the real ClusterPolicies offline. See H17.
