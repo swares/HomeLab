@@ -92,7 +92,19 @@ else
   fi
   rm -f /tmp/verify-cloud.$$
 
-  etcd_in_cloud=$(restic ls latest "$ETCD_DIR" 2>/dev/null | grep -c 'etcd-snapshot-')
+  # List the whole snapshot ONCE, then match with path-anchored patterns.
+  #
+  # Deliberately NOT using restic's directory-filter form (`restic ls latest <dir>`).
+  # Current restic documents it, but 0.12.1 — what the H4 runs — does not behave the
+  # same way: on 2026-07-25 the filtered form reported the k3s server token missing
+  # from a snapshot that demonstrably contained it, while the unfiltered listing
+  # found it immediately. Anchoring the grep to the full path gives the same
+  # precision without depending on version-specific filter semantics.
+  # These cloud snapshots are small (hundreds of entries), so listing all is cheap.
+  cloud_listing=$(mktemp)
+  restic ls latest > "$cloud_listing" 2>/dev/null || true
+
+  etcd_in_cloud=$(grep -c "^${ETCD_DIR}/etcd-snapshot-" "$cloud_listing" || true)
   if [ "${etcd_in_cloud:-0}" -lt 1 ]; then
     fail "newest R2 snapshot contains NO etcd-snapshot-* files under $ETCD_DIR"
   else
@@ -102,11 +114,13 @@ else
   # The k3s server token must be in the backup or the etcd snapshots above cannot
   # be restored onto new hardware — k3s derives the datastore's encryption key
   # from it. Until 2026-07-25 it was backed up nowhere.
-  if restic ls latest {{ cloud_stage_dir | quote }} 2>/dev/null | grep -q 'k3s-server-token'; then
+  if grep -q "^{{ cloud_stage_dir }}/k3s-server-token$" "$cloud_listing"; then
     pass "newest R2 snapshot contains the k3s server token"
   else
     fail "newest R2 snapshot has NO k3s server token — etcd snapshots are unrestorable on new hardware"
   fi
+
+  rm -f "$cloud_listing"
 
   cloud_count=$(restic snapshots --tag cloud --json 2>/dev/null | grep -o '"time":' | wc -l)
   echo "info: R2 holds ${cloud_count} cloud snapshots"

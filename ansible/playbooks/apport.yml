@@ -1,0 +1,103 @@
+---
+# apport.yml — disable Ubuntu's crash reporter on all Linux hosts.
+#
+# WHY: on 2026-07-25 apport was found pegged at 100% of a CPU core on n150-2,
+# having accumulated 3 weeks and 2 days of CPU time against 26 days of uptime —
+# so it had been spinning since roughly three days after boot. It wedged systemd
+# badly enough that `systemctl` timed out, `reboot` could not reach init
+# ("Failed to talk to init daemon"), and journald logged
+# "Failed to send WATCHDOG=1 notification: Transport endpoint is not connected"
+# every 90 seconds. k3s was down on the node, taking etcd quorum to 2 of 3 and
+# stranding lldap (local-path PVC, cannot reschedule) which took SSO with it.
+# Recovery required a SysRq forced reboot. /var/crash was empty, so it was stuck
+# on a report it had already cleaned up.
+#
+# apport provides essentially no value on a headless cluster node — its purpose is
+# to prompt a desktop user to file a bug — and it has now caused an outage. This is
+# a companion to journald.yml, which caps journal growth after a similar
+# self-inflicted incident on 2026-07-23.
+#
+# Run FROM THE REPO ROOT (n150-1/n150-2 are in kvm_hosts, whose group_vars are
+# vaulted, so the vault password is required or fact-gathering fails on exactly
+# the two hosts this playbook exists for):
+#   ansible-playbook -i ansible/inventory/hosts.yml ansible/playbooks/apport.yml \
+#     --vault-password-file ansible/.vault_pass --check --diff
+#   ansible-playbook -i ansible/inventory/hosts.yml ansible/playbooks/apport.yml \
+#     --vault-password-file ansible/.vault_pass
+#
+# From inside ansible/ the path is just .vault_pass, and ansible.cfg supplies it
+# automatically — Ansible only auto-loads ansible.cfg from the current directory,
+# which is why repo-root invocations need every flag spelled out.
+#
+# Limit to a single host:
+#   ansible-playbook ... -l n150-2
+
+- name: Disable the apport crash reporter on all Linux hosts
+  hosts: all:!x86_nodes:!embedded:!standalone_vms
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Skip non-systemd hosts
+      ansible.builtin.meta: end_host
+      when: ansible_service_mgr != "systemd"
+
+    - name: Skip non-Debian-family hosts
+      ansible.builtin.meta: end_host
+      when: ansible_os_family != "Debian"
+
+    - name: Check whether apport is installed
+      ansible.builtin.stat:
+        path: /etc/default/apport
+      register: apport_defaults
+
+    - name: Skip hosts without apport
+      ansible.builtin.meta: end_host
+      when: not apport_defaults.stat.exists
+
+    # Report whether a runaway apport is present right now, so a --check run
+    # doubles as a fleet-wide audit for the n150-2 failure mode.
+    - name: Look for a running apport process
+      ansible.builtin.shell:
+        cmd: |
+          set -o pipefail
+          ps -eo pcpu,etimes,comm --sort=-pcpu | awk '$3 == "apport" {print; found=1} END {exit !found}'
+        executable: /bin/bash
+      register: apport_running
+      changed_when: false
+      failed_when: false
+      # Read-only, so run it even under --check. Without this the task is skipped
+      # in check mode, the registered result has no rc/stdout, and the warning
+      # below fired with an empty process list — a false alarm that defeats the
+      # point of using --check as a fleet audit.
+      check_mode: false
+
+    - name: Warn if apport is currently running
+      ansible.builtin.debug:
+        msg: >-
+          apport is RUNNING on {{ inventory_hostname }}:
+          {{ apport_running.stdout | trim }}
+          — disabling the service stops it starting again, but an already-wedged
+          process must be killed by hand (see docs/RUNBOOK.md).
+      when:
+        - apport_running.rc is defined
+        - apport_running.rc == 0
+        - (apport_running.stdout | default('') | trim) != ''
+
+    - name: Disable apport in /etc/default/apport
+      ansible.builtin.lineinfile:
+        path: /etc/default/apport
+        regexp: '^enabled='
+        line: 'enabled=0'
+        mode: "0644"
+
+    - name: Stop and disable the apport service
+      ansible.builtin.systemd:
+        name: apport.service
+        enabled: false
+        state: stopped
+      failed_when: false   # not present on every Ubuntu variant; the file above is authoritative
+
+    - name: Report result
+      ansible.builtin.debug:
+        msg: "apport disabled on {{ inventory_hostname }} ({{ ansible_distribution }} {{ ansible_distribution_version }})"

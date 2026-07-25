@@ -24,7 +24,7 @@ prove any of it works. Supersedes the backup and restore sections of
 | `backup-vault` | daily 02:30 | Vault raft snapshot (on rpi5) | `/mnt/cold-8t/vault-snapshots/` | 30 days |
 | `lldap-backup` (k8s CronJob) | daily 02:30 | lldap `users.db` | restic → `/mnt/cold-8t/restic` via NFS | via `backup-nas` policy |
 | Immich DB dump (k8s CronJob) | daily 01:30 | `pg_dump` | `/mnt/cold-8t/immich/backups/` | captured by `backup-nas` |
-| `backup-cloud` | daily 03:00 | etcd snapshots, Vault snapshots, lldap DB, Postgres dumps (Authelia/Immich/Semaphore), OpenTofu state, **k3s server token** | restic → Cloudflare R2 `homelab-backup` | 7d / 4w / 3m |
+| `backup-cloud` | daily 03:00 | **k3s server token** and etcd snapshots first (no cluster dependency), then Vault snapshots, lldap DB, Postgres dumps (Authelia/Immich/Semaphore), OpenTofu state | restic → Cloudflare R2 `homelab-backup` | 7d / 4w / 3m |
 | `backup-verify` | weekly Sun 04:00 | *verification only, read-only* | — | — |
 
 `backup-offsite.timer` also exists but is a **no-op** — `restic_offsite_repo`
@@ -67,6 +67,26 @@ Where it lives:
 Anyone holding both can extract every secret and the cluster CA private keys. They
 are co-located in the R2 repo only because that repo is encrypted as a whole and
 its password is not stored in R2. Treat the R2 restic password as a crown jewel.
+
+### A partial cloud backup is normal, and it tells you so
+
+`backup-cloud` is deliberately **not** all-or-nothing. Items with no cluster
+dependency — the k3s server token and the etcd snapshots — are staged first, and
+each `kubectl`-dependent dump is individually non-fatal. The restic backup always
+runs; the script exits non-zero at the end if anything was missed, which suppresses
+the healthchecks.io ping so you get told.
+
+So a failure here means *"the backup ran but is incomplete"*, not *"there is no
+backup"*. Read the `WARN:` lines to see which component is missing.
+
+This shape exists because of 2026-07-25: a wedged crash reporter on n150-2 made one
+pod unreachable, and because the dumps ran first under `set -e`, a single
+`kubectl cp` failure aborted the whole run — costing a day of offsite cluster-state
+backups for a reason that had nothing to do with cluster state.
+
+Postgres dumps are checked by **decompressed** size, not file size. An empty
+`pg_dump` still gzips to a ~20-byte archive that passes `gzip -t` — the same
+well-formed-but-empty shape as the 4 KB etcd snapshots.
 
 ### The break-glass envelope
 
