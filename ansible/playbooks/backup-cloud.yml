@@ -111,7 +111,21 @@
           set -euo pipefail
           export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
 
-          TMPDIR=$(mktemp -d -t backup-cloud-XXXXXX)
+          # STABLE staging path — deliberately NOT mktemp.
+          #
+          # This directory is passed to `restic backup` as a source, so its name
+          # becomes part of the snapshot's path list. With mktemp the name was
+          # different every run (/tmp/backup-cloud-PX4ZQS, -pOvw3A, ...), and
+          # since `restic forget` groups by host+paths by default, every snapshot
+          # formed its own retention group. --keep-daily 7 --keep-weekly 4
+          # --keep-monthly 3 then dutifully kept the single member of each group,
+          # so R2 retention deleted nothing, ever, on a 10 GB free tier.
+          # A fixed path also means every snapshot has the same tree layout, so
+          # restore procedures can hardcode paths. See docs/BACKUP-RESTORE.md.
+          TMPDIR=/var/tmp/backup-cloud-stage
+          rm -rf "$TMPDIR"
+          mkdir -p "$TMPDIR"
+          chmod 700 "$TMPDIR"
           trap "rm -rf $TMPDIR" EXIT
 
           log() { echo "[$(date -u +%Y-%m-%dT%H:%M:%SZ)] $*"; }
@@ -146,6 +160,24 @@
             --no-verify-ssl \
             --quiet
 
+          # The k3s server token is REQUIRED to restore any etcd snapshot onto new
+          # hardware: k3s derives an AES-256 key from it (PBKDF2) to encrypt
+          # confidential data — CA private keys, bootstrap data — inside the
+          # datastore itself. Without it the snapshots in this very backup are
+          # unusable. It was previously backed up nowhere at all; it existed only on
+          # the three server nodes' local disks, so a total-site loss meant every
+          # etcd snapshot was decorative.
+          #
+          # SECURITY TRADEOFF, read before changing: snapshot + token together is
+          # full cluster compromise (see docs.k3s.io/cli/etcd-snapshot#security).
+          # They are co-located here only because this restic repo is encrypted as a
+          # whole, and its password lives in Vault and on the H4 — not in R2. Anyone
+          # able to decrypt this repo already holds the keys to everything in it.
+          # The offline break-glass envelope described in docs/BACKUP-RESTORE.md is
+          # still the primary recovery path; this is the convenience copy.
+          log "Copying k3s server token (required to restore etcd snapshots)..."
+          install -m 0600 /var/lib/rancher/k3s/server/token "$TMPDIR/k3s-server-token"
+
           # Build source list — include vault-snapshots only if the directory exists
           SOURCES=(
             /mnt/cold-8t/k3s-etcd-snapshots
@@ -157,7 +189,11 @@
           restic backup "${SOURCES[@]}" --tag cloud --host h4-core
 
           log "Pruning old cloud snapshots..."
-          restic forget --prune \
+          # --group-by host,tags (not the default host,paths): all cloud snapshots
+          # share host+tag, so they form ONE retention series. Belt-and-braces
+          # alongside the stable staging path above — if a future source path ever
+          # varies again, retention still works.
+          restic forget --prune --group-by host,tags \
             --keep-daily 7 --keep-weekly 4 --keep-monthly 3
 
           log "Cloud backup complete."

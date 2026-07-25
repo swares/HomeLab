@@ -1,0 +1,12 @@
+[Unit]
+Description=Weekly backup verification
+
+[Timer]
+# Sunday 04:00 — after backup-etcd (00:30), backup-nas (01:30), backup-vault
+# (02:30) and backup-cloud (03:00), so it inspects the current night's results.
+OnCalendar=Sun *-*-* 04:00:00
+RandomizedDelaySec=300
+Persistent=true
+
+[Install]
+WantedBy=timers.target
