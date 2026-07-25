@@ -45,11 +45,26 @@ yaml-lint:
   before_script: []   # no kubeconfig needed
   script:
     - |
+      set -eu
       echo "==> Linting all YAML under gitops/"
-      find gitops/ -name '*.yaml' -o -name '*.yml' | while read f; do
-        yq e 'true' "$f" > /dev/null || { echo "FAIL: $f"; exit 1; }
-      done
-      echo "All YAML files are valid."
+      # DO NOT put this loop on the right-hand side of a pipe. `find ... | while`
+      # runs the loop body in a SUBSHELL — so the `exit 1` that used to be here
+      # exited only the subshell, the loop carried on, and the job reported
+      # success regardless. Invalid YAML passed CI unchallenged until 2026-07-25.
+      # Redirecting from a file keeps the loop in the current shell.
+      # (Written for POSIX sh, not bash: the runner image's shell is not guaranteed,
+      # so no process substitution here.)
+      find gitops/ \( -name '*.yaml' -o -name '*.yml' \) -print > /tmp/yaml-files
+      failed=0
+      while IFS= read -r f; do
+        if ! out=$(yq e 'true' "$f" 2>&1 >/dev/null); then
+          echo "FAIL: $f"
+          echo "$out" | sed 's/^/    /'
+          failed=1
+        fi
+      done < /tmp/yaml-files
+      [ "$failed" -eq 0 ] || { echo "YAML lint failed."; exit 1; }
+      echo "All YAML files are valid ($(wc -l < /tmp/yaml-files) files)."
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == "main"'
@@ -58,16 +73,28 @@ dry-run-apply:
   stage: validate
   script:
     - |
+      set -eu
       echo "==> Dry-run kubectl apply on every workload manifest"
-      FAILED=0
-      # Skip Helm values files and kustomization overlays — kubectl can't apply them directly
+      # DO NOT put this loop on the right-hand side of a pipe. `find ... | while`
+      # runs the loop body in a SUBSHELL, so FAILED=1 was discarded when the loop
+      # ended and the [ "$FAILED" -eq 0 ] test below always saw 0. This job — the
+      # server-side gate, the one with real cluster admission behind it — could
+      # not fail on any input until 2026-07-25.
+      # Skip Helm values files and kustomization overlays — kubectl can't apply them directly.
       find gitops/workloads -name '*.yaml' \
         ! -name 'values.yaml' \
-        ! -name 'kustomization.yaml' | while read f; do
-        echo "  checking $f"
-        kubectl apply --dry-run=server -f "$f" || FAILED=1
-      done
-      [ "$FAILED" -eq 0 ] || { echo "Dry-run failed — check output above."; exit 1; }
+        ! -name 'kustomization.yaml' \
+        -print > /tmp/manifests
+      failed=0
+      while IFS= read -r f; do
+        if ! out=$(kubectl apply --dry-run=server -f "$f" 2>&1); then
+          echo "FAIL: $f"
+          echo "$out" | sed 's/^/    /'
+          failed=1
+        fi
+      done < /tmp/manifests
+      [ "$failed" -eq 0 ] || { echo "Dry-run failed — check output above."; exit 1; }
+      echo "All $(wc -l < /tmp/manifests) manifests passed server-side dry-run."
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
     - if: '$CI_COMMIT_BRANCH == "main"'

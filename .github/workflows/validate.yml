@@ -30,12 +30,26 @@ jobs:
 
       - name: Lint all YAML under gitops/
         run: |
-          FAILED=0
-          find gitops/ -name '*.yaml' -o -name '*.yml' | while read f; do
-            yq e 'true' "$f" > /dev/null || { echo "FAIL: $f"; FAILED=1; }
-          done
-          [ "$FAILED" -eq 0 ] || exit 1
-          echo "All YAML valid."
+          set -eu
+          # DO NOT put this loop on the right-hand side of a pipe.
+          # `find ... | while read` runs the loop body in a SUBSHELL, so any
+          # variable set inside it — including the failure flag — is discarded
+          # when the loop ends. This job therefore passed unconditionally on
+          # every commit until 2026-07-25, including ones with invalid YAML.
+          # Redirecting from a file keeps the loop in the current shell.
+          # Parenthesised -name group: without it, precedence makes the implicit
+          # -print apply inconsistently across the -o branches.
+          find gitops/ \( -name '*.yaml' -o -name '*.yml' \) -print > /tmp/yaml-files
+          failed=0
+          while IFS= read -r f; do
+            if ! out=$(yq e 'true' "$f" 2>&1 >/dev/null); then
+              echo "FAIL: $f"
+              echo "$out" | sed 's/^/    /'
+              failed=1
+            fi
+          done < /tmp/yaml-files
+          [ "$failed" -eq 0 ] || { echo "YAML lint failed."; exit 1; }
+          echo "All YAML valid ($(wc -l < /tmp/yaml-files) files)."
 
   kubeconform:
     name: Schema validation (kubeconform)
@@ -101,9 +115,28 @@ jobs:
         # --dry-run=client validates manifest structure without a live cluster.
         # Server-side validation (schema + admission) runs in GitLab CI on a self-hosted runner.
         run: |
-          FAILED=0
-          find gitops/workloads -name '*.yaml' | while read f; do
-            echo "  checking $f"
-            kubectl apply --dry-run=client -f "$f" 2>&1 || FAILED=1
-          done
-          [ "$FAILED" -eq 0 ] || { echo "Dry-run failed."; exit 1; }
+          set -eu
+          # Two bugs fixed here on 2026-07-25, and they were hiding each other:
+          #
+          # 1. The loop ran on the right of a pipe, so FAILED=1 was set in a
+          #    subshell and discarded — this job could never fail.
+          # 2. The find had no exclusions, so it fed Helm values.yaml and
+          #    kustomization.yaml to `kubectl apply`, which cannot apply them.
+          #    Those failures were real but invisible because of (1). The
+          #    kubeconform and GitLab dry-run jobs already excluded them.
+          #
+          # Fixing only (1) would have turned this job red on the next commit.
+          find gitops/workloads -name '*.yaml' \
+            ! -name 'values.yaml' \
+            ! -name 'kustomization.yaml' \
+            -print > /tmp/manifests
+          failed=0
+          while IFS= read -r f; do
+            if ! out=$(kubectl apply --dry-run=client -f "$f" 2>&1); then
+              echo "FAIL: $f"
+              echo "$out" | sed 's/^/    /'
+              failed=1
+            fi
+          done < /tmp/manifests
+          [ "$failed" -eq 0 ] || { echo "Dry-run failed."; exit 1; }
+          echo "All $(wc -l < /tmp/manifests) manifests passed client-side dry-run."
