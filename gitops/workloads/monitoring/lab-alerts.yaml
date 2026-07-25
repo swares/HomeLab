@@ -133,8 +133,14 @@ spec:
         - alert: LabVMUnexpectedShutoff
           # State 5=shut off.  Fires only for VMs that should always be running.
           # Adjust the domain filter to match your always-on VMs.
+          #
+          # Corrected 2026-07-25: this filtered on `ldap-1`, a VM decommissioned
+          # on 2026-07-04 when lldap moved into k3s. The rule had therefore been
+          # dead for three weeks — it could never fire, so an actual always-on VM
+          # shutting down would have gone unnoticed. gitlab-1 is now the only
+          # always-on VM in the lab (see README fleet table).
           expr: |
-            libvirt_domain_state_code{domain=~"ldap-1"} == 5
+            libvirt_domain_state_code{domain=~"gitlab-1"} == 5
           for: 5m
           labels:
             severity: warning

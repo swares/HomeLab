@@ -127,12 +127,25 @@ spec:
                 # Keeping them here caused port 9100 conflicts with the DaemonSet.
                 static_configs:
                   - targets:
+                      # Corrected 2026-07-25 (H28). Previously this list scraped
+                      # ldap-1 (192.168.1.70), decommissioned 2026-07-04 — so
+                      # LabExternalHostDown had been firing critical for ~3 weeks,
+                      # training the eye to ignore it. Meanwhile Vault, the Pi-hole
+                      # secondary, the 4th DNS server and the build agent were not
+                      # scraped at all: real outages there were invisible.
+                      # opi-zero2w-4 was already listed and has in fact been
+                      # unreachable since at least 2026-07-25 (M-new-5) — the
+                      # target was right, nothing was routing the alert anywhere.
                       - 192.168.1.50:9100   # gitlab-1 (GitLab CE VM)
-                      - 192.168.1.70:9100   # ldap-1 (lldap VM)
-                      - 192.168.1.148:9100  # octopi (DNS primary)
-                      - 192.168.1.184:9100  # opi-zero2w-1 (DNS secondary)
-                      - 192.168.1.188:9100  # opi-zero2w-2 (MQTT)
-                      - 192.168.1.99:9100   # opi-zero2w-4
+                      - 192.168.1.148:9100  # octopi (DNS primary, Pi-hole)
+                      - 192.168.1.116:9100  # rpi4b (DNS secondary, Pi-hole)
+                      - 192.168.1.184:9100  # opi-zero2w-1 (DNS tertiary, dnsmasq)
+                      - 192.168.1.217:9100  # opi-zero2w-3 (DNS quaternary, dnsmasq)
+                      - 192.168.1.188:9100  # opi-zero2w-2 (MQTT primary)
+                      - 192.168.1.99:9100   # opi-zero2w-4 (MQTT secondary/HA bridge)
+                      - 192.168.1.128:9100  # rpi5 (HashiCorp Vault) — every
+                                            # ExternalSecret in the lab depends on it
+                      - 192.168.1.64:9100   # xu3-1 (build agent)
                 relabel_configs:
                   - source_labels: [__address__]
                     regex: '([^:]+):\d+'
@@ -155,6 +168,12 @@ spec:
           alertmanagerSpec:
             nodeSelector:
               kubernetes.io/hostname: n150-1
+            # Mounts the ExternalSecret at /etc/alertmanager/secrets/<name>/<key>
+            # so receivers can reference URLs via url_file and keep the ntfy topic
+            # (which IS the password) out of git.
+            # See gitops/workloads/monitoring/alertmanager-externalsecret.yaml
+            secrets:
+              - alertmanager-endpoints
             storage:
               volumeClaimTemplate:
                 spec:
@@ -163,8 +182,30 @@ spec:
                   resources:
                     requests:
                       storage: 2Gi
-          # Routing: all real alerts → m5stack-adapter webhook.
-          # Watchdog and InfoInhibitor go to the null receiver (expected noise).
+          # ── Alert routing ────────────────────────────────────────────────────
+          #
+          # Until 2026-07-25 every alert went to exactly one place: a webhook to
+          # an M5Stack display on the LAN. If you were asleep, out, or the display
+          # was off, the alert was discarded — silently. A crash reporter burned a
+          # CPU core on n150-1 for three weeks and nothing said a word.
+          #
+          # Three destinations now, each for a different failure class:
+          #
+          #   m5stack   — everything, ambient. Unchanged; still the at-a-glance view.
+          #   ntfy      — severity=critical only, to your phone. Low volume so it
+          #               stays trustworthy; priority/tags are set in the Vault URL.
+          #   watchdog  — the Watchdog alert, which kube-prometheus-stack fires
+          #               CONTINUOUSLY by design, forwarded to a healthchecks.io
+          #               check. This is the one that watches the watcher: if
+          #               Prometheus, Alertmanager, or n150-1 dies, the pings stop
+          #               and healthchecks.io alerts from OUTSIDE the lab.
+          #               Previously Watchdog was routed to 'null' — discarding
+          #               precisely the signal that proves monitoring is alive.
+          #
+          # Note what this does and does not fix: Alertmanager runs IN the cluster,
+          # so a new receiver only helps when the cluster is up. Cluster-down is
+          # covered by the Watchdog route above and by healthchecks.io's h4-core
+          # heartbeat. See docs/REVIEW-2026-07-24.md H25.
           config:
             global:
               resolve_timeout: 5m
@@ -180,16 +221,54 @@ spec:
               repeat_interval: 4h
               receiver: 'null'
               routes:
+                # Dead-man's switch. Watchdog always fires, so this route always
+                # has traffic; repeat_interval drives the ping cadence. 5m repeat
+                # against a 15m healthchecks Period leaves room for two missed
+                # pings before it alarms — tight enough to notice, loose enough
+                # not to flap on a slow reconcile.
                 - matchers:
-                    - alertname =~ "InfoInhibitor|Watchdog"
+                    - alertname = "Watchdog"
+                  receiver: watchdog
+                  group_wait: 0s
+                  group_interval: 5m
+                  repeat_interval: 5m
+                  continue: false
+
+                - matchers:
+                    - alertname = "InfoInhibitor"
                   receiver: 'null'
+
+                # Critical goes to BOTH the phone and the display. `continue: true`
+                # is what makes the m5stack route below still see it — without it,
+                # Alertmanager stops at the first matching route and the display
+                # would go quiet for exactly the alerts that matter most.
+                - matchers:
+                    - severity = "critical"
+                  receiver: ntfy
+                  continue: true
+
                 - receiver: m5stack
             receivers:
               - name: 'null'
+
               - name: m5stack
                 webhook_configs:
                   - url: 'http://m5stack-adapter.monitoring.svc.cluster.local:8080/webhook'
                     send_resolved: true
+
+              # url_file, not url: keeps the ntfy topic out of git. The topic is
+              # the only credential ntfy has — anyone who knows it can read every
+              # alert and publish fakes.
+              - name: ntfy
+                webhook_configs:
+                  - url_file: /etc/alertmanager/secrets/alertmanager-endpoints/ntfy-url
+                    send_resolved: true
+                    max_alerts: 5
+
+              - name: watchdog
+                webhook_configs:
+                  - url_file: /etc/alertmanager/secrets/alertmanager-endpoints/watchdog-url
+                    send_resolved: false
 
         # ---- Node exporter — runs on all nodes ----
         prometheus-node-exporter:
