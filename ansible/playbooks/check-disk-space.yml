@@ -1,0 +1,134 @@
+---
+# Read-only disk-space check for the k3s nodes.
+#
+# Why this exists: on 2026-07-26 n150-1 hit DiskPressure and evicted whisper pods.
+# The root LV was still the Ubuntu installer's 50G default on a 476G disk, with
+# ~24G unallocated in the volume group the whole time. Nothing surfaced that until
+# pods started dying, and the first instinct was to trim Prometheus retention —
+# the wrong lever. This playbook makes both the usage AND the unallocated LVM
+# space visible before the kubelet has to act.
+#
+# Thresholds are chosen against kubelet defaults: the hard eviction signal is
+# nodefs.available<10% (i.e. 90% used), and imagefs GC starts at 85%. Warning at
+# 75% leaves room to act deliberately rather than under pressure.
+#
+# Run (safe any time — makes no changes, works under --check):
+#   ansible-playbook -i inventory/hosts.yml playbooks/check-disk-space.yml
+#
+# Fail the run in CI/cron instead of just reporting:
+#   ansible-playbook -i inventory/hosts.yml playbooks/check-disk-space.yml \
+#     -e disk_check_enforce=true
+#
+# Include a slow per-directory breakdown on hosts over the warn threshold:
+#   ... -e disk_check_deep=true
+#
+- name: Check disk headroom on k3s nodes
+  hosts: k3s_server:k3s_agents
+  become: true
+  gather_facts: true
+
+  vars:
+    disk_warn_percent: 75
+    disk_fail_percent: 85
+    # false → report only (default, so this is safe to run casually).
+    # true  → non-zero exit when a node is over disk_fail_percent.
+    disk_check_enforce: false
+    disk_check_deep: false
+
+  tasks:
+    - name: Select the root filesystem from gathered mounts
+      ansible.builtin.set_fact:
+        root_fs: "{{ ansible_mounts | selectattr('mount', 'equalto', '/') | first }}"
+
+    - name: Compute root filesystem usage
+      ansible.builtin.set_fact:
+        root_used_pct: >-
+          {{ (100 * (root_fs.size_total - root_fs.size_available)
+              / root_fs.size_total) | float | round(1) }}
+        root_avail_gb: "{{ (root_fs.size_available / 1073741824) | float | round(1) }}"
+        root_total_gb: "{{ (root_fs.size_total / 1073741824) | float | round(1) }}"
+
+    # Only the VG backing / matters. Summing every VG on the host is misleading
+    # and, on h4-core, dangerous: its other groups are NAS storage, which
+    # CLAUDE.md puts off-limits. lvs/vgs are absent on non-LVM hosts (the Orange
+    # Pi agents run on eMMC), so failures are tolerated and reported as 0.
+    - name: Identify the volume group backing the root filesystem
+      ansible.builtin.command:
+        cmd: lvs --noheadings -o vg_name {{ root_fs.device }}
+      register: root_vg_out
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Read free space in that volume group only
+      ansible.builtin.command:
+        cmd: vgs --noheadings --nosuffix --units g -o vg_free {{ root_vg_out.stdout | trim }}
+      register: vgs_out
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: root_vg_out.rc == 0 and root_vg_out.stdout | trim | length > 0
+
+    - name: Parse unallocated space in the root volume group
+      ansible.builtin.set_fact:
+        root_vg: "{{ root_vg_out.stdout | trim if root_vg_out.rc == 0 else 'none' }}"
+        vg_free_gb: >-
+          {{ (vgs_out.stdout | trim | float) | round(2)
+             if (vgs_out.rc is defined and vgs_out.rc == 0 and vgs_out.stdout | trim)
+             else 0 }}
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ root_used_pct }}% used
+          ({{ root_avail_gb }}G free of {{ root_total_gb }}G)
+          — unallocated in {{ root_vg }}: {{ vg_free_gb }}G
+          {{ '⚠ OVER WARN THRESHOLD' if root_used_pct | float >= disk_warn_percent | float else '' }}
+
+    # The point of the whole playbook: if a node is tight AND its volume group
+    # has free extents, growing the LV is the cheap fix. Say so explicitly so
+    # nobody reaches for retention tuning or image pruning first.
+    - name: Note that the volume group can absorb the shortfall
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} has {{ vg_free_gb }}G unallocated in {{ root_vg }}
+          (the group backing /). Prefer growing the filesystem over trimming data:
+            sudo lvextend -r -L +<N>G {{ root_fs.device }}
+          (lvextend is an `ask` action — see docs/SECURITY.md. Leave some VG
+          headroom; do not routinely consume 100%FREE.)
+      when:
+        - root_used_pct | float >= disk_warn_percent | float
+        - vg_free_gb | float > 1
+
+    - name: Show largest consumers (slow; opt-in)
+      ansible.builtin.shell:
+        cmd: >-
+          du -xh --max-depth=1 /var/lib 2>/dev/null | sort -rh | head -8
+      register: du_out
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when:
+        - disk_check_deep | bool
+        - root_used_pct | float >= disk_warn_percent | float
+
+    # /var/lib/kubelet bind-mounts the same local-path PV data that
+    # /var/lib/rancher already holds, so these figures double-count. Use df for
+    # the real total; use this only to spot which workload is growing.
+    - name: Report largest consumers
+      ansible.builtin.debug:
+        msg: "{{ du_out.stdout_lines }}"
+      when: du_out.stdout_lines is defined
+
+    - name: Fail when a node is over the threshold
+      ansible.builtin.assert:
+        that:
+          - root_used_pct | float < disk_fail_percent | float
+        fail_msg: >-
+          {{ inventory_hostname }} root filesystem is {{ root_used_pct }}% used
+          ({{ root_avail_gb }}G free). Kubelet begins evicting pods near 90%.
+          {{ vg_free_gb }}G is unallocated in LVM — check `vgs` before trimming
+          Prometheus retention or pruning images.
+        success_msg: "{{ inventory_hostname }} has adequate headroom ({{ root_used_pct }}% used)."
+        quiet: true
+      when: disk_check_enforce | bool
