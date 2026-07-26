@@ -1,11 +1,18 @@
 ---
 # Deploy prometheus-node-exporter on non-cluster Linux hosts.
-# Cluster nodes (h4-core, opi5pro-1/2, rpi5, xu3-1) get node_exporter
-# via the kube-prometheus-stack DaemonSet — exclude them from this playbook.
+#
+# The k3s cluster is h4-core + n150-1/2 (servers) and opi5pro-1/2 (agents).
+# ONLY those nodes get node_exporter via the kube-prometheus-stack DaemonSet.
+# rpi5 (Vault), xu3-1 (build agent) and gitlab-1 (VM) are NOT cluster nodes —
+# an earlier version of this header wrongly listed rpi5 and xu3-1 as cluster
+# nodes, so they were left out of the `node_exporter` inventory group and had
+# no exporter at all while Prometheus scraped them. Corrected 2026-07-26.
 #
 # Supported OS families:
-#   Debian    — ldap-1, n150-1, n150-2, octopi-dns  (apt)
-#   Archlinux — opi-zero2w-{1,2,4}                  (pacman)
+#   Debian    — octopi-dns, rpi4b, rpi5, gitlab-1, opi-zero2w-3  (apt)
+#   Archlinux — opi-zero2w-{1,2,4}                               (pacman)
+#
+# xu3-1 is handled by the second play below (upstream binary, not apt).
 #
 # Run:
 #   ansible-playbook -i inventory/hosts.yml playbooks/node-exporter.yml
@@ -80,3 +87,111 @@
         - ansible_os_family == 'Debian'
         - "'ufw.service' in ansible_facts.services or 'ufw' in ansible_facts.services"
       ignore_errors: true
+
+# ---------------------------------------------------------------------------
+# Hosts whose package manager can't be driven by Ansible modules (see the
+# node_exporter_binary group comment in inventory/hosts.yml). Installs the
+# upstream static binary — same metric names as the DaemonSet, so the
+# lab-health dashboard panels work identically.
+# ---------------------------------------------------------------------------
+- name: Install node_exporter from upstream binary
+  hosts: node_exporter_binary
+  become: true
+  vars:
+    node_exporter_version: "1.12.1"
+    node_exporter_arch: linux-armv7
+    # Pin this. Get it from:
+    #   https://github.com/prometheus/node_exporter/releases/download/v{{ version }}/sha256sums.txt
+    # Leave empty to skip verification (not recommended).
+    node_exporter_checksum: ""
+
+  tasks:
+    - name: Create node_exporter system group
+      ansible.builtin.group:
+        name: node_exporter
+        system: true
+
+    - name: Create node_exporter system user
+      ansible.builtin.user:
+        name: node_exporter
+        group: node_exporter
+        system: true
+        shell: /usr/sbin/nologin
+        create_home: false
+        comment: Prometheus node exporter
+
+    - name: Check installed version
+      ansible.builtin.command: /usr/local/bin/node_exporter --version
+      register: ne_current
+      changed_when: false
+      failed_when: false
+
+    - name: Download and unpack upstream release
+      when: node_exporter_version not in (ne_current.stderr | default('')) + (ne_current.stdout | default(''))
+      block:
+        # Downloaded on the CONTROL node, not the target. xu3-1's source-built
+        # Python 3.11 was compiled without OpenSSL (no libssl-dev at build time),
+        # so any HTTPS fetch there dies with "name 'ssl' is not defined".
+        # Pushing the tarball over the existing SSH connection sidesteps it.
+        - name: Download tarball to control node
+          ansible.builtin.get_url:
+            url: >-
+              https://github.com/prometheus/node_exporter/releases/download/v{{ node_exporter_version }}/node_exporter-{{ node_exporter_version }}.{{ node_exporter_arch }}.tar.gz
+            dest: "/tmp/node_exporter-{{ node_exporter_version }}.{{ node_exporter_arch }}.tar.gz"
+            checksum: "{{ ('sha256:' + node_exporter_checksum) if node_exporter_checksum else omit }}"
+            mode: "0644"
+          delegate_to: localhost
+          become: false
+          run_once: true
+
+        - name: Push and unpack binary into /usr/local/bin
+          ansible.builtin.unarchive:
+            src: "/tmp/node_exporter-{{ node_exporter_version }}.{{ node_exporter_arch }}.tar.gz"
+            dest: /usr/local/bin
+            remote_src: false
+            extra_opts:
+              - --strip-components=1
+              - node_exporter-{{ node_exporter_version }}.{{ node_exporter_arch }}/node_exporter
+            owner: root
+            group: root
+            mode: "0755"
+          notify: Restart node_exporter
+
+    - name: Install systemd unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/prometheus-node-exporter.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible — playbooks/node-exporter.yml
+          [Unit]
+          Description=Prometheus Node Exporter
+          After=network-online.target
+          Wants=network-online.target
+
+          [Service]
+          User=node_exporter
+          Group=node_exporter
+          Type=simple
+          ExecStart=/usr/local/bin/node_exporter --web.listen-address=:9100
+          Restart=on-failure
+          RestartSec=5
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart node_exporter
+
+    - name: Enable and start node_exporter
+      ansible.builtin.systemd:
+        name: prometheus-node-exporter
+        enabled: true
+        state: started
+        daemon_reload: true
+
+  handlers:
+    - name: Restart node_exporter
+      ansible.builtin.systemd:
+        name: prometheus-node-exporter
+        state: restarted
+        daemon_reload: true
