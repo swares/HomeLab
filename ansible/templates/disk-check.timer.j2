@@ -1,0 +1,16 @@
+{{ ansible_managed | comment }}
+# Weekly, after backup-verify (Sun 04:00) so the two don't contend for the disk.
+
+[Unit]
+Description=Weekly k3s node disk headroom check
+
+[Timer]
+OnCalendar={{ disk_check_oncalendar }}
+# Catch up if the H4 was down when the timer was due — a missed check is a
+# silent check, which is the failure mode this whole unit exists to avoid.
+Persistent=true
+RandomizedDelaySec=5m
+Unit=disk-check.service
+
+[Install]
+WantedBy=timers.target

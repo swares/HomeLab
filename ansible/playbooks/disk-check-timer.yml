@@ -1,0 +1,133 @@
+---
+# Install the weekly disk-headroom check as a systemd timer on the H4.
+#
+# Why a timer and not a CronJob: check-disk-space.yml reaches every k3s node over
+# SSH, including hosts that may be NotReady or unreachable — exactly the moment a
+# cluster-hosted job would be least able to run. It belongs on the host.
+#
+# Failure signalling — no bespoke notifier:
+#   ExecStart runs with -e disk_check_enforce=true, so a node over the threshold
+#   exits non-zero and the unit lands in `failed`. node_exporter's systemd
+#   collector exports node_systemd_unit_state{name="disk-check.service",
+#   state="failed"}, and LabDiskCheckFailed in lab-alerts.yaml routes it through
+#   the existing Alertmanager → ntfy path. Same pattern as backup-nas.
+#
+#   This requires disk-check to be in the collector's unit-include regex — see
+#   gitops/apps/monitoring.yaml under prometheus-node-exporter.extraArgs. Without
+#   it the timer still runs, but silently.
+#
+# Prerequisite: {{ disk_check_user }} must have passphrase-less SSH keys to the
+# k3s nodes. A systemd oneshot has no agent and no tty — if your key is
+# passphrase-protected, this unit will fail on every run. Verify with:
+#   sudo -u swares ssh -o BatchMode=yes 192.168.1.42 true
+#
+# Run (real run is an `ask` action per docs/SECURITY.md — use --check first):
+#   ansible-playbook -i inventory/hosts.yml playbooks/disk-check-timer.yml --check
+#   ansible-playbook -i inventory/hosts.yml playbooks/disk-check-timer.yml
+#
+- name: Install the disk headroom check timer on the H4
+  hosts: microshift
+  become: true
+
+  vars:
+    disk_check_user: swares
+    disk_check_repo: /home/swares/lab/homelab/homelab
+    # Sunday 05:00 — after backup-verify.timer (Sun 04:00).
+    disk_check_oncalendar: "Sun *-*-* 05:00:00"
+
+  tasks:
+    - name: Verify the repo checkout exists on the target
+      ansible.builtin.stat:
+        path: "{{ disk_check_repo }}/ansible/playbooks/check-disk-space.yml"
+      register: playbook_stat
+
+    - name: Fail early when the checkout is missing
+      ansible.builtin.assert:
+        that:
+          - playbook_stat.stat.exists
+        fail_msg: >-
+          {{ disk_check_repo }}/ansible/playbooks/check-disk-space.yml not found.
+          The timer runs the playbook from a working checkout on the H4 — clone or
+          pull it before installing the unit, or override disk_check_repo.
+        quiet: true
+
+    # The H4 has two ansible installs: apt's launcher at /usr/bin/ansible-playbook
+    # and a pip one whose library lives in /usr/local/lib/python3.10/dist-packages
+    # and shadows it on sys.path. Running the apt launcher against the pip library
+    # dies with "cannot import name 'initialize_locale'". Resolve the binary the
+    # way the user's own shell does rather than hardcoding a path — and then prove
+    # it actually executes, because existing is not the same as working.
+    - name: Resolve ansible-playbook as {{ disk_check_user }} resolves it
+      become: true
+      become_user: "{{ disk_check_user }}"
+      ansible.builtin.shell:
+        cmd: bash -lc 'command -v ansible-playbook'
+      register: ap_which
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Record the resolved path
+      ansible.builtin.set_fact:
+        disk_check_ansible_bin: "{{ ap_which.stdout | trim }}"
+
+    - name: Verify that binary actually runs
+      become: true
+      become_user: "{{ disk_check_user }}"
+      ansible.builtin.command:
+        cmd: "{{ disk_check_ansible_bin }} --version"
+      register: ap_version
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: disk_check_ansible_bin | length > 0
+
+    - name: Fail when no working ansible-playbook was found
+      ansible.builtin.assert:
+        that:
+          - disk_check_ansible_bin | length > 0
+          - ap_version.rc | default(1) == 0
+        fail_msg: >-
+          No working ansible-playbook found for {{ disk_check_user }}
+          (resolved: '{{ disk_check_ansible_bin | default("none") }}',
+          rc={{ ap_version.rc | default("n/a") }}).
+          The H4 has both an apt and a pip ansible; mixing the apt launcher with
+          the pip library fails on import. Reconcile them, or set
+          disk_check_ansible_bin explicitly.
+        quiet: true
+
+    - name: Render disk-check service and timer
+      ansible.builtin.template:
+        src: "../templates/{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - disk-check.service
+        - disk-check.timer
+
+    # Unconditional, not a handler. As a handler this raced: the reload reported
+    # ok but systemd still returned "Could not find the requested service
+    # disk-check.timer" on the very next task.
+    - name: Reload systemd so the new units are visible
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable the disk-check timer
+      ansible.builtin.systemd:
+        name: disk-check.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    - name: Show when it will next run
+      ansible.builtin.command:
+        cmd: systemctl list-timers disk-check.timer --no-pager
+      register: timer_status
+      changed_when: false
+      check_mode: false
+
+    - name: Report
+      ansible.builtin.debug:
+        msg: "{{ timer_status.stdout_lines }}"
