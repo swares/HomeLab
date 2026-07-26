@@ -103,8 +103,23 @@ spec:
             paths:
               - /
           prometheusSpec:
+            # retentionSize was "40GB" on a node whose ROOT filesystem is 49GB.
+            # local-path provisions from /var/lib/rancher/k3s/storage on /, so
+            # Prometheus alone was permitted ~80% of the disk — before the OS,
+            # 7.5GB of container images, Grafana, Alertmanager and the Loki
+            # caches. Filling the disk was arithmetic, not bad luck.
+            #
+            # The consequence was kubelet evicting pods to reclaim ephemeral
+            # storage: a mass eviction on 2026-07-23, and on 2026-07-26
+            # authelia-postgres — the SSO database — was being evicted and
+            # recreated roughly hourly, leaving six dead pods behind.
+            #
+            # 15GB leaves genuine headroom on a 49GB disk. Prometheus compacts
+            # down to the new limit on its own. Whichever of retention/
+            # retentionSize is reached first wins, so 30d still applies when
+            # volume is low.
             retention: 30d
-            retentionSize: "40GB"
+            retentionSize: "15GB"
             storageSpec:
               volumeClaimTemplate:
                 spec:
