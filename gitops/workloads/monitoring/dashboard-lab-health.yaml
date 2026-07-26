@@ -104,7 +104,7 @@ data:
                 "type": "prometheus",
                 "uid": "${datasource}"
               },
-              "expr": "count(up{job=~\"node-exporter.*\"} == 1)",
+              "expr": "count(up{job=~\"node-exporter.*\"}) - (count(min_over_time(up{job=~\"node-exporter.*\"}[2m]) == 0) or vector(0))",
               "instant": true,
               "legendFormat": "Up",
               "refId": "A"
@@ -112,7 +112,7 @@ data:
           ],
           "links": [
             {
-              "title": "Host Overview",
+              "title": "All hosts (up and down)",
               "url": "/d/lab-health-cap?viewPanel=13",
               "targetBlank": false
             }
@@ -1453,7 +1453,7 @@ data:
             "sortBy": [
               {
                 "desc": false,
-                "displayName": "Host"
+                "displayName": "Up"
               }
             ]
           },
@@ -1474,7 +1474,7 @@ data:
                 "type": "prometheus",
                 "uid": "${datasource}"
               },
-              "expr": "100 - (avg by (instance) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
+              "expr": "100 - (avg by (instance, job) (irate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
               "instant": true,
               "legendFormat": "{{instance}}",
               "refId": "B",
@@ -1514,7 +1514,7 @@ data:
               "refId": "E"
             }
           ],
-          "title": "Host Overview",
+          "title": "All Hosts (up and down)",
           "transformations": [
             {
               "id": "merge",
@@ -1607,7 +1607,8 @@ data:
                 "type": "prometheus",
                 "uid": "${datasource}"
               },
-              "expr": "label_replace(min_over_time(up{job=~\"node-exporter.*\"}[5m]) == 0, \"ip\", \"$1\", \"instance\", \"([^:]+):.+\")",
+              "expr": "label_replace(min_over_time(up{job=~\"node-exporter.*\"}[2m]) == 0, \"ip\", \"$1\", \"instance\", \"([^:]+)(?::.+)?\")",
+              "format": "table",
               "instant": true,
               "legendFormat": "{{instance}}",
               "refId": "A"
@@ -1621,15 +1622,17 @@ data:
                 "excludeByName": {
                   "Time": true,
                   "__name__": true,
-                  "Value": true,
-                  "job": true,
-                  "instance": true
+                  "Value": true
                 },
                 "renameByName": {
-                  "ip": "Host IP"
+                  "ip": "Host IP",
+                  "instance": "Instance",
+                  "job": "Job"
                 },
                 "indexByName": {
-                  "ip": 0
+                  "ip": 0,
+                  "instance": 1,
+                  "job": 2
                 }
               }
             }
@@ -2296,5 +2299,5 @@ data:
       "timezone": "browser",
       "title": "Lab Health & Capacity",
       "uid": "lab-health-cap",
-      "version": 15
+      "version": 17
     }
