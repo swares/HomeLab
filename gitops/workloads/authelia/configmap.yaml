@@ -129,6 +129,12 @@ data:
             scopes: [openid, profile, email, groups]
             response_types: [code]
             grant_types: [authorization_code]
-            token_endpoint_auth_method: client_secret_post
+            # client_secret_basic, unlike every other client here. ArgoCD's
+            # oidc.config exposes no token_endpoint_auth_method setting; it uses
+            # Go oauth2 AuthStyleAutoDetect, which sends HTTP Basic first. With
+            # client_secret_post the token exchange fails after a successful
+            # login with "Client authentication failed". Do not "normalise" this
+            # back to client_secret_post.
+            token_endpoint_auth_method: client_secret_basic
             userinfo_signed_response_alg: none
             consent_mode: implicit
