@@ -1,0 +1,29 @@
+{{ ansible_managed | comment }}
+# Runs playbooks/check-disk-space.yml across the k3s nodes with enforcement on,
+# so a node over disk_fail_percent exits non-zero and puts this unit into
+# `failed`. node_exporter's systemd collector then exposes
+#   node_systemd_unit_state{name="disk-check.service",state="failed"} == 1
+# which LabDiskCheckFailed alerts on. Never append `|| true` to ExecStart —
+# the failure IS the signal.
+
+[Unit]
+Description=k3s node disk headroom check
+Documentation=file://{{ disk_check_repo }}/ansible/playbooks/check-disk-space.yml
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as the repo owner, not root: ansible needs that user's SSH keys to reach
+# n150-1/2 and the opi5pro agents. The playbook itself is read-only.
+User={{ disk_check_user }}
+WorkingDirectory={{ disk_check_repo }}/ansible
+Environment=ANSIBLE_FORCE_COLOR=0
+Environment=ANSIBLE_RETRY_FILES_ENABLED=0
+# Absolute path, resolved at install time from the user's own shell — systemd
+# does not read a login profile, and the H4 has two ansible installs whose
+# launcher and library are not interchangeable.
+ExecStart={{ disk_check_ansible_bin }} -i inventory/hosts.yml playbooks/check-disk-space.yml -e disk_check_enforce=true
+TimeoutStartSec=15min
+
+# No [Install] section — activation is via disk-check.timer.

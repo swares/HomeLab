@@ -113,6 +113,61 @@ spec:
               Run: journalctl -u backup-nas.service -n 50
 
     # -----------------------------------------------------------------------
+    # Disk headroom check — ansible/playbooks/disk-check-timer.yml on the H4
+    #
+    # Complements NodeFilesystemAlmostOutOfSpace (built-in, warns at 85%) rather
+    # than duplicating it: this fires at 85% too, but also reports how much
+    # unallocated LVM space is available, which is usually the cheap fix. On
+    # 2026-07-26 n150-1 filled its 50G root while 24G sat unallocated in the
+    # same volume group, and the built-in alert could not have told you that.
+    # -----------------------------------------------------------------------
+    - name: lab.disk
+      rules:
+        - alert: LabDiskCheckFailed
+          # The check reports by default and only exits non-zero with
+          # -e disk_check_enforce=true, which the systemd unit sets. A failed
+          # unit therefore means a node crossed disk_fail_percent (85%).
+          expr: |
+            node_systemd_unit_state{
+              name="disk-check.service",
+              state="failed",
+              instance=~"192\\.168\\.1\\.160.*"
+            } == 1
+          for: 1m
+          labels:
+            severity: warning
+          annotations:
+            summary: "A k3s node is low on disk"
+            description: >
+              disk-check.service on the H4 exited non-zero — at least one k3s node
+              is over 85% on its root filesystem. Run:
+              journalctl -u disk-check.service -n 50
+              Check `vgs` on the affected node before trimming Prometheus
+              retention or pruning images; the volume group often has free
+              extents and lvextend -r is the cheaper fix.
+
+        - alert: LabDiskCheckSilent
+          # A check that stops running looks identical to a check that passes.
+          # 8 days covers the weekly schedule plus a missed run.
+          expr: |
+            (
+              time() - node_systemd_timer_last_trigger_time_seconds{
+                name="disk-check.timer",
+                instance=~"192\\.168\\.1\\.160.*"
+              }
+            ) > 691200
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "disk-check has not run in >8 days"
+            description: >
+              disk-check.timer on the H4 last triggered more than 8 days ago.
+              Check: systemctl list-timers disk-check.timer
+              A common cause is the unit's SSH key gaining a passphrase — a
+              systemd oneshot has no agent and cannot prompt.
+
+    # -----------------------------------------------------------------------
     # KVM / libvirt VMs
     # -----------------------------------------------------------------------
     - name: lab.vms

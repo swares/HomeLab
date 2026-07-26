@@ -293,7 +293,12 @@ spec:
             # Enable systemd collector so backup timer metrics are available
             # (used by LabBackupNasSilent / LabBackupEtcdSilent alert rules)
             - --collector.systemd
-            - --collector.systemd.unit-include=(backup-nas|backup-etcd)\.(service|timer)
+            # disk-check added 2026-07-26: the weekly headroom check on the H4
+            # signals failure by leaving its unit in `failed` rather than by
+            # notifying anything itself, so it must be exported here or
+            # LabDiskCheckFailed never sees it. See
+            # ansible/playbooks/disk-check-timer.yml.
+            - --collector.systemd.unit-include=(backup-nas|backup-etcd|disk-check)\.(service|timer)
 
         # ---- kube-state-metrics ----
         kube-state-metrics:
