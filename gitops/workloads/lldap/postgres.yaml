@@ -1,0 +1,116 @@
+# PostgreSQL 16 for lldap.
+#
+# WHY lldap MOVED OFF SQLITE (2026-07-25)
+#
+# lldap's SQLite database lived on a `local-path` PVC, which carries node
+# affinity. On 2026-07-25 n150-2 wedged twice; both times the lldap pod could not
+# be rescheduled anywhere — its volume only existed on that node — so the
+# replacement pod sat Pending and ALL SSO went down with it (ArgoCD, Grafana,
+# Immich, MinIO, Semaphore all authenticate through Authelia, which needs lldap).
+# See docs/REVIEW-2026-07-24.md H10.
+#
+# With Postgres, the lldap pod itself becomes stateless and schedules anywhere.
+#
+# BE HONEST ABOUT WHAT THIS DOES AND DOESN'T FIX: this database still uses a
+# `local-path` PVC, so *Postgres* is node-bound. What changes is that the binding
+# is now deliberate rather than accidental, and Postgres survives an unclean
+# shutdown far better than SQLite — which matters, because the same day this was
+# written a forced reboot corrupted an etcd bbolt file on the very same class of
+# hardware.
+#
+# NODE PLACEMENT IS DELIBERATE: pinned to n150-1 alongside authelia-postgres.
+# Authelia and lldap are already a coupled unit — neither is useful without the
+# other — so co-locating their databases means SSO depends on ONE node failing,
+# not two. Splitting them would double the number of nodes that can break logins.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lldap-pgdata
+  namespace: lldap
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lldap-postgres
+  namespace: lldap
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate          # RWO PVC — never two writers on the same volume
+  selector:
+    matchLabels:
+      app: lldap-postgres
+  template:
+    metadata:
+      labels:
+        app: lldap-postgres
+    spec:
+      automountServiceAccountToken: false
+      # See the header: co-located with authelia-postgres on purpose.
+      nodeSelector:
+        kubernetes.io/hostname: n150-1
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          env:
+            - name: POSTGRES_DB
+              value: lldap
+            - name: POSTGRES_USER
+              value: lldap
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: lldap-secrets
+                  key: db_password
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - containerPort: 5432
+          readinessProbe:
+            exec:
+              command: [pg_isready, -U, lldap, -d, lldap]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6
+          # Unlike authelia-postgres, this one has a liveness probe too — a wedged
+          # but listening Postgres would otherwise never be restarted, and this is
+          # the identity store for the whole lab. (authelia-postgres is missing
+          # one; tracked as H20 in the review.)
+          livenessProbe:
+            exec:
+              command: [pg_isready, -U, lldap, -d, lldap]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: pgdata
+          persistentVolumeClaim:
+            claimName: lldap-pgdata
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: lldap-postgres
+  namespace: lldap
+spec:
+  selector:
+    app: lldap-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
