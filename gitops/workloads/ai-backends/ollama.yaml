@@ -26,6 +26,9 @@ spec:
     metadata:
       labels: { app: ollama }
     spec:
+      # Rebuildable compute: evicted before unclassified pods under node
+      # pressure. See gitops/workloads/priority-classes/.
+      priorityClassName: lab-bulk
       nodeSelector:
         kubernetes.io/hostname: opi5pro-1
       tolerations:

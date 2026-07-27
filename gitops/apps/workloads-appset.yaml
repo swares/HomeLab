@@ -45,6 +45,10 @@ spec:
             exclude: true
           - path: gitops/workloads/monitoring
             exclude: true
+          # PriorityClasses are cluster-scoped — the namespace-per-directory
+          # convention does not apply. See gitops/apps/priority-classes.yaml.
+          - path: gitops/workloads/priority-classes
+            exclude: true
           - path: gitops/workloads/reloader
             exclude: true
   template:

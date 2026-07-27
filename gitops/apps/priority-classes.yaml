@@ -1,0 +1,19 @@
+# Kept as an individual Application: PriorityClasses are cluster-scoped, so the
+# workloads ApplicationSet's "namespace = directory basename" convention does not
+# apply. Excluded from workloads-appset.yaml for the same reason as ai-backends.
+#
+# destination.namespace is required by the Application schema but unused — the
+# resources here have no namespace. It points at argocd rather than creating a
+# stray `priority-classes` namespace.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata: { name: priority-classes, namespace: argocd }
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:swares/HomeLab.git
+    targetRevision: main
+    path: gitops/workloads/priority-classes
+  destination: { server: https://kubernetes.default.svc, namespace: argocd }
+  syncPolicy:
+    automated: { prune: true, selfHeal: true }

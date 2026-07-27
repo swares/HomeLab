@@ -1,0 +1,25 @@
+# Default ephemeral-storage request for every container in this namespace.
+#
+# Why this exists: the kubelet ranks disk-eviction candidates by ephemeral-storage
+# usage ABOVE REQUEST. A container with no request has an effective budget of
+# zero, so any usage at all makes it the top candidate. On 2026-07-26 the whisper
+# pod was terminated 11 times over ten days while using 276Ki — the message read
+# "request is 0, has larger consumption of ephemeral-storage" — because Prometheus'
+# PV and containerd's image store had filled n150-1's root filesystem. Neither of
+# those counts as pod ephemeral storage, so no request value would have prevented
+# the pressure; this only makes the victim selection defensible.
+#
+# defaultRequest only, deliberately no default limit: a container that exceeds an
+# ephemeral-storage LIMIT is evicted individually, so setting one here would
+# introduce a new kill path for workloads that legitimately write to their
+# container filesystem. Add per-workload limits where you know the ceiling.
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: default-ephemeral-storage
+  namespace: minio
+spec:
+  limits:
+    - type: Container
+      defaultRequest:
+        ephemeral-storage: 128Mi

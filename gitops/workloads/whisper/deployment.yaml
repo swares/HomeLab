@@ -11,6 +11,11 @@ spec:
     metadata:
       labels: { app: whisper }
     spec:
+      # Rebuildable: a restart costs a model reload, nothing more. Evicted before
+      # unclassified pods and long before lldap/Authelia. This is the pod the
+      # kubelet killed 11 times in July 2026 while using 276Ki — not because it
+      # was greedy, but because nothing said what was safe to lose.
+      priorityClassName: lab-bulk
       nodeSelector:
         kubernetes.io/hostname: n150-1   # x86 CPU; arm64 OPi agents lack amd64 image
       securityContext:

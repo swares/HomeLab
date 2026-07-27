@@ -11,6 +11,9 @@ spec:
         # Stakater Reloader: auto-restart this pod when litellm-config ConfigMap changes.
         reloader.stakater.com/auto: "true"
     spec:
+      # Rebuildable compute: evicted before unclassified pods under node
+      # pressure. See gitops/workloads/priority-classes/.
+      priorityClassName: lab-bulk
       nodeSelector:
         kubernetes.io/hostname: odroid-nas   # keep litellm on H4; OPi nodes reserve RAM for ollama
       securityContext:
