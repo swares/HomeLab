@@ -1,0 +1,23 @@
+# Everything in this repo is deployed to Linux — Ansible playbooks and Jinja2
+# templates, systemd units, shell scripts, Kubernetes manifests, Python. LF is
+# correct unconditionally, so normalise on commit and check out LF on every
+# platform regardless of the cloner's core.autocrlf.
+#
+# Why this is here: cloning on Windows with Git's default core.autocrlf=true
+# rewrote all ~280 files to CRLF in the working tree on 2026-07-27. That is not
+# cosmetic — scripts/verify-lab.py became `#!/usr/bin/env python3\r`, which
+# Linux rejects with "bad interpreter", and CRLF would have leaked into
+# rendered systemd units from the .j2 templates.
+* text=auto eol=lf
+
+# Binary — never touch these.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.wav binary
+*.gz binary
+*.tar binary
+*.zip binary
