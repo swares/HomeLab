@@ -38,8 +38,12 @@ import urllib.parse
 import urllib.request
 
 PROM = "https://prometheus.apps.lab.home.arpa"
-API_VIP = "192.168.1.200"        # kube-vip — api.lab.home.arpa
-INGRESS_IP = "192.168.1.160"     # Traefik  — *.apps.lab.home.arpa
+API_VIP = "192.168.1.200"        # kube-vip control-plane VIP — api.lab.home.arpa
+# kube-vip service VIP for Traefik — *.apps.lab.home.arpa. Was 192.168.1.160
+# (the H4) until 2026-07-27; a single A record whose loss took down every service
+# URL in the lab. Must match `ingress_vip` in ansible/inventory/hosts.yml, which
+# is the source of truth applied by ansible/playbooks/dns.yml.
+INGRESS_VIP = "192.168.1.201"
 
 # Metrics known to be absent, with the reason. Anything absent and NOT listed
 # here is a finding. Keeping this list short and annotated is the point: an
@@ -310,7 +314,7 @@ def check_dns():
     if not shutil.which("dig"):
         raise CheckError("dig not installed (apt install dnsutils)")
     expected = {"api.lab.home.arpa": API_VIP,
-                "grafana.apps.lab.home.arpa": INGRESS_IP}
+                "grafana.apps.lab.home.arpa": INGRESS_VIP}
     servers = re.findall(r'^nameserver\s+(\S+)', open("/etc/resolv.conf").read(), re.M)
     if not servers:
         raise CheckError("no nameservers in /etc/resolv.conf")
