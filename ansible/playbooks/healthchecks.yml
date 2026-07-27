@@ -43,6 +43,8 @@
       - backup-etcd
       - backup-verify
       - h4-core
+      # Weekly (Sun 05:00). Period 8d / Grace 12h in healthchecks.io.
+      - disk-check
 
   tasks:
     - name: Read healthchecks URLs from Vault
@@ -93,7 +95,11 @@
           #!/bin/bash
           # Ping a healthchecks.io check by name.
           # Non-fatal: a ping failure must never mask a backup failure.
-          CHECK="${1:?usage: hc-ping <check-name>}"
+          CHECK="${1:?usage: hc-ping <check-name> [fail]}"
+          # Optional second arg "fail" appends /fail, marking the check down
+          # immediately instead of waiting out the grace period. Backwards
+          # compatible: one-arg callers still ping success.
+          MODE="${2:-success}"
           URL_FILE="/etc/healthchecks/${CHECK}.url"
           if [ ! -f "$URL_FILE" ]; then
             echo "hc-ping: no URL file for $CHECK -- skipping" >&2
@@ -101,8 +107,9 @@
           fi
           URL=$(tr -d '[:space:]' < "$URL_FILE")
           [ -n "$URL" ] || exit 0
+          [ "$MODE" = "fail" ] && URL="${URL%/}/fail"
           curl -fsS --retry 3 --max-time 15 "$URL" > /dev/null 2>&1 \
-            && echo "hc-ping: $CHECK OK" \
+            && echo "hc-ping: $CHECK $MODE OK" \
             || echo "hc-ping: $CHECK ping failed (non-fatal)" >&2
           exit 0    # always exit 0; never fail the parent service
 
@@ -231,7 +238,11 @@
           #!/bin/bash
           # Ping a healthchecks.io check by name.
           # Non-fatal: a ping failure must never mask a backup failure.
-          CHECK="${1:?usage: hc-ping <check-name>}"
+          CHECK="${1:?usage: hc-ping <check-name> [fail]}"
+          # Optional second arg "fail" appends /fail, marking the check down
+          # immediately instead of waiting out the grace period. Backwards
+          # compatible: one-arg callers still ping success.
+          MODE="${2:-success}"
           URL_FILE="/etc/healthchecks/${CHECK}.url"
           if [ ! -f "$URL_FILE" ]; then
             echo "hc-ping: no URL file for $CHECK -- skipping" >&2
@@ -239,8 +250,9 @@
           fi
           URL=$(tr -d '[:space:]' < "$URL_FILE")
           [ -n "$URL" ] || exit 0
+          [ "$MODE" = "fail" ] && URL="${URL%/}/fail"
           curl -fsS --retry 3 --max-time 15 "$URL" > /dev/null 2>&1 \
-            && echo "hc-ping: $CHECK OK" \
+            && echo "hc-ping: $CHECK $MODE OK" \
             || echo "hc-ping: $CHECK ping failed (non-fatal)" >&2
           exit 0    # always exit 0; never fail the parent service
 

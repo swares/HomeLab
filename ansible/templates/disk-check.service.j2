@@ -26,4 +26,13 @@ Environment=ANSIBLE_RETRY_FILES_ENABLED=0
 ExecStart={{ disk_check_ansible_bin }} -i inventory/hosts.yml playbooks/check-disk-space.yml -e disk_check_enforce=true
 TimeoutStartSec=15min
 
+# Signal both outcomes to healthchecks.io. ExecStopPost always runs and
+# $SERVICE_RESULT says which it was, so a failure pings /fail immediately
+# rather than waiting out the grace period. hc-ping always exits 0, so a
+# ping outage can never mask a real result.
+# '+' runs this as root despite User= above: /etc/healthchecks is 0750
+# root:root, so the unit's own user cannot read the ping URL. The backup
+# services work only because they run as root.
+ExecStopPost=+/bin/bash -c 'if [ "$SERVICE_RESULT" = "success" ]; then /usr/local/bin/hc-ping disk-check; else /usr/local/bin/hc-ping disk-check fail; fi'
+
 # No [Install] section — activation is via disk-check.timer.

@@ -14,16 +14,31 @@
 #   - VM in crashed state
 #   - ArgoCD app out-of-sync / degraded
 #
-# NOTE — backup silence detection:
-#   Requires enabling the systemd collector on the H4's node_exporter DaemonSet:
+# ⚠ NOTE — the systemd-based rules below DO NOT WORK, and cannot as written.
 #
-#     prometheus-node-exporter:
-#       extraArgs:
-#         - --collector.systemd
-#         - --collector.systemd.unit-whitelist=(backup-nas|backup-etcd).timer
+#   The advice this note used to give — "add --collector.systemd to
+#   gitops/apps/monitoring.yaml and the rules will start firing" — is wrong.
+#   The flag was added, and on 2026-07-26 the collector was measured:
 #
-#   Add that to gitops/apps/monitoring.yaml under prometheus-node-exporter and
-#   the rules below will start firing.  Until then they silently produce no data.
+#     node_scrape_collector_success{collector="systemd"} 0
+#     $ curl -s http://192.168.1.160:9100/metrics | grep -c node_systemd
+#     0
+#
+#   Enabling the collector is not sufficient. node_exporter reads systemd over
+#   D-Bus at /run/systemd/private, which is (a) not mounted into the DaemonSet
+#   pod and (b) mode 0700 root-only, while the chart runs the container as UID
+#   65534. So every node_systemd_* metric is absent cluster-wide and
+#   LabBackupNasSilent / LabBackupEtcdSilent / LabBackupNasFailed have never
+#   fired and never could.
+#
+#   Backup silence IS covered — by healthchecks.io, configured in
+#   ansible/playbooks/healthchecks.yml, which pings on each successful run and
+#   alerts when a check goes quiet past its grace period. That is the real
+#   dead-man's switch; treat these rules as aspirational until either the
+#   DaemonSet gains the socket mount and root, or they are rewritten.
+#
+#   Do not add new rules against node_systemd_* metrics without first checking
+#   node_scrape_collector_success{collector="systemd"}.
 #
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -123,49 +138,29 @@ spec:
     # -----------------------------------------------------------------------
     - name: lab.disk
       rules:
-        - alert: LabDiskCheckFailed
-          # The check reports by default and only exits non-zero with
-          # -e disk_check_enforce=true, which the systemd unit sets. A failed
-          # unit therefore means a node crossed disk_fail_percent (85%).
-          expr: |
-            node_systemd_unit_state{
-              name="disk-check.service",
-              state="failed",
-              instance=~"192\\.168\\.1\\.160.*"
-            } == 1
-          for: 1m
-          labels:
-            severity: warning
-          annotations:
-            summary: "A k3s node is low on disk"
-            description: >
-              disk-check.service on the H4 exited non-zero — at least one k3s node
-              is over 85% on its root filesystem. Run:
-              journalctl -u disk-check.service -n 50
-              Check `vgs` on the affected node before trimming Prometheus
-              retention or pruning images; the volume group often has free
-              extents and lvextend -r is the cheaper fix.
-
-        - alert: LabDiskCheckSilent
-          # A check that stops running looks identical to a check that passes.
-          # 8 days covers the weekly schedule plus a missed run.
+        - alert: LabNodeDiskLow
+          # Deliberately NOT based on node_systemd_* — see the lab.backups note.
+          # Mirrors the disk_fail_percent threshold in check-disk-space.yml so the
+          # weekly playbook and this alert agree. The playbook adds the part
+          # Prometheus cannot: how much unallocated LVM space is available.
           expr: |
             (
-              time() - node_systemd_timer_last_trigger_time_seconds{
-                name="disk-check.timer",
-                instance=~"192\\.168\\.1\\.160.*"
-              }
-            ) > 691200
-          for: 10m
+              1 - node_filesystem_avail_bytes{mountpoint="/", fstype!~"tmpfs|overlay"}
+                / node_filesystem_size_bytes{mountpoint="/", fstype!~"tmpfs|overlay"}
+            ) * 100 > 85
+          for: 15m
           labels:
             severity: warning
           annotations:
-            summary: "disk-check has not run in >8 days"
+            summary: "{{ $labels.instance }} root filesystem over 85%"
             description: >
-              disk-check.timer on the H4 last triggered more than 8 days ago.
-              Check: systemctl list-timers disk-check.timer
-              A common cause is the unit's SSH key gaining a passphrase — a
-              systemd oneshot has no agent and cannot prompt.
+              {{ $labels.instance }} is at {{ $value | printf "%.1f" }}% on /.
+              Check `vgs` on that host BEFORE trimming Prometheus retention or
+              pruning images — on 2026-07-26 n150-1 filled a 50G root while 24G
+              sat unallocated in the same volume group, and lvextend -r was the
+              cheap fix. Detail:
+              ansible-playbook -i inventory/hosts.yml playbooks/check-disk-space.yml
+              -e disk_check_deep=true
 
     # -----------------------------------------------------------------------
     # KVM / libvirt VMs
