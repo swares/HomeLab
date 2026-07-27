@@ -29,6 +29,36 @@ spec:
       ports:
         - port: 4000
 ---
+# Allow Prometheus to scrape litellm's /metrics on 4000.
+#
+# default-deny-all above covers every pod in this namespace, and the Traefik rule
+# admits only kube-system — so the ServiceMonitor for litellm had nowhere to
+# connect from. This was written up as H6 in docs/REVIEW-2026-07-24.md and was
+# invisible for a further three days because the ServiceMonitor itself was being
+# ignored by Prometheus (serviceMonitorSelectorNilUsesHelmValues), so the scrape
+# never even registered as failing. Two independent faults hiding each other.
+#
+# Note k3s REJECTs rather than DROPs denied traffic, so this presented as
+# "connection refused" rather than a timeout — which reads like a wrong port and
+# sends you looking in the wrong place.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-metrics-scrape-from-monitoring
+  namespace: ai-gateway
+spec:
+  podSelector:
+    matchLabels:
+      app: litellm
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - port: 4000
+---
 # Allow litellm to reach ollama pods within the same namespace (port 11434).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
