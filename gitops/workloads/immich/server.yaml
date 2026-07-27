@@ -17,7 +17,10 @@ spec:
               valueFrom: { secretKeyRef: { name: immich-secrets, key: DB_PASSWORD } }
             - name: NODE_EXTRA_CA_CERTS
               value: /etc/ssl/lab-ca/ca.crt
-          ports: [{ containerPort: 2283 }]
+          ports:
+            - { containerPort: 2283, name: http }
+            # Telemetry, enabled via IMMICH_TELEMETRY_INCLUDE in immich-env.
+            - { containerPort: 8081, name: metrics }
           readinessProbe:
             httpGet: { path: /api/server/ping, port: 2283 }
             initialDelaySeconds: 30
@@ -55,3 +58,6 @@ spec:
     - name: http
       port: 2283
       targetPort: 2283
+    - name: metrics
+      port: 8081
+      targetPort: 8081

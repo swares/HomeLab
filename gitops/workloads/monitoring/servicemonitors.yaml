@@ -1,6 +1,10 @@
 ---
-# Scrape Immich server metrics
-# Immich exposes Prometheus metrics at /metrics on its main port (2283)
+# Scrape Immich server metrics.
+#
+# Port `metrics` (8081), NOT the main 2283. Immich serves no metrics at all
+# unless IMMICH_TELEMETRY_INCLUDE is set (see immich/configmap.yaml), and then
+# only on a dedicated port. Pointed at 2283 this scraped the web UI and
+# Prometheus rejected the text/html response.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -13,26 +17,25 @@ spec:
     matchLabels:
       app: immich-server
   endpoints:
-    - port: http
+    - port: metrics
       path: /metrics
       interval: 30s
----
-# Scrape LiteLLM gateway metrics
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: litellm
-  namespace: monitoring
-spec:
-  namespaceSelector:
-    matchNames: [ai-gateway]
-  selector:
-    matchLabels:
-      app: litellm
-  endpoints:
-    - port: http
-      path: /metrics
-      interval: 30s
+
+# LiteLLM has no ServiceMonitor deliberately.
+#
+# Its Prometheus callback is an Enterprise feature: /metrics returns 404 without
+# a licence, and from v1.85.0 the endpoint also requires API-key auth. This lab
+# runs v1.93.0 unlicensed, so a ServiceMonitor here can only ever produce a
+# permanently-down target.
+#
+# That matters beyond tidiness. docs/REVIEW-2026-07-24.md H27 describes an alert
+# that was permanently critical and therefore ignored — "training you to ignore
+# the one alert group that matters most". A target you have decided to accept as
+# red does the same thing to every other red target. Absent and documented beats
+# present and known-broken.
+#
+# The allow-metrics-scrape-from-monitoring NetworkPolicy in ai-gateway is left in
+# place: it is correct if this is ever licensed, and permits nothing else.
 ---
 # Scrape the ArgoCD application controller.
 #
