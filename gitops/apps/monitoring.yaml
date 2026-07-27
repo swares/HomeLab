@@ -292,6 +292,15 @@ spec:
           extraArgs:
             # Enable systemd collector so backup timer metrics are available
             # (used by LabBackupNasSilent / LabBackupEtcdSilent alert rules)
+            # ⚠ These two flags produce nothing. Measured 2026-07-26:
+            #   node_scrape_collector_success{collector="systemd"} 0
+            # node_exporter needs /run/systemd/private (D-Bus), which is not
+            # mounted into this DaemonSet and is root-only while the container
+            # runs as UID 65534. Kept only so the failure stays visible and
+            # documented rather than being silently re-added later; see the
+            # note at the top of gitops/workloads/monitoring/lab-alerts.yaml.
+            # Backup and disk-check liveness come from healthchecks.io instead
+            # (ansible/playbooks/healthchecks.yml).
             - --collector.systemd
             # disk-check added 2026-07-26: the weekly headroom check on the H4
             # signals failure by leaving its unit in `failed` rather than by
