@@ -4,7 +4,18 @@ metadata:
   name: lldap-pdb
   namespace: lldap
 spec:
-  minAvailable: 1
+  # maxUnavailable, NOT minAvailable — with replicas: 1 the two are not
+  # equivalent. minAvailable: 1 required the only pod to stay up, so `kubectl
+  # drain` could never get permission to evict it: on 2026-07-27 the k3s patch
+  # playbook retried for 5 minutes and failed the whole run on opi5pro-1.
+  # A single-replica service has no disruption budget to speak of; pretending
+  # otherwise doesn't add availability, it just blocks node maintenance.
+  #
+  # maxUnavailable: 1 still protects against a mass eviction if lldap is ever
+  # scaled up, while allowing one pod at a time to be moved. If you want lldap
+  # to genuinely survive a drain, the fix is replicas: 2 with RollingUpdate —
+  # it is stateless now — not a stricter PDB.
+  maxUnavailable: 1
   selector:
     matchLabels:
       app: lldap
