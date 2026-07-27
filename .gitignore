@@ -24,3 +24,7 @@ terraform
 docs-audit-pr.sh
 actions-runner/
 *.sql
+
+# Python bytecode
+__pycache__/
+*.pyc
