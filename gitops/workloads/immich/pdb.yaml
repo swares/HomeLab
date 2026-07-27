@@ -4,7 +4,9 @@ metadata:
   name: immich-postgres-pdb
   namespace: immich
 spec:
-  minAvailable: 1
+  # See gitops/workloads/lldap/pdb.yaml. immich-postgres runs replicas: 1, so
+  # minAvailable: 1 blocks drains permanently rather than protecting anything.
+  maxUnavailable: 1
   selector:
     matchLabels:
       app: immich-postgres
