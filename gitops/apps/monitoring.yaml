@@ -134,6 +134,27 @@ spec:
             podMonitorNamespaceSelector: {}
             serviceMonitorNamespaceSelector: {}
             ruleNamespaceSelector: {}
+
+            # ...AND all ServiceMonitors within them. The *NamespaceSelector
+            # fields above only choose which namespaces to look in; the object
+            # selectors are separate, and kube-prometheus-stack defaults
+            # *SelectorNilUsesHelmValues to true — which silently narrows them to
+            # `release: monitoring`.
+            #
+            # Consequence, measured 2026-07-27: five ServiceMonitors carrying no
+            # such label had NEVER been scraped — immich and litellm (31d, ours),
+            # monitoring-grafana and alloy (Helm-managed by their own charts,
+            # which do not set a `release` label), and argocd-metrics. Each one
+            # existed in git, looked correct, and produced nothing.
+            #
+            # Labelling the objects was rejected as the fix: two are owned by
+            # other charts and would revert on upgrade, and it leaves the same
+            # trap set for the next ServiceMonitor anyone adds.
+            serviceMonitorSelectorNilUsesHelmValues: false
+            podMonitorSelectorNilUsesHelmValues: false
+            probeSelectorNilUsesHelmValues: false
+            ruleSelectorNilUsesHelmValues: false
+            scrapeConfigSelectorNilUsesHelmValues: false
             # Static scrape targets — non-cluster hosts running apt node_exporter
             additionalScrapeConfigs:
               - job_name: node-exporter-external
@@ -302,12 +323,7 @@ spec:
             # Backup and disk-check liveness come from healthchecks.io instead
             # (ansible/playbooks/healthchecks.yml).
             - --collector.systemd
-            # disk-check added 2026-07-26: the weekly headroom check on the H4
-            # signals failure by leaving its unit in `failed` rather than by
-            # notifying anything itself, so it must be exported here or
-            # LabDiskCheckFailed never sees it. See
-            # ansible/playbooks/disk-check-timer.yml.
-            - --collector.systemd.unit-include=(backup-nas|backup-etcd|disk-check)\.(service|timer)
+            - --collector.systemd.unit-include=(backup-nas|backup-etcd)\.(service|timer)
 
         # ---- kube-state-metrics ----
         kube-state-metrics:
