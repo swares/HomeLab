@@ -176,7 +176,7 @@ Goal: the VM/devops sandbox. This is a **parallel track** — it doesn't block P
    - Platform: `kubectl get nodes,pods -A` healthy; Argo all Synced.
    - AI: gateway lists models and answers a prompt.
    - Backups: a restic snapshot exists on md1 (`/mnt/cold-8t`), copied to the secondary.
-2. **Close the gaps** (from [SERVICES.md](SERVICES.md), priority order):
+2. **Close the gaps** (from [services.md](services.md), priority order):
    - ✅ **Offsite backup (Track 1 — cluster state)** — `backup-cloud.timer` runs daily at 03:00,
      pushing etcd snapshots, lldap/Vault snapshots, and Postgres dumps to Cloudflare R2 free tier.
      Credentials in Vault at `secret/lab/cloudflare-r2`. Playbook: `ansible/playbooks/backup-cloud.yml`.
