@@ -45,13 +45,38 @@ spec:
               value: ""
             - name: vip_cidr
               value: "32"
-            # Control-plane VIP only — k3s servicelb handles LoadBalancer services
             - name: cp_enable
               value: "true"
             - name: cp_namespace
               value: kube-system
+
+            # ── Service VIPs, scoped by loadBalancerClass ────────────────────
+            # Was svc_enable: false, with the comment "k3s servicelb handles
+            # LoadBalancer services". servicelb still does — this does not
+            # replace it.
+            #
+            # lb_class_only restricts kube-vip to Services that explicitly carry
+            # lb_class_name. k3s servicelb, conversely, ignores any Service with
+            # a non-default loadBalancerClass. So the two never contend for the
+            # same object and never fight over services/status. Traefik's own
+            # Service is untouched and still answers on every node IP; the new
+            # traefik-vip Service (see traefik-vip-service.yaml) is owned solely
+            # by kube-vip.
+            #
+            # That is what makes this additive: no k3s flag change, no server
+            # restart, no window where ingress has no address. Reverting is
+            # setting svc_enable back to "false".
             - name: svc_enable
-              value: "false"
+              value: "true"
+            # Per-service leader election, so the service VIP can live on a
+            # different node from the control-plane VIP rather than pinning both
+            # to one host — which would defeat the point.
+            - name: svc_election
+              value: "true"
+            - name: lb_class_only
+              value: "true"
+            - name: lb_class_name
+              value: "kube-vip.io/kube-vip-class"
             # Leader election — only one node owns the VIP at a time
             - name: vip_leaderelection
               value: "true"
