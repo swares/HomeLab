@@ -10,3 +10,10 @@ data:
   DB_DATABASE_NAME: immich
   REDIS_HOSTNAME: immich-redis
   IMMICH_MACHINE_LEARNING_URL: http://immich-ml:3003
+  # Immich serves no metrics unless telemetry is explicitly enabled, and then on
+  # a dedicated port — 8081 for the api server, 8082 for microservices — never on
+  # 2283. The ServiceMonitor had pointed at 2283 since it was written, so /metrics
+  # returned the web UI as text/html and Prometheus rejected it. That went
+  # unnoticed for a month because Prometheus was ignoring the ServiceMonitor
+  # entirely (see gitops/apps/monitoring.yaml).
+  IMMICH_TELEMETRY_INCLUDE: all
