@@ -1,0 +1,55 @@
+# A floating VIP for ingress, so *.apps survives losing any single node.
+#
+# The problem this solves is DNS, not Kubernetes. k3s servicelb already exposes
+# Traefik on EVERY node IP — .160, .42, .21, .168, .172 — so the ingress data
+# path was never single-homed. But apps.lab.home.arpa was a single A record
+# pointing at 192.168.1.160, and every service CNAMEs to it. Lose the H4 and all
+# ingress dies despite Traefik running fine on four other nodes.
+#
+# This Service exists purely to carry a VIP that kube-vip can move. It selects
+# the same Traefik pods as the built-in `traefik` Service; it does not replace
+# it. Both are live, and node IPs keep working as a fallback.
+#
+# loadBalancerClass is the mechanism that keeps the two load balancers apart:
+#   - kube-vip runs with lb_class_only=true, so it reconciles ONLY this class
+#   - k3s servicelb ignores any Service with a non-default loadBalancerClass
+# Without it both controllers would write to services/status and flap.
+#
+# Verify the selector and target ports against the live Traefik Service before
+# merging — the k3s Traefik chart has changed both across versions:
+#   kubectl -n kube-system get svc traefik -o yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: traefik-vip
+  namespace: kube-system
+  annotations:
+    # kube-vip assigns this address rather than allocating from a pool — no
+    # kube-vip-cloud-provider needed for a single static VIP.
+    kube-vip.io/loadbalancerIPs: "192.168.1.201"
+spec:
+  type: LoadBalancer
+  loadBalancerClass: kube-vip.io/kube-vip-class
+  selector:
+    app.kubernetes.io/name: traefik
+    app.kubernetes.io/instance: traefik-kube-system
+  ports:
+    - name: web
+      port: 80
+      targetPort: web
+      protocol: TCP
+    - name: websecure
+      port: 443
+      targetPort: websecure
+      protocol: TCP
+  # Cluster, deliberately — NOT Local.
+  #
+  # Local preserves client source IPs, but drops traffic arriving on a node that
+  # has no Traefik pod. k3s runs Traefik as a single-replica Deployment, and the
+  # VIP holder is elected independently of where that pod is scheduled, so the
+  # two would routinely be on different nodes and ingress would blackhole.
+  #
+  # Cluster costs the real client IP in Traefik's logs (it sees the node IP).
+  # Revisit once Traefik runs 2+ replicas with anti-affinity, at which point
+  # Local becomes both safe and preferable.
+  externalTrafficPolicy: Cluster
