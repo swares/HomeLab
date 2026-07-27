@@ -1,0 +1,45 @@
+# Cluster-scoped PriorityClasses that make eviction order intentional.
+#
+# The kubelet sheds pods lowest-priority-first under node pressure, and only then
+# ranks by resource usage above request. Priority is therefore the lever that
+# actually decides what dies; ephemeral-storage requests (see the LimitRanges in
+# each workload namespace) only break ties within a priority band.
+#
+# Bands, lowest to highest:
+#   lab-bulk (-100)  → rebuildable compute. Loses first.
+#   (unset,     0)   → everything not classified. The safe default.
+#   lab-critical (1000) → identity, secrets, and the things other services need
+#                         in order to start at all. Loses last.
+#
+# Negative values are supported and are the documented pattern for
+# "evict this before anything else":
+# https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/
+#
+# Neither class is globalDefault — an unclassified pod stays at 0, so adding
+# these changes nothing until a workload opts in by setting priorityClassName.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: lab-critical
+value: 1000
+globalDefault: false
+description: >-
+  Identity, secrets and shared infrastructure. Evicted last under node pressure.
+  Applied to lldap and Authelia: every ExternalSecret and every SSO login in the
+  lab depends on them, so shedding them to save an inference pod would be exactly
+  backwards.
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: lab-bulk
+value: -100
+globalDefault: false
+# Never preempt others to schedule. A bulk pod waiting is always preferable to a
+# bulk pod displacing something else.
+preemptionPolicy: Never
+description: >-
+  Rebuildable compute — inference backends and the AI gateway. Evicted first and
+  scheduled last. Losing one of these costs a model reload; losing lldap costs
+  every login in the lab.

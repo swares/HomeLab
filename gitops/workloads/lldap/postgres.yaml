@@ -53,6 +53,10 @@ spec:
     spec:
       automountServiceAccountToken: false
       # See the header: co-located with authelia-postgres on purpose.
+      # Every ExternalSecret and every SSO login depends on this; it must
+      # outlive inference workloads under node pressure.
+      # See gitops/workloads/priority-classes/.
+      priorityClassName: lab-critical
       nodeSelector:
         kubernetes.io/hostname: n150-1
       containers:

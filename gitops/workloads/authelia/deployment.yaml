@@ -18,6 +18,10 @@ spec:
         app: authelia
     spec:
       automountServiceAccountToken: false
+      # Every ExternalSecret and every SSO login depends on this; it must
+      # outlive inference workloads under node pressure.
+      # See gitops/workloads/priority-classes/.
+      priorityClassName: lab-critical
       containers:
         - name: authelia
           image: ghcr.io/authelia/authelia:4.39
