@@ -33,3 +33,31 @@ spec:
     - port: http
       path: /metrics
       interval: 30s
+---
+# Scrape the ArgoCD application controller.
+#
+# Added 2026-07-27 after scripts/verify-lab.py found `argocd_app_info` had zero
+# series: nothing had ever scraped ArgoCD, so LabArgoCDAppOutOfSync and
+# LabArgoCDAppDegraded in lab-alerts.yaml could never fire. The rules had been
+# in git for weeks looking entirely healthy.
+#
+# argocd_app_info — sync_status and health_status per Application — comes from
+# the application controller on the `argocd-metrics` Service, port 8082. The
+# server, repo-server and applicationset controllers expose their own metrics on
+# separate Services; add them if you want request/latency data, but they do not
+# carry app sync state.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: argocd-metrics
+  namespace: monitoring
+spec:
+  namespaceSelector:
+    matchNames: [argocd]
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: argocd-metrics
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
