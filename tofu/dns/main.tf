@@ -19,10 +19,22 @@ resource "pihole_dns_record" "kube_api" {
   ip     = "192.168.1.200"
 }
 
-# Wildcard anchor — *.apps.lab.home.arpa CNAMEs point here
+# Wildcard anchor — *.apps.lab.home.arpa CNAMEs point here.
+#
+# 192.168.1.201 is the kube-vip service VIP for Traefik, NOT a node address.
+# It was 192.168.1.160 (the H4) until 2026-07-27, which meant every service URL
+# in the lab died with that one host — even though k3s servicelb had Traefik
+# listening on all five node IPs the whole time. The single point was this
+# record, not the cluster.
+#
+# The VIP floats between control-plane nodes via kube-vip leader election. See
+# gitops/workloads/kube-vip/traefik-vip-service.yaml.
+#
+# Fallback if the VIP ever misbehaves: point this back at any node IP. Every
+# node still answers on 80/443 via servicelb, which is deliberately left enabled.
 resource "pihole_dns_record" "traefik_ingress" {
   domain = "apps.lab.home.arpa"
-  ip     = "192.168.1.160"
+  ip     = "192.168.1.201"
 }
 
 # ── Node addresses ─────────────────────────────────────────────────────────
