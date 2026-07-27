@@ -32,6 +32,12 @@ resource "pihole_dns_record" "kube_api" {
 #
 # Fallback if the VIP ever misbehaves: point this back at any node IP. Every
 # node still answers on 80/443 via servicelb, which is deliberately left enabled.
+#
+# NOTE: this module cannot currently be applied — the ryanwholey/pihole provider
+# is Pi-hole v5 only and the lab runs v6 (see the header of terraform.tf). The
+# live record is set by `ingress_vip` in ansible/inventory/hosts.yml, applied by
+# ansible/playbooks/dns.yml. This value is kept in step so the two do not drift
+# before the provider situation is resolved.
 resource "pihole_dns_record" "traefik_ingress" {
   domain = "apps.lab.home.arpa"
   ip     = "192.168.1.201"
