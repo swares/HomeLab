@@ -104,7 +104,7 @@
         name: "{{ promtail_user }}"
         group: "{{ promtail_group }}"
         system: true
-        shell: /sbin/nologin
+        shell: /usr/sbin/nologin
         create_home: false
         comment: Grafana Promtail log shipper
         # Allow reading systemd journal
@@ -185,15 +185,22 @@
         daemon_reload: true
 
     # ---- Firewall ----
-    - name: Allow Promtail metrics port through ufw (Debian, if active)
+    - name: Check whether ufw is installed
+      ansible.builtin.stat:
+        path: /usr/sbin/ufw
+      register: promtail_ufw
+      when: ansible_os_family == 'Debian'
+
+    - name: Allow Promtail metrics port through ufw (Debian, if installed)
       community.general.ufw:
         rule: allow
         port: "9080"
         proto: tcp
         src: 192.168.1.0/24
         comment: Promtail metrics
-      when: ansible_os_family == 'Debian'
-      ignore_errors: true
+      when:
+        - ansible_os_family == 'Debian'
+        - promtail_ufw.stat.exists | default(false)
 
   handlers:
     - name: Restart promtail
