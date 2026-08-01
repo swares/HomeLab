@@ -84,6 +84,13 @@
       when: resolved_status.stdout == 'active'
       notify: restart systemd-resolved
 
+    - name: (pihole) remove orphaned dnsmasq lab-zone drop-in (FTL reads /etc/dnsmasq.d)
+      ansible.builtin.file:
+        path: /etc/dnsmasq.d/10-lab-zone.conf
+        state: absent
+      when: dns_engine == 'pihole'
+      notify: restart pihole
+
     - name: Flush handlers before starting dnsmasq (ensure port 53 is free)
       ansible.builtin.meta: flush_handlers
 
