@@ -106,6 +106,13 @@
       when: dns_engine == 'pihole'
       failed_when: false   # service may not be installed
 
+    - name: (pihole) remove bare-dnsmasq lab zone drop-in (FTL also reads /etc/dnsmasq.d)
+      ansible.builtin.file:
+        path: /etc/dnsmasq.d/10-lab-zone.conf
+        state: absent
+      when: dns_engine == 'pihole'
+      notify: restart pihole
+
     - name: (pihole) ensure group
       ansible.builtin.group:
         name: pihole
