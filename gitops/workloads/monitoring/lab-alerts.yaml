@@ -28,8 +28,21 @@
 #   It wants the D-Bus SYSTEM bus, not systemd's private socket. That socket is
 #   mode srw-rw-rw- and systemd's policy permits unprivileged reads of unit
 #   state, so neither root nor a writable rootfs is needed — the socket just has
-#   to be mounted into the pod. gitops/apps/monitoring.yaml now does that via
-#   extraHostVolumeMounts, and node_systemd_* metrics are available.
+#   to be mounted into the pod. gitops/apps/monitoring.yaml does that via
+#   extraHostVolumeMounts.
+#
+#   That alone fixed the two opi5pro nodes but not the three Ubuntu ones, which
+#   then failed differently:
+#
+#     An AppArmor policy prevents this sender from sending this message to this
+#     recipient; ... member="Hello" ... destination="org.freedesktop.DBus"
+#
+#   containerd applies its default AppArmor profile on Ubuntu, and dbus-daemon
+#   mediates by peer profile. Orange Pi Jammy has no AppArmor, hence the split.
+#   Fixed by setting appArmorProfile: Unconfined on the container — which
+#   matters because backup-nas.timer and backup-etcd.timer exist only on
+#   odroid-nas, one of the confined nodes, so the socket mount by itself
+#   produced no useful metrics at all.
 #
 #   Note the collector is scoped by --collector.systemd.unit-include to
 #   backup-nas and backup-etcd only. Any rule referencing a unit outside that
