@@ -17,7 +17,7 @@ ERRORS=0; WARNINGS=0
 # ── DNS servers ───────────────────────────────────────────────────────────────
 DNS_PRIMARY=192.168.1.148
 DNS_SECONDARY=192.168.1.184
-INGRESS_VIP=192.168.1.160
+INGRESS_VIP=192.168.1.201
 LAB_DOMAIN=lab.home.arpa
 
 # ── Ingress endpoints to probe ────────────────────────────────────────────────
@@ -41,7 +41,6 @@ declare -A HOSTS=(
   [n150-2]=192.168.1.21
   [n150-3/yikw]=192.168.1.176
   [xu3-1]=192.168.1.64
-  [ldap-1/lldap]=192.168.1.70
 )
 
 echo -e "${BLU}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RST}"
@@ -194,7 +193,7 @@ for timer in backup-nas.timer backup-etcd.timer; do
 done
 
 # Remote timers
-for entry in "swares@192.168.1.128:backup-vault.timer:rpi5" "swares@192.168.1.70:backup-lldap.timer:ldap-1"; do
+for entry in "swares@192.168.1.128:backup-vault.timer:rpi5"; do
   host=$(echo "$entry" | cut -d: -f1)
   timer=$(echo "$entry" | cut -d: -f2)
   label=$(echo "$entry" | cut -d: -f3)
@@ -206,6 +205,23 @@ for entry in "swares@192.168.1.128:backup-vault.timer:rpi5" "swares@192.168.1.70
     fail "$timer ($label) — $state"
   fi
 done
+
+# lldap backup moved off the ldap-1 VM (decommissioned 2026-07-18) into the
+# lldap-backup CronJob in k3s. Check the newest successful Job rather than a
+# systemd timer on a host that no longer exists.
+last_lldap=$(kubectl -n lldap get jobs -o json 2>/dev/null | jq -r '
+  [.items[] | select(.status.succeeded == 1)]
+  | sort_by(.status.completionTime) | last | .status.completionTime // empty')
+if [[ -n "$last_lldap" ]]; then
+  age=$(( ($(date -u +%s) - $(date -u -d "$last_lldap" +%s)) / 3600 ))
+  if [[ $age -gt 26 ]]; then
+    warn "lldap-backup last succeeded ${age}h ago (expected ≤26h)"
+  else
+    ok "lldap-backup last succeeded ${age}h ago"
+  fi
+else
+  fail "lldap-backup — no successful Job found"
+fi
 
 # Last backup run check (warn if NAS backup hasn't run in >26h)
 # Use journal to find last invocation — systemctl property resets on boot.
@@ -297,16 +313,21 @@ fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "lldap"
-lldap_resp=$(curl -sk --max-time 5 "http://192.168.1.70:17170/health" 2>/dev/null)
-if [[ -z "$lldap_resp" ]]; then
-  # Fall back to TCP check on LDAP port
-  if nc -z -w3 192.168.1.70 3890 2>/dev/null; then
-    ok "lldap LDAP port 3890 reachable"
-  else
-    fail "lldap (192.168.1.70) — unreachable on port 17170 and 3890"
-  fi
+# lldap runs as a k3s Deployment since 2026-07-04; the ldap-1 VM is gone.
+lldap_ready=$(kubectl -n lldap get deploy lldap \
+  -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+if [[ "${lldap_ready:-0}" -ge 1 ]]; then
+  ok "lldap Deployment ready (${lldap_ready} replica)"
 else
-  ok "lldap HTTP (192.168.1.70:17170) reachable"
+  fail "lldap Deployment has no ready replicas"
+fi
+
+lldap_code=$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' \
+  https://lldap.apps.lab.home.arpa 2>/dev/null)
+if [[ "$lldap_code" =~ ^[23] ]]; then
+  ok "lldap ingress reachable ($lldap_code)"
+else
+  fail "lldap ingress https://lldap.apps.lab.home.arpa — ${lldap_code:-no response}"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────

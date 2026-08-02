@@ -1,7 +1,7 @@
 ---
 # Deploy Promtail on non-cluster Linux hosts.
 # Cluster nodes get Promtail via the k3s DaemonSet (gitops/apps/promtail.yaml).
-# This playbook covers: ldap-1, n150-1/2, octopi-dns, opi-zero2w-*, rpi5
+# This playbook covers: n150-1/2, octopi-dns, opi-zero2w-*, rpi4b, rpi5
 #
 # Install method: binary from GitHub releases (works on all distros/arches).
 #   Debian: also available via Grafana APT repo, but binary keeps parity with Arch.
