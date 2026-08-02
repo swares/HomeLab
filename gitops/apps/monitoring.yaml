@@ -330,6 +330,28 @@ spec:
               hostPath: /run/dbus/system_bus_socket
               mountPath: /var/run/dbus/system_bus_socket
               readOnly: true
+          # Mounting the socket is necessary but not sufficient on the Ubuntu
+          # nodes. containerd applies its default AppArmor profile there, and
+          # dbus-daemon mediates by peer profile, so the connection is refused
+          # at the handshake:
+          #   An AppArmor policy prevents this sender from sending this message
+          #   to this recipient; ... member="Hello" ... destination=
+          #   "org.freedesktop.DBus"
+          # The opi5pro nodes (Orange Pi Jammy) have no AppArmor and worked as
+          # soon as the socket was mounted — hence the amd64/arm64 split seen on
+          # 2026-08-02. This matters specifically because backup-nas.timer and
+          # backup-etcd.timer exist only on odroid-nas, which is one of the
+          # confined nodes.
+          #
+          # Trade-off accepted: node_exporter loses AppArmor confinement. It
+          # keeps UID 65534, runAsNonRoot, a read-only rootfs and no added
+          # capabilities. The stricter alternative is a custom AppArmor profile
+          # allowing only the D-Bus Hello and systemd read methods, which would
+          # have to be installed on each Ubuntu host outside GitOps.
+          containerSecurityContext:
+            readOnlyRootFilesystem: true
+            appArmorProfile:
+              type: Unconfined
 
         # ---- kube-state-metrics ----
         kube-state-metrics:
