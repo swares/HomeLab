@@ -312,18 +312,24 @@ spec:
             - operator: Exists   # scrape inference nodes too
           extraArgs:
             # Enable systemd collector so backup timer metrics are available
-            # (used by LabBackupNasSilent / LabBackupEtcdSilent alert rules)
-            # ⚠ These two flags produce nothing. Measured 2026-07-26:
-            #   node_scrape_collector_success{collector="systemd"} 0
-            # node_exporter needs /run/systemd/private (D-Bus), which is not
-            # mounted into this DaemonSet and is root-only while the container
-            # runs as UID 65534. Kept only so the failure stays visible and
-            # documented rather than being silently re-added later; see the
-            # note at the top of gitops/workloads/monitoring/lab-alerts.yaml.
-            # Backup and disk-check liveness come from healthchecks.io instead
-            # (ansible/playbooks/healthchecks.yml).
+            # (used by LabBackupNasSilent / LabBackupEtcdSilent alert rules).
             - --collector.systemd
             - --collector.systemd.unit-include=(backup-nas|backup-etcd)\.(service|timer)
+          # The 2026-07-26 note claimed this could not work because node_exporter
+          # needs /run/systemd/private, which is root-only. That was wrong. The
+          # collector connects to the D-Bus SYSTEM bus, and the pod log on
+          # 2026-08-02 said so explicitly:
+          #   couldn't get dbus connection: dial unix
+          #   /var/run/dbus/system_bus_socket: no such file or directory
+          # /run/dbus/system_bus_socket is mode srw-rw-rw- and systemd's D-Bus
+          # policy allows unprivileged reads of unit state, so UID 65534 and
+          # readOnlyRootFilesystem: true are both fine — the socket simply has
+          # to be visible inside the pod.
+          extraHostVolumeMounts:
+            - name: dbus
+              hostPath: /run/dbus/system_bus_socket
+              mountPath: /var/run/dbus/system_bus_socket
+              readOnly: true
 
         # ---- kube-state-metrics ----
         kube-state-metrics:
