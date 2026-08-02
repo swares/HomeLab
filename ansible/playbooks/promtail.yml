@@ -61,6 +61,7 @@
       register: promtail_installed_version
       changed_when: false
       failed_when: false
+      check_mode: false
 
     - name: Download Promtail binary
       ansible.builtin.get_url:
@@ -185,13 +186,11 @@
         daemon_reload: true
 
     # ---- Firewall ----
-    - name: Check whether ufw is installed
-      ansible.builtin.stat:
-        path: /usr/sbin/ufw
-      register: promtail_ufw
-      when: ansible_os_family == 'Debian'
+# ---- Firewall ----
+    - name: Collect service facts
+      ansible.builtin.service_facts:
 
-    - name: Allow Promtail metrics port through ufw (Debian, if installed)
+    - name: Allow Promtail metrics port through ufw (Debian, if active)
       community.general.ufw:
         rule: allow
         port: "9080"
@@ -200,7 +199,7 @@
         comment: Promtail metrics
       when:
         - ansible_os_family == 'Debian'
-        - promtail_ufw.stat.exists | default(false)
+        - "'ufw.service' in ansible_facts.services or 'ufw' in ansible_facts.services"
 
   handlers:
     - name: Restart promtail
