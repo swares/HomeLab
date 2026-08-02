@@ -395,7 +395,8 @@
       # ldap-utils is on the KVM host (Phase 1), not the sandbox VM.
       # Delegate to the KVM host, which reaches the sandbox via virbr-sandbox.
       # lldap disallows anonymous binds (rc=48), so bind as the admin user.
-      # lldap_admin_pass comes from Ansible Vault (same var used in bootstrap-lldap.yml).
+      # lldap_admin_pass comes from Ansible Vault. (bootstrap-lldap.yml, which
+      # previously shared this var, was deleted 2026-08-02 with the ldap-1 VM.)
       ansible.builtin.command: >
         ldapsearch
           -H ldap://{{ ansible_host }}:3890
