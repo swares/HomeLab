@@ -247,6 +247,10 @@ autoconnect-priority=10
 [wifi]
 mode=infrastructure
 ssid=$SSID
+# 2 = disable. The UWE5622 driver defaults to powersave on, which parks the
+# radio and drops the first packet after idle - a wifi-only node then shows up
+# as intermittently unreachable in health checks.
+powersave=2
 
 [wifi-security]
 key-mgmt=wpa-psk
