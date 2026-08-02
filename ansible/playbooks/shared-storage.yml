@@ -20,11 +20,11 @@
 #   # From n150-2 → n150-1
 #   virsh migrate --live --persistent <vm> qemu+ssh://192.168.1.42/system
 #
-# Move an existing VM to shared storage (example: ldap-1):
-#   sudo virsh shutdown ldap-1
-#   sudo mv /var/lib/libvirt/images/ldap-1.qcow2 /srv/libvirt-shared/
-#   sudo virsh edit ldap-1   # update <source file=...> path
-#   sudo virsh start ldap-1
+# Move an existing VM to shared storage (example: gitlab-1):
+#   sudo virsh shutdown gitlab-1
+#   sudo mv /var/lib/libvirt/images/gitlab-1.qcow2 /srv/libvirt-shared/
+#   sudo virsh edit gitlab-1   # update <source file=...> path
+#   sudo virsh start gitlab-1
 #
 # Run:
 #   ansible-playbook -i inventory/hosts.yml playbooks/shared-storage.yml \

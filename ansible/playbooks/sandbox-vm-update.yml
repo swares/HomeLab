@@ -18,20 +18,20 @@
 # Usage:
 #   # Validate only (default — does not promote):
 #   ansible-playbook -i inventory/hosts.yml playbooks/sandbox-vm-update.yml \
-#     -e target_vm=ldap-1 \
+#     -e target_vm=gitlab-1 \
 #     --vault-password-file .vault_pass --ask-become-pass
 #
 #   # Validate + promote production on pass:
 #   ansible-playbook -i inventory/hosts.yml playbooks/sandbox-vm-update.yml \
-#     -e "target_vm=ldap-1 promote_on_pass=true" \
+#     -e "target_vm=gitlab-1 promote_on_pass=true" \
 #     --vault-password-file .vault_pass --ask-become-pass
 #
 # Required extra vars (-e):
-#   target_vm:  inventory name of the VM to update (e.g. ldap-1)
+#   target_vm:  inventory name of the VM to update (e.g. gitlab-1)
 #
 # Required inventory vars on target_vm (standalone_vms group in hosts.yml):
 #   kvm_host:         inventory name of its KVM hypervisor (e.g. n150-1)
-#   libvirt_vm_name:  VM domain name as known to virsh (e.g. ldap-1)
+#   libvirt_vm_name:  VM domain name as known to virsh (e.g. gitlab-1)
 #   health_check_url: HTTP URL to probe after update (e.g. http://192.168.1.70:17170)
 #
 # Optional inventory vars:
