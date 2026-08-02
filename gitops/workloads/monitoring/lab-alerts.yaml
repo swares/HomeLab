@@ -96,10 +96,14 @@ spec:
       rules:
         - alert: LabBackupNasSilent
           # Fires when backup-nas.timer last ran more than 25 hours ago.
-          # absent() fires if the metric doesn't exist (collector not enabled).
+          # NOTE the metric name has no "_time" in it. These rules previously
+          # read node_systemd_timer_last_trigger_TIME_seconds, which does not
+          # exist, so they could never have fired even once the collector was
+          # working. Verify names against the exporter before editing:
+          #   curl -s http://192.168.1.160:9100/metrics | grep '^# HELP node_systemd'
           expr: |
             (
-              time() - node_systemd_timer_last_trigger_time_seconds{
+              time() - node_systemd_timer_last_trigger_seconds{
                 name="backup-nas.timer",
                 instance=~"192\\.168\\.1\\.160.*"
               }
@@ -116,7 +120,7 @@ spec:
         - alert: LabBackupEtcdSilent
           expr: |
             (
-              time() - node_systemd_timer_last_trigger_time_seconds{
+              time() - node_systemd_timer_last_trigger_seconds{
                 name="backup-etcd.timer",
                 instance=~"192\\.168\\.1\\.160.*"
               }
@@ -130,9 +134,30 @@ spec:
               The backup-etcd.timer on the H4 last triggered more than 25 hours
               ago.  Check journalctl -u backup-etcd.service on the H4.
 
+        - alert: LabBackupVaultSilent
+          # rpi5 runs the Debian node_exporter package, whose systemd collector
+          # has always worked — this series was available the whole time and
+          # simply had no rule against it. Confirmed present 2026-08-02 under
+          # job="node-exporter-external", instance="192.168.1.128".
+          expr: |
+            (
+              time() - node_systemd_timer_last_trigger_seconds{
+                name="backup-vault.timer",
+                instance=~"192\\.168\\.1\\.128.*"
+              }
+            ) > 90000
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "backup-vault has not run in >25 hours"
+            description: >
+              backup-vault.timer on rpi5 last triggered more than 25 hours ago.
+              Check journalctl -u backup-vault.service on 192.168.1.128.
+
         - alert: LabBackupNasFailed
-          # Catches a failed service exit even without the systemd collector,
-          # as long as node_systemd_unit_state is available.
+          # node_systemd_unit_state is confirmed exposed by the DaemonSet
+          # collector; the unit-include regex covers backup-nas.service.
           expr: |
             node_systemd_unit_state{
               name="backup-nas.service",
@@ -147,6 +172,22 @@ spec:
             description: >
               backup-nas.service on the H4 has exited with a failure.
               Run: journalctl -u backup-nas.service -n 50
+
+        # TODO — lldap-backup is a Kubernetes CronJob, not a systemd timer, so
+        # no node_systemd_* rule can cover it. On 2026-08-02 it was found hung
+        # on unreachable NFS for 3d15h with nothing alerting. The rule wants
+        # kube_cronjob_status_last_successful_time from kube-state-metrics, but
+        # per the note at the top of this file: verify the metric exists before
+        # writing the rule.
+        #
+        #   curl -sG http://prometheus.apps.lab.home.arpa/api/v1/query \
+        #     --data-urlencode 'query=kube_cronjob_status_last_successful_time' \
+        #     | jq '.data.result[].metric'
+        #
+        # If present:
+        #   - alert: LabCronJobStale
+        #     expr: time() - kube_cronjob_status_last_successful_time > 93600
+        #     for: 30m
 
     # -----------------------------------------------------------------------
     # Disk headroom check — ansible/playbooks/disk-check-timer.yml on the H4
