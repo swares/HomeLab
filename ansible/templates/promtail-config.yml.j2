@@ -30,18 +30,3 @@ scrape_configs:
         target_label: hostname
       - source_labels: [__journal_priority_keyword]
         target_label: level
-
-  # ---- /var/log/syslog or /var/log/messages (distro-dependent) ----
-  - job_name: syslog
-    static_configs:
-      - targets: [localhost]
-        labels:
-          job: syslog
-          host: {{ inventory_hostname }}
-          __path__: /var/log/{syslog,messages}
-    pipeline_stages:
-      - regex:
-          expression: '^(?P<timestamp>\w+\s+\d+\s+\d+:\d+:\d+)\s+(?P<hostname>\S+)\s+(?P<unit>\S+?)(\[\d+\])?:\s+(?P<message>.*)'
-      - labels:
-          unit:
-          hostname:

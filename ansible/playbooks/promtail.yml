@@ -112,14 +112,6 @@
         groups: systemd-journal
         append: true
 
-    - name: Add promtail to adm group (Debian — /var/log/syslog is root:adm 0640)
-      ansible.builtin.user:
-        name: "{{ promtail_user }}"
-        groups: adm
-        append: true
-      when: ansible_os_family == "Debian"
-      notify: Restart promtail
-
     - name: Create config directory
       ansible.builtin.file:
         path: "{{ promtail_config_dir }}"
