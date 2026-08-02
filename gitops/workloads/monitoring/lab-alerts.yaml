@@ -14,22 +14,30 @@
 #   - VM in crashed state
 #   - ArgoCD app out-of-sync / degraded
 #
-# ⚠ NOTE — the systemd-based rules below DO NOT WORK, and cannot as written.
+# NOTE — history of the systemd-based rules below (fixed 2026-08-02).
 #
-#   The advice this note used to give — "add --collector.systemd to
-#   gitops/apps/monitoring.yaml and the rules will start firing" — is wrong.
-#   The flag was added, and on 2026-07-26 the collector was measured:
+#   2026-07-26 concluded these rules "cannot work as written", on the theory
+#   that node_exporter reads systemd via /run/systemd/private, which is
+#   root-only and unmounted. That diagnosis was wrong.
 #
-#     node_scrape_collector_success{collector="systemd"} 0
-#     $ curl -s http://192.168.1.160:9100/metrics | grep -c node_systemd
-#     0
+#   The pod log on 2026-08-02 named the actual path:
 #
-#   Enabling the collector is not sufficient. node_exporter reads systemd over
-#   D-Bus at /run/systemd/private, which is (a) not mounted into the DaemonSet
-#   pod and (b) mode 0700 root-only, while the chart runs the container as UID
-#   65534. So every node_systemd_* metric is absent cluster-wide and
-#   LabBackupNasSilent / LabBackupEtcdSilent / LabBackupNasFailed have never
-#   fired and never could.
+#     couldn't get dbus connection: dial unix
+#     /var/run/dbus/system_bus_socket: no such file or directory
+#
+#   It wants the D-Bus SYSTEM bus, not systemd's private socket. That socket is
+#   mode srw-rw-rw- and systemd's policy permits unprivileged reads of unit
+#   state, so neither root nor a writable rootfs is needed — the socket just has
+#   to be mounted into the pod. gitops/apps/monitoring.yaml now does that via
+#   extraHostVolumeMounts, and node_systemd_* metrics are available.
+#
+#   Note the collector is scoped by --collector.systemd.unit-include to
+#   backup-nas and backup-etcd only. Any rule referencing a unit outside that
+#   regex will still see no metric. Widen the regex before adding one.
+#
+#   Also: lldap-backup is a Kubernetes CronJob, not a systemd timer, so it
+#   produces no node_systemd_* series at all. Alert on it via
+#   kube_cronjob_status_last_successful_time from kube-state-metrics instead.
 #
 #   Backup silence IS covered — by healthchecks.io, configured in
 #   ansible/playbooks/healthchecks.yml, which pings on each successful run and
