@@ -173,21 +173,43 @@ spec:
               backup-nas.service on the H4 has exited with a failure.
               Run: journalctl -u backup-nas.service -n 50
 
-        # TODO — lldap-backup is a Kubernetes CronJob, not a systemd timer, so
-        # no node_systemd_* rule can cover it. On 2026-08-02 it was found hung
-        # on unreachable NFS for 3d15h with nothing alerting. The rule wants
-        # kube_cronjob_status_last_successful_time from kube-state-metrics, but
-        # per the note at the top of this file: verify the metric exists before
-        # writing the rule.
-        #
-        #   curl -sG http://prometheus.apps.lab.home.arpa/api/v1/query \
-        #     --data-urlencode 'query=kube_cronjob_status_last_successful_time' \
-        #     | jq '.data.result[].metric'
-        #
-        # If present:
-        #   - alert: LabCronJobStale
-        #     expr: time() - kube_cronjob_status_last_successful_time > 93600
-        #     for: 30m
+        - alert: LabCronJobStale
+          # Backups that run as Kubernetes CronJobs rather than systemd timers,
+          # so no node_systemd_* rule can see them. Verified 2026-08-02:
+          #   kube_cronjob_status_last_successful_time  series=2
+          #     immich/immich-db-backup   19.6h ago
+          #     lldap/lldap-backup        18.6h ago
+          #
+          # Both are daily, so 26h gives ~1h margin over the 24h period — the
+          # same shape as the systemd timer rules above. Deliberately unscoped
+          # so new CronJobs are covered automatically. A CronJob scheduled less
+          # often than 26h would fire permanently and must be excluded here.
+          #
+          # Known gap: a CronJob that has NEVER succeeded exposes no
+          # last_successful_time series at all, so this rule cannot see it.
+          # To cover that case as well:
+          #   kube_cronjob_info
+          #     unless on(namespace, cronjob)
+          #   kube_cronjob_status_last_successful_time
+          # (not added here — it also fires for a newly created CronJob until
+          # its first run completes.)
+          expr: |
+            (
+              time() - kube_cronjob_status_last_successful_time
+            ) > 93600
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: >-
+              CronJob {{ $labels.namespace }}/{{ $labels.cronjob }} has not
+              succeeded in >26h
+            description: >
+              Last successful run was more than 26 hours ago. On 2026-08-02
+              lldap-backup was found hung on an unreachable NFS mount for 3d15h
+              with nothing alerting on it. Check:
+              kubectl -n {{ $labels.namespace }} get jobs
+              --sort-by=.metadata.creationTimestamp
 
     # -----------------------------------------------------------------------
     # Disk headroom check — ansible/playbooks/disk-check-timer.yml on the H4
