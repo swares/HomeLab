@@ -211,7 +211,7 @@ done
 # systemd timer on a host that no longer exists.
 last_lldap=$(kubectl -n lldap get jobs -o json 2>/dev/null | jq -r '
   [.items[] | select(.status.succeeded == 1)]
-  | sort_by(.status.completionTime) | last | .status.completionTime // empty')
+  | sort_by(.status.completionTime) | last | .status.completionTime // empty' || true)
 if [[ -n "$last_lldap" ]]; then
   age=$(( ($(date -u +%s) - $(date -u -d "$last_lldap" +%s)) / 3600 ))
   if [[ $age -gt 26 ]]; then
@@ -226,7 +226,7 @@ fi
 # Last backup run check (warn if NAS backup hasn't run in >26h)
 # Use journal to find last invocation — systemctl property resets on boot.
 last_nas=$(journalctl -u backup-nas.service --no-pager -n 1 \
-  --output=short-unix 2>/dev/null | awk 'NR==1{print $1}')
+  --output=short-unix 2>/dev/null | awk 'NR==1{print $1}' || true)
 if [[ -n "$last_nas" && "$last_nas" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
   age=$(( ($(date +%s) - ${last_nas%.*}) / 3600 ))
   if [[ $age -gt 26 ]]; then
@@ -296,7 +296,7 @@ done
 # ─────────────────────────────────────────────────────────────────────────────
 section "Vault"
 VAULT_ADDR_REMOTE="http://192.168.1.128:8200"
-vault_status=$(curl -sk --max-time 5 "${VAULT_ADDR_REMOTE}/v1/sys/health" 2>/dev/null)
+vault_status=$(curl -sk --max-time 5 "${VAULT_ADDR_REMOTE}/v1/sys/health" 2>/dev/null || true)
 if [[ -z "$vault_status" ]]; then
   fail "Vault (192.168.1.128) — unreachable"
 else
@@ -315,7 +315,7 @@ fi
 section "lldap"
 # lldap runs as a k3s Deployment since 2026-07-04; the ldap-1 VM is gone.
 lldap_ready=$(kubectl -n lldap get deploy lldap \
-  -o jsonpath='{.status.readyReplicas}' 2>/dev/null)
+  -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
 if [[ "${lldap_ready:-0}" -ge 1 ]]; then
   ok "lldap Deployment ready (${lldap_ready} replica)"
 else
@@ -323,7 +323,7 @@ else
 fi
 
 lldap_code=$(curl -sk --max-time 5 -o /dev/null -w '%{http_code}' \
-  https://lldap.apps.lab.home.arpa 2>/dev/null)
+  https://lldap.apps.lab.home.arpa 2>/dev/null || true)
 if [[ "$lldap_code" =~ ^[23] ]]; then
   ok "lldap ingress reachable ($lldap_code)"
 else
@@ -347,23 +347,20 @@ done < <(kubectl get externalsecret -A --no-headers \
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "Ollama inference (opi5pro-1)"
-ollama_svc=$(kubectl get svc ollama -n ai-gateway -o jsonpath='{.spec.clusterIP}' 2>/dev/null)
-if [[ -z "$ollama_svc" ]]; then
-  fail "Ollama service not found in ai-gateway"
-else
-  ollama_resp=$(curl -s --max-time 5 "http://${ollama_svc}:11434/api/tags" 2>/dev/null)
-  if [[ -z "$ollama_resp" ]]; then
-    fail "Ollama — no response from ${ollama_svc}:11434"
+# ai-gateway carries a default-deny-all NetworkPolicy; ollama only accepts
+# traffic from litellm, so curling its ClusterIP from the host namespace is
+# blocked by design and would report a false failure. Check readiness via the
+# API server instead — the ai.apps ingress probe above already exercises the
+# litellm -> ollama data path end to end.
+for _d in ollama ollama-2; do
+  _ready=$(kubectl -n ai-gateway get deploy "$_d" \
+    -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)
+  if [[ "${_ready:-0}" -ge 1 ]]; then
+    ok "$_d ready (${_ready} replica)"
   else
-    models=$(echo "$ollama_resp" | python3 -c "
-import sys, json
-d = json.load(sys.stdin)
-names = [m['name'] for m in d.get('models', [])]
-print(', '.join(names) if names else 'no models loaded')
-" 2>/dev/null || echo "parse error")
-    ok "Ollama reachable — models: $models"
+    fail "$_d has no ready replicas"
   fi
-fi
+done
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "Loop device (LVM backing)"
