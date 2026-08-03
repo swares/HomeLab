@@ -46,6 +46,11 @@
       register: vm_exists
       changed_when: false
       failed_when: false
+      # Must run under --check too. command tasks skip in check mode by default,
+      # which leaves vm_exists without an rc and makes the guard below abort with
+      # "VM <name> already exists" for a VM that does not exist. Read-only task,
+      # so running it during a dry run is safe.
+      check_mode: false
 
     - name: Abort if VM already exists
       ansible.builtin.fail:
