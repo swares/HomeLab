@@ -125,6 +125,9 @@
       register: ne_current
       changed_when: false
       failed_when: false
+      # Read-only probe; the download/install guard reads ne_current. Same fix as
+      # promtail.yml — without it, --check re-downloads on already-current hosts.
+      check_mode: false
 
     - name: Download and unpack upstream release
       when: node_exporter_version not in (ne_current.stderr | default('')) + (ne_current.stdout | default(''))

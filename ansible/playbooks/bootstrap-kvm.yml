@@ -49,6 +49,8 @@
       register: kvm_ok
       changed_when: false
       failed_when: "'KVM acceleration can be used' not in kvm_ok.stdout"
+      # Read-only probe; without this the hardware check is skipped under --check.
+      check_mode: false
 
     - name: Show KVM status
       ansible.builtin.debug:
@@ -86,6 +88,8 @@
       register: lv_check
       changed_when: false
       failed_when: false
+      # Read-only probe; `when: lv_check.rc != 0` below needs a real rc.
+      check_mode: false
 
     - name: Create VM storage LV
       ansible.builtin.command: >

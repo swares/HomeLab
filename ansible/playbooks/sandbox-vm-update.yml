@@ -91,6 +91,8 @@
       register: net_check
       changed_when: false
       failed_when: false
+      # Read-only probe; `when: net_check.rc != 0` below needs a real rc.
+      check_mode: false
 
     - name: Define sandbox NAT network
       ansible.builtin.command:

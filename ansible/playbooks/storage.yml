@@ -109,6 +109,10 @@
       register: loop_check
       changed_when: false
       failed_when: loop_check.rc != 0
+      # Read-only probe. Without this, command tasks skip under --check, so this
+      # verification silently does nothing during a dry run — and the loop device
+      # backs vg_microshift, i.e. every k8s PV.
+      check_mode: false
 
     - name: Create the LVMS volume group on the loop device
       community.general.lvg:
