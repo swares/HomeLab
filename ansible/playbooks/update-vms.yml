@@ -93,6 +93,9 @@
       register: schedulable
       changed_when: false
       failed_when: schedulable.stdout == "true"
+      # Read-only probe; without this the schedulability guard is skipped under
+      # --check, so a dry run cannot tell you the node is still cordoned.
+      check_mode: false
 
   post_tasks:
     - name: Report patch result for {{ inventory_hostname }}

@@ -73,6 +73,8 @@
       register: resolved_status
       changed_when: false
       failed_when: false
+      # Read-only probe; the stub-listener disable below keys off this stdout.
+      check_mode: false
 
     - name: Disable systemd-resolved stub listener (frees port 53 for dnsmasq)
       ansible.builtin.ini_file:

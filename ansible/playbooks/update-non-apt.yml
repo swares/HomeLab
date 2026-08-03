@@ -69,6 +69,8 @@
       register: k3s_current
       changed_when: false
       failed_when: false
+      # Read-only probe; the "already at target version" guard reads k3s_current.
+      check_mode: false
 
   tasks:
     - name: Skip if already at target version
@@ -131,6 +133,8 @@
       register: k3s_current
       changed_when: false
       failed_when: false
+      # Read-only probe; the "already at target version" guard reads k3s_current.
+      check_mode: false
 
     - name: Read k3s node token from server
       ansible.builtin.slurp:
