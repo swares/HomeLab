@@ -33,9 +33,30 @@ spec:
         # If Kyverno is unavailable, webhooks fail open (don't block pods).
         # Acceptable trade-off for a homelab; tighten to Fail once stable.
         webhookFailurePolicy: Ignore
+        # Bitnami moved docker.io/bitnami/* to docker.io/bitnamilegacy/* on
+        # 2025-09-29. Both cleanup hooks below default to repository:
+        # bitnami/kubectl, which now 404s:
+        #   failed to resolve reference "docker.io/bitnami/kubectl:1.30.2": not found
+        # That left the kyverno-clean-reports PostSync hook in ImagePullBackOff, so
+        # every full sync hung waiting on it and then failed.
+        #
+        # bitnamilegacy is explicitly a temporary archive with no updates and may be
+        # withdrawn. Mirror these into registry.apps.lab.home.arpa and repoint here.
+        #
+        # crds.migration uses ghcr.io/kyverno/kyverno-cli and is unaffected.
         webhooksCleanup:
           enabled: true
-        # bitnami/kubectl was removed from Docker Hub in 2024 — override to OCI registry.
+          image:
+            repository: bitnamilegacy/kubectl
+        policyReportsCleanup:
+          enabled: true
+          image:
+            repository: bitnamilegacy/kubectl
+        # NOTE: as of chart 3.3.4 this section creates nothing — `kubectl -n kyverno
+        # get cronjob` returns no rows — so this override has never applied to any
+        # resource. The paths that actually matter are webhooksCleanup.image and
+        # policyReportsCleanup.image above. Left in place pending confirmation that
+        # it can be deleted outright.
         cleanupJobs:
           admissionReports:
             image:
