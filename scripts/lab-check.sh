@@ -99,6 +99,7 @@ while IFS= read -r line; do
   name=$(echo "$line" | awk '{print $1}')
   sync=$(echo "$line" | awk '{print $2}')
   health=$(echo "$line" | awk '{print $3}')
+  op=$(echo "$line" | awk '{print $4}')
   if [[ "$sync" == "Synced" && "$health" == "Healthy" ]]; then
     ok "$name (Synced/Healthy)"
   elif [[ "$sync" == "Synced" && "$health" == "Progressing" ]]; then
@@ -108,7 +109,18 @@ while IFS= read -r line; do
   else
     warn "$name ($sync/$health)"
   fi
-done < <(kubectl get applications -n argocd --no-headers 2>/dev/null)
+
+  # sync/health compare desired vs live state. They say nothing about whether the
+  # last sync OPERATION succeeded — a failed PostSync hook leaves the app Synced
+  # and Healthy because the Deployments are fine. kyverno sat Synced/Healthy from
+  # 2026-07-22 to 2026-08-03 while every sync failed on a hook Job stuck in
+  # ImagePullBackOff, and this script reported it green throughout.
+  if [[ "$op" == "Failed" || "$op" == "Error" ]]; then
+    warn "$name — last sync operation $op"
+  fi
+done < <(kubectl get applications -n argocd --no-headers -o custom-columns=\
+'NAME:.metadata.name,SYNC:.status.sync.status,HEALTH:.status.health.status,OP:.status.operationState.phase' \
+  2>/dev/null)
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "Pod health (non-Running/Completed)"
