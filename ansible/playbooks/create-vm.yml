@@ -114,20 +114,29 @@
           --autostart
       register: virt_install
 
-    - name: Wait for VM to boot
-      ansible.builtin.pause:
-        seconds: 30
+    # Everything below queries the VM that was just created. Under --check nothing
+    # was created, so none of it can work: the pause burns 30s for nothing, and
+    # Get VM IP retries 10 times against a domain that does not exist before
+    # failing on "Command would have run if not in check mode". Show VM IP would
+    # then break on vm_ip.stdout_lines. A dry run should validate inputs, confirm
+    # the VM does not already exist, and stop there.
+    - name: Post-create verification
+      when: not ansible_check_mode
+      block:
+        - name: Wait for VM to boot
+          ansible.builtin.pause:
+            seconds: 30
 
-    - name: Get VM IP
-      ansible.builtin.command: >
-        virsh domifaddr {{ vm_name }} --source agent
-      register: vm_ip
-      retries: 10
-      delay: 10
-      until: vm_ip.rc == 0 and '192.168' in vm_ip.stdout
-      changed_when: false
-      failed_when: false
+        - name: Get VM IP
+          ansible.builtin.command: >
+            virsh domifaddr {{ vm_name }} --source agent
+          register: vm_ip
+          retries: 10
+          delay: 10
+          until: vm_ip.rc == 0 and '192.168' in vm_ip.stdout
+          changed_when: false
+          failed_when: false
 
-    - name: Show VM IP
-      ansible.builtin.debug:
-        msg: "{{ vm_ip.stdout_lines }}"
+        - name: Show VM IP
+          ansible.builtin.debug:
+            msg: "{{ vm_ip.stdout_lines }}"
