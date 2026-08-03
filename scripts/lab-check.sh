@@ -127,12 +127,18 @@ else
 fi
 
 # High restart count warning (exclude svclb-* — k3s LB DaemonSet restarts are expected)
-kubectl get pods -A --no-headers 2>/dev/null | awk '{
-  restarts=$5+0
-  if (restarts >= 5) print $1, $2, $5
-}' | grep -v 'svclb-' || true | while read ns pod restarts; do
-  warn "[$ns] $pod has $restarts restarts"
-done
+# NOTE: this previously read `... | grep -v 'svclb-' || true | while read ...`,
+# which parses as (pipeline) || (true | while ...). When grep FOUND something the
+# left side succeeded, its output went to stdout unformatted and the loop was
+# short-circuited — so high-restart pods printed as bare "ns pod count" lines with
+# no warn() prefix, and were never counted as warnings.
+high_restarts=$(kubectl get pods -A --no-headers 2>/dev/null | \
+  awk '$5+0 >= 5 {print $1, $2, $5}' | grep -v 'svclb-' || true)
+if [[ -n "$high_restarts" ]]; then
+  while read -r ns pod restarts; do
+    warn "[$ns] $pod has $restarts restarts"
+  done <<< "$high_restarts"
+fi
 
 # ─────────────────────────────────────────────────────────────────────────────
 section "TLS certificates"
