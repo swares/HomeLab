@@ -117,7 +117,13 @@ spec:
                     --host lldap-k8s
 
                   echo "Backup complete. Recent lldap snapshots:"
-                  restic -r "$REPO" snapshots --tag lldap --last 5
+                  # --latest, not --last. restic deprecated --last and it no
+                  # longer takes a count, so `--last 5` parsed the 5 as a
+                  # snapshot ID, prefix-matched 59a16050, and printed one
+                  # unrelated snapshot while silently ignoring --tag:
+                  #   Flag --last has been deprecated, use --latest 1
+                  #   Ignoring "filters": explicit snapshot ids are given
+                  restic -r "$REPO" snapshots --tag lldap --latest 5
               volumeMounts:
                 - name: dump
                   mountPath: /dump
