@@ -4,6 +4,15 @@ RequiresMountsFor={{ cold_primary_mount }} {{ cold_secondary_mount }} {{ nas_mou
 
 [Service]
 Type=oneshot
+# restic caches pack and index metadata under $RESTIC_CACHE_DIR. Without one it
+# re-reads every index on each run:
+#   warning: running prune without a cache, this may be very slow!
+# Harmless at 203 GiB / 43k packs today (prune finishes in ~3s), but it scales
+# with repository size, not with how much changed. systemd creates and owns
+# /var/cache/restic via CacheDirectory=; restic namespaces by repository ID
+# inside it, so every backup unit can share the one directory.
+CacheDirectory=restic
+Environment=RESTIC_CACHE_DIR=/var/cache/restic
 Environment=RESTIC_REPOSITORY={{ restic_repo }}
 Environment=RESTIC_PASSWORD_FILE={{ restic_password_file }}
 # Initialize the primary repo once if needed, then back up.

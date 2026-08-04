@@ -6,4 +6,10 @@ After=backup-nas.service
 Type=oneshot
 # Creds (RESTIC_PASSWORD_FILE, B2_ACCOUNT_ID/KEY or rclone env) come from /etc/restic/offsite.env
 EnvironmentFile=-/etc/restic/offsite.env
+# Shared restic cache — see the comment in backup-nas.service.j2. Set after the
+# EnvironmentFile so it wins if that file ever defines RESTIC_CACHE_DIR too.
+# Matters more here than locally: a cold cache against a remote repo costs
+# network round-trips, not just local reads.
+CacheDirectory=restic
+Environment=RESTIC_CACHE_DIR=/var/cache/restic
 ExecStart=/bin/bash -c 'test -n "{{ restic_offsite_repo }}" || { echo "no offsite repo configured; skipping"; exit 0; }; restic -r {{ restic_repo }} copy --repo2 {{ restic_offsite_repo }}'

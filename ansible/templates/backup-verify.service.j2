@@ -4,6 +4,10 @@ RequiresMountsFor={{ cold_primary_mount }} {{ cold_secondary_mount }}
 
 [Service]
 Type=oneshot
+# Shared restic cache — see the comment in backup-nas.service.j2. `restic check`
+# is the heaviest index reader of the lot, so this is where a cache helps most.
+CacheDirectory=restic
+Environment=RESTIC_CACHE_DIR=/var/cache/restic
 # Read-only. Never writes to, forgets from, or prunes any repository.
 # Exits non-zero if any check fails, so the healthchecks.io drop-in is skipped
 # and the dead-man switch fires.
