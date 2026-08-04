@@ -4,6 +4,9 @@ RequiresMountsFor={{ cold_primary_mount }}
 
 [Service]
 Type=oneshot
+# Shared restic cache — see the comment in backup-nas.service.j2.
+CacheDirectory=restic
+Environment=RESTIC_CACHE_DIR=/var/cache/restic
 # k3s owns snapshotting itself (embedded etcd, its own schedule and retention,
 # written to the NVMe). This unit only replicates those snapshots onto the cold
 # mirror and verifies what landed. The logic lives in a script rather than an
