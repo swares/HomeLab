@@ -4,10 +4,11 @@ metadata:
   name: lldap-backup
   namespace: lldap
 spec:
-  # 02:30 daily. NOTE: this overlaps the host backup-nas timer (01:30) writing to
-  # the SAME restic repo. Two restic processes on one repo contend for the repo
-  # lock. Tracked in docs/REVIEW-2026-07-24.md; left as-is here to keep this PR
-  # to the Postgres migration.
+  # 02:30 daily. The host backup-nas timer writes the SAME restic repo at 01:30,
+  # so in principle the two contend for the repo lock. Measured 2026-08-04:
+  # backup-nas runs 01:30:00 -> 01:30:14 every night (incremental, plus the copy
+  # to /mnt/cold-sec), so the windows do not actually overlap. Left at 02:30;
+  # revisit if backup-nas ever grows past an hour.
   schedule: "30 2 * * *"
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 3
@@ -28,10 +29,23 @@ spec:
           # by PV affinity and can run on any node.
           securityContext:
             runAsUser: 0
-          containers:
-            - name: backup
-              # postgres image for pg_dump; restic is fetched from the same
-              # alpine base. Using one image avoids an init container.
+
+          # Split into two stock images rather than one image plus a runtime
+          # install. The previous version ran `apk add --no-cache restic` inside
+          # postgres:16-alpine on every run, which made each nightly backup
+          # depend on dl-cdn.alpinelinux.org being reachable over TLS at 02:30.
+          # On 2026-08-04 it was not:
+          #
+          #   WARNING: fetching .../aarch64/APKINDEX.tar.gz: TLS: unspecified error
+          #   ERROR: unable to select packages:
+          #     restic (no such package): required by: world[restic]
+          #
+          # restic was not missing — the package index fetch failed, so apk had
+          # no catalogue. The job exited non-zero twice and hit backoffLimit 64
+          # seconds in, and that night's snapshot was lost. Nothing is fetched at
+          # runtime now.
+          initContainers:
+            - name: pg-dump
               image: postgres:16-alpine
               imagePullPolicy: IfNotPresent
               env:
@@ -45,38 +59,68 @@ spec:
                 - -c
                 - |
                   set -eu
-                  REPO="/restic-repo"
-                  export RESTIC_PASSWORD_FILE=/secrets/restic-password
-
-                  apk add --no-cache restic > /dev/null
-
-                  restic -r "$REPO" snapshots > /dev/null 2>&1 || restic -r "$REPO" init
 
                   echo "Dumping lldap database..."
-                  pg_dump -h lldap-postgres -U lldap -d lldap > /tmp/lldap.sql
+                  pg_dump -h lldap-postgres -U lldap -d lldap > /dump/lldap.sql
 
                   # A dump that is well-formed but EMPTY is more dangerous than a
                   # missing one, because it looks like a successful backup. This
                   # is the same failure shape as the 4 KB etcd "snapshots" and the
                   # empty pg_dumps found on 2026-07-25 — assert on content.
-                  size=$(wc -c < /tmp/lldap.sql)
+                  #
+                  # Failing here means the restic container never runs, so a bad
+                  # dump can no longer reach the repository.
+                  size=$(wc -c < /dump/lldap.sql)
                   if [ "$size" -lt 1000 ]; then
                     echo "FAIL: dump is only ${size} bytes — refusing to back up an empty database" >&2
                     exit 1
                   fi
-                  grep -q "CREATE TABLE" /tmp/lldap.sql || {
+                  grep -q "CREATE TABLE" /dump/lldap.sql || {
                     echo "FAIL: dump contains no CREATE TABLE statements" >&2
                     exit 1
                   }
                   echo "  dump ok (${size} bytes)"
+              volumeMounts:
+                - name: dump
+                  mountPath: /dump
+              resources:
+                requests:
+                  cpu: 10m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
 
-                  restic -r "$REPO" backup /tmp/lldap.sql \
+          containers:
+            # Verified 2026-08-04 on linux/arm64:
+            #   restic 0.17.3 compiled with go1.23.3 on linux/arm64
+            # Alpine-based, so /bin/sh exists and the default entrypoint can be
+            # overridden. Pinned deliberately — an unpinned tag would reintroduce
+            # exactly the kind of external dependency this change removes.
+            - name: restic-backup
+              image: restic/restic:0.17.3
+              imagePullPolicy: IfNotPresent
+              env:
+                - name: RESTIC_PASSWORD_FILE
+                  value: /secrets/restic-password
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  set -eu
+                  REPO="/restic-repo"
+
+                  restic -r "$REPO" snapshots > /dev/null 2>&1 || restic -r "$REPO" init
+
+                  restic -r "$REPO" backup /dump/lldap.sql \
                     --tag lldap \
                     --host lldap-k8s
 
                   echo "Backup complete. Recent lldap snapshots:"
                   restic -r "$REPO" snapshots --tag lldap --last 5
               volumeMounts:
+                - name: dump
+                  mountPath: /dump
                 - name: backup-secrets
                   mountPath: /secrets
                   readOnly: true
@@ -89,7 +133,12 @@ spec:
                 limits:
                   cpu: 500m
                   memory: 256Mi
+
           volumes:
+            # Hands the dump from the init container to the backup container.
+            # Lives and dies with the pod; nothing persists here.
+            - name: dump
+              emptyDir: {}
             - name: backup-secrets
               secret:
                 secretName: lldap-backup-secrets
