@@ -78,13 +78,21 @@ spec:
                     echo "FAIL: gzip integrity check failed" >&2
                     rm -f "$TMP"; exit 1
                   }
-                  # Do NOT write this as `zcat "$TMP" | grep -q ...`. grep -q
-                  # exits on the first match, zcat then takes SIGPIPE and exits
-                  # 141, and `set -o pipefail` turns a PASSING check into a
-                  # failure. Observed 2026-08-04: this rejected a valid 17 MB
-                  # dump on every attempt. grep -c reads the whole stream, so
-                  # there is no early close and no SIGPIPE.
-                  tables=$(zcat "$TMP" | grep -c 'CREATE TABLE' || true)
+                  # `grep -c`, not `grep -q`. grep -q exits on the first match;
+                  # the decompressor is still writing ~208 MB, takes SIGPIPE and
+                  # exits 141, and `set -o pipefail` turns a PASSING check into a
+                  # failure. Reproduced 2026-08-04 at the same scale:
+                  #   gz 493K / 208000022 bytes decompressed
+                  #   ... | grep -q 'CREATE TABLE'  -> rc=141
+                  #   ... | grep -c 'CREATE TABLE'  -> 1
+                  # grep -c reads the whole stream, so there is no early close.
+                  #
+                  # `gzip -dc` rather than `zcat` is cosmetic — both exist in this
+                  # image — but it is the same binary already exercised by the
+                  # dump pipeline and `gzip -t` above, so it cannot diverge.
+                  #
+                  # Reference: a known-good dump has 61 CREATE TABLE lines.
+                  tables=$(gzip -dc "$TMP" | grep -c 'CREATE TABLE' || true)
                   if [ "${tables:-0}" -lt 1 ]; then
                     echo "FAIL: dump contains no CREATE TABLE statements" >&2
                     rm -f "$TMP"; exit 1
