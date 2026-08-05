@@ -1,13 +1,38 @@
-# Belt-and-suspenders DB dump into the library volume (restic on md0 then captures it).
-# Immich also has a built-in DB backup (admin settings) writing to UPLOAD_LOCATION/backups;
-# this CronJob makes the dump explicit and GitOps-managed.
+# GitOps-managed Immich database dump into the library volume, which backup-nas
+# then captures into restic.
+#
+# Immich also ships a built-in DB backup (admin settings -> Backup Settings),
+# which was writing immich-db-backup-<ts>-v<ver>-pg<ver>.sql.gz at 02:00 from
+# ~2026-07-26. As of 2026-08-04 that is DISABLED in favour of this job, because
+# its schedule and keepLastAmount live in Immich's database and are only
+# settable through the admin UI — they cannot be version-controlled, reviewed,
+# or restored alongside the rest of the lab. If the built-in is ever preferred,
+# set IMMICH_CONFIG_FILE and manage Immich's system config declaratively rather
+# than re-enabling it by hand.
+#
+# Both dump styles were compared before choosing: identical extension coverage
+# (7 CREATE EXTENSION each) and both valid gzip, so nothing was lost by keeping
+# this one.
 apiVersion: batch/v1
 kind: CronJob
-metadata: { name: immich-db-backup, namespace: immich }
+metadata:
+  name: immich-db-backup
+  namespace: immich
 spec:
-  schedule: "30 1 * * *"
+  # 01:00, deliberately 30 minutes BEFORE the host backup-nas timer at 01:30.
+  # This previously ran at 01:30 itself: the dump finished at 01:30:09 while
+  # backup-nas ran 01:30:00–01:30:13 and includes /mnt/cold-8t/immich in its
+  # restic paths, so restic could snapshot a half-written .sql.gz. Running first
+  # means the night's snapshot holds that night's completed dump.
+  # (The atomic rename below makes a torn file impossible either way.)
+  schedule: "0 1 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
+      activeDeadlineSeconds: 1800
+      backoffLimit: 2
       template:
         spec:
           restartPolicy: OnFailure
@@ -18,16 +43,71 @@ spec:
               image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
               env:
                 - name: PGPASSWORD
-                  valueFrom: { secretKeyRef: { name: immich-secrets, key: DB_PASSWORD } }
-              command: ["/bin/sh","-c"]
+                  valueFrom:
+                    secretKeyRef:
+                      name: immich-secrets
+                      key: DB_PASSWORD
+              # bash, not sh: this image's /bin/sh is dash, which has no
+              # `set -o pipefail`. Without it a pg_dump failure is masked by gzip
+              # exiting 0, and you get a small, valid, useless .gz.
+              command: ["/bin/bash", "-c"]
               args:
-                - >
-                  mkdir -p /usr/src/app/upload/backups &&
-                  pg_dump -h immich-postgres -U immich -d immich --clean --if-exists
-                  | gzip > /usr/src/app/upload/backups/immich-$(date +%F).sql.gz
+                - |
+                  set -euo pipefail
+                  DIR=/usr/src/app/upload/backups
+                  STAMP=$(date +%F)
+                  TMP="$DIR/immich-$STAMP.sql.gz.tmp"
+                  OUT="$DIR/immich-$STAMP.sql.gz"
+
+                  mkdir -p "$DIR"
+
+                  echo "Dumping immich database..."
+                  pg_dump -h immich-postgres -U immich -d immich --clean --if-exists \
+                    | gzip > "$TMP"
+
+                  # A dump that is well-formed but EMPTY is more dangerous than a
+                  # missing one, because it looks like a successful backup. Same
+                  # reasoning as the lldap job; this one had no assertion at all
+                  # until 2026-08-04. Reference: dumps have been ~17 MB since June.
+                  size=$(stat -c%s "$TMP")
+                  if [ "$size" -lt 1000000 ]; then
+                    echo "FAIL: dump is only ${size} bytes — expected ~17 MB" >&2
+                    rm -f "$TMP"; exit 1
+                  fi
+                  gzip -t "$TMP" || {
+                    echo "FAIL: gzip integrity check failed" >&2
+                    rm -f "$TMP"; exit 1
+                  }
+                  zcat "$TMP" | grep -q 'CREATE TABLE' || {
+                    echo "FAIL: dump contains no CREATE TABLE statements" >&2
+                    rm -f "$TMP"; exit 1
+                  }
+
+                  # Atomic rename: restic never sees a partial file.
+                  mv "$TMP" "$OUT"
+                  echo "  dump ok ($(numfmt --to=iec "$size")) -> $(basename "$OUT")"
+
+                  # Retention. Nothing pruned these before — 53 files / 847 MB
+                  # had accumulated by 2026-08-04, all re-snapshotted nightly.
+                  # The glob is deliberately strict: a bare immich-* would also
+                  # match the built-in's immich-db-backup-* files.
+                  echo "Pruning dumps older than 14 days..."
+                  find "$DIR" -maxdepth 1 -type f \
+                    -name 'immich-????-??-??.sql.gz' -mtime +14 -print -delete
+
+                  echo "Retained:"
+                  ls -1t "$DIR"/immich-????-??-??.sql.gz | head -20
               resources:
-                requests: { cpu: 10m, memory: 64Mi }
-                limits: { cpu: 500m, memory: 256Mi }
-              volumeMounts: [{ name: library, mountPath: /usr/src/app/upload }]
+                requests:
+                  cpu: 10m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              volumeMounts:
+                - name: library
+                  mountPath: /usr/src/app/upload
           volumes:
-            - { name: library, persistentVolumeClaim: { claimName: immich-library } }
+            - name: library
+              persistentVolumeClaim:
+                claimName: immich-library
