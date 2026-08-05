@@ -78,14 +78,21 @@ spec:
                     echo "FAIL: gzip integrity check failed" >&2
                     rm -f "$TMP"; exit 1
                   }
-                  zcat "$TMP" | grep -q 'CREATE TABLE' || {
+                  # Do NOT write this as `zcat "$TMP" | grep -q ...`. grep -q
+                  # exits on the first match, zcat then takes SIGPIPE and exits
+                  # 141, and `set -o pipefail` turns a PASSING check into a
+                  # failure. Observed 2026-08-04: this rejected a valid 17 MB
+                  # dump on every attempt. grep -c reads the whole stream, so
+                  # there is no early close and no SIGPIPE.
+                  tables=$(zcat "$TMP" | grep -c 'CREATE TABLE' || true)
+                  if [ "${tables:-0}" -lt 1 ]; then
                     echo "FAIL: dump contains no CREATE TABLE statements" >&2
                     rm -f "$TMP"; exit 1
-                  }
+                  fi
 
                   # Atomic rename: restic never sees a partial file.
                   mv "$TMP" "$OUT"
-                  echo "  dump ok ($(numfmt --to=iec "$size")) -> $(basename "$OUT")"
+                  echo "  dump ok (${size} bytes, ${tables} CREATE TABLE) -> $(basename "$OUT")"
 
                   # Retention. Nothing pruned these before — 53 files / 847 MB
                   # had accumulated by 2026-08-04, all re-snapshotted nightly.
@@ -95,8 +102,10 @@ spec:
                   find "$DIR" -maxdepth 1 -type f \
                     -name 'immich-????-??-??.sql.gz' -mtime +14 -print -delete
 
+                  # `|| true` for the same SIGPIPE reason as above: head closes
+                  # the pipe after 20 lines and ls exits 141 under pipefail.
                   echo "Retained:"
-                  ls -1t "$DIR"/immich-????-??-??.sql.gz | head -20
+                  ls -1t "$DIR"/immich-????-??-??.sql.gz | head -20 || true
               resources:
                 requests:
                   cpu: 10m
