@@ -44,9 +44,18 @@
 #   odroid-nas, one of the confined nodes, so the socket mount by itself
 #   produced no useful metrics at all.
 #
-#   Note the collector is scoped by --collector.systemd.unit-include to
-#   backup-nas and backup-etcd only. Any rule referencing a unit outside that
-#   regex will still see no metric. Widen the regex before adding one.
+#   The collector was scoped by --collector.systemd.unit-include to backup-nas
+#   and backup-etcd only. Widened 2026-08-07 to backup-.+\.(service|timer) so
+#   backup-cloud, backup-verify and backup-offsite are visible too — they had
+#   produced no series at all, so no rule could have covered them however it was
+#   written. Any rule referencing a unit outside that regex still sees nothing;
+#   widen the regex before adding one, and verify with:
+#     curl -s http://<host>:9100/metrics | grep node_systemd_unit_state
+#
+#   Note the hosts differ. The H4 and the other cluster nodes run the DaemonSet
+#   with the regex above; the rpi5 runs the Debian prometheus-node-exporter
+#   package with ARGS="", whose systemd collector is enabled by default with
+#   unit-include=".+" — every unit on that host is exposed without configuration.
 #
 #   Also: lldap-backup is a Kubernetes CronJob, not a systemd timer, so it
 #   produces no node_systemd_* series at all. Alert on it via
@@ -155,23 +164,46 @@ spec:
               backup-vault.timer on rpi5 last triggered more than 25 hours ago.
               Check journalctl -u backup-vault.service on 192.168.1.128.
 
-        - alert: LabBackupNasFailed
-          # node_systemd_unit_state is confirmed exposed by the DaemonSet
-          # collector; the unit-include regex covers backup-nas.service.
+        - alert: LabBackupUnitFailed
+          # Generalised 2026-08-07 from LabBackupNasFailed, which named a single
+          # unit on a single host.
+          #
+          # WHY THIS RULE EXISTS SEPARATELY FROM THE *Silent RULES ABOVE
+          #
+          # The *Silent rules watch node_systemd_timer_last_trigger_seconds —
+          # when the TIMER last fired. backup-vault.service failed on 04, 05 and
+          # 06 Aug while its timer fired punctually at 02:30 every night, so
+          # LabBackupVaultSilent was structurally incapable of noticing: the
+          # thing it measures was healthy throughout. Three days of missing Vault
+          # raft snapshots went unseen, and were found only while chasing an
+          # unrelated problem.
+          #
+          # "Did it start?" and "did it work?" are different questions. Keep both
+          # rules: a timer that stops firing produces no failed state either.
+          #
+          # A failed oneshot stays in state="failed" until its next successful
+          # run, so this stays firing for the whole gap rather than for an
+          # instant.
+          #
+          # Coverage depends on the collector's unit-include regex, widened the
+          # same day to backup-.+\.(service|timer) in gitops/apps/monitoring.yaml.
+          # Before assuming a unit is covered:
+          #   curl -s http://<host>:9100/metrics | grep node_systemd_unit_state
           expr: |
             node_systemd_unit_state{
-              name="backup-nas.service",
-              state="failed",
-              instance=~"192\\.168\\.1\\.160.*"
+              name=~"backup-.+\\.service",
+              state="failed"
             } == 1
           for: 1m
           labels:
             severity: critical
           annotations:
-            summary: "backup-nas.service is in failed state"
+            summary: "{{ $labels.name }} failed on {{ $labels.instance }}"
             description: >
-              backup-nas.service on the H4 has exited with a failure.
-              Run: journalctl -u backup-nas.service -n 50
+              {{ $labels.name }} on {{ $labels.instance }} is in failed state.
+              Run: journalctl -u {{ $labels.name }} -n 50
+              On 2026-08-04 backup-vault failed this way for three consecutive
+              nights while its timer kept firing on schedule, and nothing alerted.
 
         - alert: LabCronJobStale
           # Backups that run as Kubernetes CronJobs rather than systemd timers,
