@@ -16,7 +16,7 @@
     restic_repo: "{{ cold_primary_mount }}/restic"          # 8TB primary
     restic_password_file: /etc/restic/password   # vaulted; created out of band
     restic_copy_repo: "{{ cold_secondary_mount }}/restic"   # 6TB redundant copy
-    restic_offsite_repo: "{{ offsite_restic_repo | default('') }}"   # e.g. b2:bucket:lab — set via host/group vars or Vault; creds in /etc/restic/offsite.env
+    # Offsite (3-2-1) is configured by backup-offsite.yml — see the note below.
 
     # --- k3s etcd snapshot replication ---
     k3s_snapshot_dir: /var/lib/rancher/k3s/server/db/snapshots  # k3s writes here (NVMe)
@@ -84,15 +84,13 @@
         - backup-etcd.service
         - backup-etcd.timer
 
-    # --- Offsite copy (3-2-1, daily) — no-ops until restic_offsite_repo is set ---
-    - name: Render offsite copy service + timer
-      ansible.builtin.template:
-        src: "../templates/{{ item }}.j2"
-        dest: "/etc/systemd/system/{{ item }}"
-        mode: "0644"
-      loop:
-        - backup-offsite.service
-        - backup-offsite.timer
+    # --- Offsite copy (3-2-1) now lives in backup-offsite.yml ---------------
+    # It was rendered here against `offsite_restic_repo`, a variable defined
+    # nowhere in this repo. The unit's inline ExecStart treated "unset" as
+    # "skip, exit 0", so it ran nightly, copied nothing, and reported success
+    # from the day it was written until 2026-08-07. It now needs R2 credentials
+    # from Vault, which backup.yml deliberately does not require, so it is a
+    # separate playbook.
 
     # --- Weekly verification that the backups are real (not merely running) ---
     - name: Render backup verification script

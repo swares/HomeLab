@@ -1,0 +1,131 @@
+#!/bin/bash
+# {{ ansible_managed | default('Managed by Ansible — do not edit by hand') }}
+#
+# Replicate the primary restic repo OFFSITE (Cloudflare R2), then bound retention
+# on that copy. This is the third leg of 3-2-1: two local copies on the 8TB and
+# 5.45TB mirrors live in one chassis, which is one failure domain. Only this leg
+# survives fire, theft, or a PSU that takes both SATA disks.
+#
+# WHY THIS IS A SCRIPT AND NOT AN ExecStart ONE-LINER
+#
+# The previous inline ExecStart was:
+#     test -n "REPO" || { echo "no offsite repo configured; skipping"; exit 0; }
+# `offsite_restic_repo` was never set, so from the day it was written until
+# 2026-08-07 this unit printed one line and exited 0 — every night, for months.
+# systemd then logged the unit Description, so the journal read:
+#     no offsite repo configured; skipping
+#     Finished restic copy of the primary repo to OFFSITE (3-2-1).
+# and `systemctl list-timers` showed PASSED. A backup that has never run must not
+# look identical to one that just succeeded. Missing configuration is now FATAL.
+#
+# See backup-nas-copy.sh for the restic copy-syntax history; the same version
+# split applies here and is handled the same way.
+#
+# NOTE FOR EDITORS: this is a Jinja2 template. Do not use bash's array-length
+# syntax (dollar-brace-hash-name); brace followed by hash opens a Jinja comment.
+
+set -euo pipefail
+
+SRC={{ restic_repo | quote }}
+PW={{ restic_password_file | quote }}
+DSTPW={{ offsite_password_file | quote }}
+
+# RESTIC_REPOSITORY_OFFSITE comes from the EnvironmentFile so the R2 account id
+# and keys stay out of the unit file and out of git.
+DST="${RESTIC_REPOSITORY_OFFSITE:-}"
+
+KEEP_DAILY={{ offsite_keep_daily }}
+KEEP_WEEKLY={{ offsite_keep_weekly }}
+KEEP_MONTHLY={{ offsite_keep_monthly }}
+
+# KiB/s, 0 = unlimited. The first copy moves the whole repository (~203 GiB as of
+# 2026-08), which will saturate a home uplink for days if left unbounded.
+LIMIT_UPLOAD={{ offsite_limit_upload_kib }}
+
+# ---- Configuration must be present -----------------------------------------
+if [ -z "$DST" ]; then
+  echo "FATAL: RESTIC_REPOSITORY_OFFSITE is empty — offsite backup is NOT configured." >&2
+  echo "       Run ansible/playbooks/backup-offsite.yml. Failing loudly on purpose:" >&2
+  echo "       this unit used to exit 0 here and reported success for months." >&2
+  exit 1
+fi
+for f in "$PW" "$DSTPW"; do
+  if [ ! -r "$f" ]; then
+    echo "FATAL: password file $f is missing or unreadable." >&2
+    exit 1
+  fi
+done
+if [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+  echo "FATAL: R2 credentials absent from the environment." >&2
+  exit 1
+fi
+
+# ---- Which copy syntax does this restic understand? ------------------------
+version_string=$(restic version | awk '{print $2}')
+major=${version_string%%.*}
+remainder=${version_string#*.}
+minor=${remainder%%.*}
+
+if ! [[ "$major" =~ ^[0-9]+$ ]] || ! [[ "$minor" =~ ^[0-9]+$ ]]; then
+  echo "FAIL: could not parse a numeric restic version from '$version_string'." >&2
+  echo "      Refusing to guess which copy syntax is safe." >&2
+  exit 1
+fi
+
+use_from_repo=1
+if [ "$major" -eq 0 ] && [ "$minor" -lt 14 ]; then
+  use_from_repo=0
+fi
+
+# ---- Ensure the destination repo exists ------------------------------------
+# --copy-chunker-params matters here in a way it did not for the local mirror.
+# Without matching chunker parameters the offsite repo re-chunks everything and
+# deduplication across the two repos is lost — on a 203 GiB initial upload over a
+# home connection that is the difference between days and much longer. Chunker
+# params CANNOT be changed after init, so this must be right the first time. If
+# you ever find yourself re-seeding, destroy the remote repo and re-init rather
+# than copying into one that was initialised plainly.
+if ! restic -r "$DST" --password-file "$DSTPW" cat config >/dev/null 2>&1; then
+  echo "offsite repo not initialised — initialising with copied chunker params"
+  if [ "$use_from_repo" -eq 1 ]; then
+    restic -r "$DST" --password-file "$DSTPW" init \
+      --from-repo "$SRC" --from-password-file "$PW" --copy-chunker-params
+  else
+    restic -r "$DST" --password-file "$DSTPW" init \
+      --repo2 "$SRC" --password-file2 "$PW" --copy-chunker-params
+  fi
+fi
+
+# ---- Copy -------------------------------------------------------------------
+limit_args=()
+if [ "$LIMIT_UPLOAD" -gt 0 ]; then
+  limit_args=(--limit-upload "$LIMIT_UPLOAD")
+fi
+
+echo "restic ${version_string}: copying $SRC -> offsite"
+if [ "$use_from_repo" -eq 1 ]; then
+  restic -r "$DST" --password-file "$DSTPW" "${limit_args[@]}" \
+    copy --from-repo "$SRC" --from-password-file "$PW"
+else
+  restic -r "$SRC" --password-file "$PW" "${limit_args[@]}" \
+    copy --repo2 "$DST" --password-file2 "$DSTPW"
+fi
+
+# ---- Retention on the offsite copy ------------------------------------------
+# Per CLAUDE.md, retention lives in the backup units and nowhere else. Never run
+# forget/prune against these repos by hand.
+restic -r "$DST" --password-file "$DSTPW" forget --prune \
+  --keep-daily "$KEEP_DAILY" \
+  --keep-weekly "$KEEP_WEEKLY" \
+  --keep-monthly "$KEEP_MONTHLY"
+
+# ---- Prove something actually landed ----------------------------------------
+# The whole reason this file exists is that "the unit exited 0" was not evidence
+# of a backup. Assert a recent snapshot is present at the destination.
+count=$(restic -r "$DST" --password-file "$DSTPW" snapshots --json | grep -c '"short_id"' || true)
+if [ "${count:-0}" -lt 1 ]; then
+  echo "FAIL: offsite repo holds no snapshots after copy." >&2
+  exit 1
+fi
+
+echo "offsite copy + retention complete — ${count} snapshots at destination"

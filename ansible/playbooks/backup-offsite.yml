@@ -1,0 +1,199 @@
+---
+# Offsite (3-2-1) replication of the primary NAS restic repo to Cloudflare R2.
+#
+# WHY THIS IS A SEPARATE PLAYBOOK
+#
+# backup.yml configures the local backup tier and must stay runnable without a
+# Vault token. This needs one (R2 credentials live in secret/lab/cloudflare-r2),
+# so it is split out for the same reason backup-cloud.yml is.
+#
+# WHAT WAS WRONG BEFORE
+#
+# backup.yml rendered a backup-offsite unit whose repository variable,
+# `offsite_restic_repo`, was defined nowhere in the repo. The unit's inline
+# ExecStart handled that by printing "no offsite repo configured; skipping" and
+# exiting 0. It therefore ran nightly, copied nothing, and reported success —
+# including in `systemctl list-timers` — from the day it was written until
+# 2026-08-07. The 203 GiB of NAS data had two copies, both inside one chassis.
+#
+# SETUP (one time, before the first run)
+#
+#   1. Create an R2 bucket named `homelab-nas` in the Cloudflare dashboard.
+#      Deliberately NOT the `homelab-backup` bucket used by backup-cloud.yml:
+#      that one holds small, fast-moving cluster state on a 7d/4w/3m policy,
+#      this one holds a large slow archive. Separate buckets keep their
+#      lifecycle rules, sizes and blast radius independent.
+#   2. Reuse the existing R2 API token if it has read+write on the new bucket;
+#      otherwise mint one and update secret/lab/cloudflare-r2.
+#   3. Seed the first copy manually — see the note at the bottom of this file.
+#
+# COST: R2 is $0.015/GB/month beyond the free 10 GB, so ~$3/month at 203 GiB,
+# with zero egress fees. Egress being free is the point: a restore must not be
+# gated on a bill.
+- name: Configure offsite replication of the NAS repo to Cloudflare R2
+  hosts: microshift
+  become: true
+  vars:
+    vault_addr: "http://192.168.1.128:8200"
+
+    restic_repo: "{{ cold_primary_mount }}/restic"
+    restic_password_file: /etc/restic/password
+    offsite_env_file: /etc/restic/offsite.env
+    offsite_password_file: /etc/restic/offsite-password
+    offsite_r2_bucket: homelab-nas
+
+    # Retention on the offsite copy. Shallower than cold-sec's 14/8/12 — this is
+    # the disaster copy, not the long-history archive, and every retained
+    # snapshot is billed monthly.
+    offsite_keep_daily: 7
+    offsite_keep_weekly: 4
+    offsite_keep_monthly: 6
+
+    # KiB/s, 0 = unlimited. 2500 KiB/s ~= 20 Mbit/s. Set to leave headroom on the
+    # uplink; the nightly incremental is small, but the initial seed is not.
+    offsite_limit_upload_kib: 2500
+
+    # Left false until the first copy has been seeded by hand. A timer that fires
+    # into a multi-day initial upload is not harmful (systemd will not start a
+    # second instance of a running oneshot) but it is confusing to reason about.
+    offsite_timer_enabled: false
+
+  tasks:
+    - name: Ensure /etc/restic exists
+      ansible.builtin.file:
+        path: /etc/restic
+        state: directory
+        mode: "0700"
+        owner: root
+        group: root
+
+    # ---- Preflight -----------------------------------------------------------
+    # The Vault reads below carry no_log, which hides the *error* as well as the
+    # secret — an expired token otherwise surfaces only as "censored due to
+    # no_log". These checks print no secret values and give a one-line diagnosis.
+    - name: Preflight — VAULT_TOKEN must be set
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'VAULT_TOKEN') | length > 0
+        fail_msg: >-
+          VAULT_TOKEN is empty. Pass a current token:
+          VAULT_TOKEN=<token> ansible-playbook -i ansible/inventory/hosts.yml
+          ansible/playbooks/backup-offsite.yml
+        quiet: true
+
+    - name: Preflight — probe Vault reachability and seal status
+      ansible.builtin.command:
+        cmd: vault status
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+      register: vault_status_probe
+      changed_when: false
+      failed_when: false
+      check_mode: false   # read-only; must run under --check or the assert is vacuous
+
+    - name: Preflight — Vault must be reachable and unsealed
+      ansible.builtin.assert:
+        that:
+          - vault_status_probe.rc == 0
+        fail_msg: >-
+          Vault at {{ vault_addr }} is unreachable or sealed.
+          {{ vault_status_probe.stderr | default('') }}
+        quiet: true
+
+    - name: Preflight — the primary repo must exist before replicating it
+      ansible.builtin.stat:
+        path: "{{ restic_repo }}/config"
+      register: primary_repo
+      check_mode: false
+
+    - name: Preflight — fail clearly if the primary repo is absent
+      ansible.builtin.assert:
+        that:
+          - primary_repo.stat.exists
+        fail_msg: >-
+          No restic repository at {{ restic_repo }}. Run backup.yml first —
+          there is nothing to replicate offsite.
+        quiet: true
+
+    # ---- Credentials ---------------------------------------------------------
+    - name: Read R2 credentials from Vault
+      ansible.builtin.shell:
+        cmd: vault kv get -format=json secret/lab/cloudflare-r2
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      register: vault_r2_raw
+      no_log: true
+      changed_when: false
+      check_mode: false
+
+    - name: Parse R2 credentials
+      ansible.builtin.set_fact:
+        r2: "{{ (vault_r2_raw.stdout | from_json).data.data }}"
+      no_log: true
+
+    # The offsite repo reuses the R2 restic password rather than introducing a
+    # fourth crown-jewel secret. Same provider, same access keys, same trust
+    # boundary — a compromise of one already implies the other. Note that this
+    # password is NOT stored in R2, and must exist offline: losing it makes the
+    # offsite copy unreadable exactly when it is the only copy left.
+    - name: Write offsite restic password file
+      ansible.builtin.copy:
+        dest: "{{ offsite_password_file }}"
+        mode: "0600"
+        owner: root
+        group: root
+        content: "{{ r2['restic-password'] }}"
+      no_log: true
+
+    - name: Write offsite restic env file
+      ansible.builtin.copy:
+        dest: "{{ offsite_env_file }}"
+        mode: "0600"
+        owner: root
+        group: root
+        content: |
+          RESTIC_REPOSITORY_OFFSITE=s3:https://{{ r2['account-id'] }}.r2.cloudflarestorage.com/{{ offsite_r2_bucket }}
+          AWS_ACCESS_KEY_ID={{ r2['access-key-id'] }}
+          AWS_SECRET_ACCESS_KEY={{ r2['secret-access-key'] }}
+      no_log: true
+
+    # ---- Unit ----------------------------------------------------------------
+    - name: Install offsite copy script
+      ansible.builtin.template:
+        src: ../templates/backup-offsite.sh.j2
+        dest: /usr/local/sbin/backup-offsite.sh
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Render offsite copy service + timer
+      ansible.builtin.template:
+        src: "../templates/{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        mode: "0644"
+      loop:
+        - backup-offsite.service
+        - backup-offsite.timer
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable the offsite timer
+      ansible.builtin.systemd:
+        name: backup-offsite.timer
+        enabled: "{{ offsite_timer_enabled }}"
+        state: "{{ 'started' if offsite_timer_enabled else 'stopped' }}"
+
+    - name: Report next steps
+      ansible.builtin.debug:
+        msg:
+          - "Offsite configured. The first copy has NOT run."
+          - "Seed it via the unit, not the script directly — the script reads"
+          - "RESTIC_REPOSITORY_OFFSITE and the R2 keys from the unit's"
+          - "EnvironmentFile, and the unit sets TimeoutStartSec=infinity."
+          - "  sudo systemctl start --no-block backup-offsite.service"
+          - "  journalctl -u backup-offsite.service -f"
+          - "This uploads the whole repository and can take days."
+          - "When it completes, re-run with -e offsite_timer_enabled=true"

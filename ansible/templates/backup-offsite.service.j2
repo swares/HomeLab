@@ -1,15 +1,26 @@
 [Unit]
-Description=restic copy of the primary repo to OFFSITE (3-2-1)
+Description=restic copy of the primary repo to OFFSITE R2 (3-2-1)
+RequiresMountsFor={{ cold_primary_mount }}
 After=backup-nas.service
+# Ordering only takes effect when both are started in the same transaction; the
+# timers are an hour apart (01:30 / 02:30) so in practice the separation is the
+# schedule, not this directive.
 
 [Service]
 Type=oneshot
-# Creds (RESTIC_PASSWORD_FILE, B2_ACCOUNT_ID/KEY or rclone env) come from /etc/restic/offsite.env
-EnvironmentFile=-/etc/restic/offsite.env
-# Shared restic cache — see the comment in backup-nas.service.j2. Set after the
-# EnvironmentFile so it wins if that file ever defines RESTIC_CACHE_DIR too.
-# Matters more here than locally: a cold cache against a remote repo costs
-# network round-trips, not just local reads.
+# R2 repository string and credentials. '-' prefix kept so a missing file gives
+# the script's explicit diagnosis rather than a bare systemd failure.
+EnvironmentFile=-{{ offsite_env_file }}
+# Shared restic cache — see the comment in backup-nas.service.j2. It matters more
+# here than locally: a cold cache against a remote repo costs network round-trips,
+# not just local reads.
 CacheDirectory=restic
 Environment=RESTIC_CACHE_DIR=/var/cache/restic
-ExecStart=/bin/bash -c 'test -n "{{ restic_offsite_repo }}" || { echo "no offsite repo configured; skipping"; exit 0; }; restic -r {{ restic_repo }} copy --repo2 {{ restic_offsite_repo }}'
+# The first run uploads the entire repository (~203 GiB as of 2026-08) and can
+# take days on a home uplink. Seed it manually under tmux before enabling the
+# timer; see the header of backup-offsite.sh.
+TimeoutStartSec=infinity
+# Deliberately NOT prefixed with '-'. A failed offsite copy must fail the unit so
+# hc-ping is skipped and healthchecks.io raises the alarm. The previous inline
+# ExecStart exited 0 when unconfigured and reported success for months.
+ExecStart=/usr/local/sbin/backup-offsite.sh
