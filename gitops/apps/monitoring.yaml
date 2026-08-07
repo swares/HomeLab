@@ -314,7 +314,13 @@ spec:
             # Enable systemd collector so backup timer metrics are available
             # (used by LabBackupNasSilent / LabBackupEtcdSilent alert rules).
             - --collector.systemd
-            - --collector.systemd.unit-include=(backup-nas|backup-etcd)\.(service|timer)
+            # Widened 2026-08-07 from (backup-nas|backup-etcd). The narrow regex
+            # meant backup-cloud, backup-verify and backup-offsite produced no
+            # node_systemd_* series at all, so no rule could see them however it
+            # was written. backup-vault runs on the rpi5, whose Debian package
+            # runs with ARGS="" and therefore includes every unit by default —
+            # which is why that one was visible while the H4's were not.
+            - --collector.systemd.unit-include=backup-.+\.(service|timer)
           # The 2026-07-26 note claimed this could not work because node_exporter
           # needs /run/systemd/private, which is root-only. That was wrong. The
           # collector connects to the D-Bus SYSTEM bus, and the pod log on
