@@ -67,6 +67,13 @@
       register: hc_vault_raw
       no_log: true
       changed_when: false
+      # Read-only, so it must run under --check too. Without this the shell task
+      # skips, hc_vault_raw has no .stdout, and "Parse healthchecks URLs" fails
+      # with the reason hidden by no_log:
+      #   fatal: FAILED! => {"censored": "... 'no_log: true' was specified ..."}
+      # Found 2026-08-07 running --check before a real run; the same class of bug
+      # as the ten read-only probes fixed on 08-04.
+      check_mode: false
 
     - name: Parse healthchecks URLs
       ansible.builtin.set_fact:
@@ -218,6 +225,13 @@
       register: hc_vault_raw
       no_log: true
       changed_when: false
+      # Read-only, so it must run under --check too. Without this the shell task
+      # skips, hc_vault_raw has no .stdout, and "Parse healthchecks URLs" fails
+      # with the reason hidden by no_log:
+      #   fatal: FAILED! => {"censored": "... 'no_log: true' was specified ..."}
+      # Found 2026-08-07 running --check before a real run; the same class of bug
+      # as the ten read-only probes fixed on 08-04.
+      check_mode: false
 
     - name: Parse healthchecks URLs
       ansible.builtin.set_fact:
