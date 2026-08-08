@@ -205,6 +205,48 @@ spec:
               On 2026-08-04 backup-vault failed this way for three consecutive
               nights while its timer kept firing on schedule, and nothing alerted.
 
+        - alert: LabBackupJobFailed
+          # Added 2026-08-07. The built-in KubeJobFailed covers this, but it is
+          # severity=warning, and the Alertmanager tree sends warnings to the
+          # m5stack display only — so four failed backup Jobs sat firing, with
+          # zero silences, for days while nobody saw them. A failed backup
+          # deserves the phone.
+          #
+          # Two deliberate choices:
+          #
+          # 1. kube_job_failed, NOT kube_job_status_failed. The first is a Job
+          #    *condition* (1 when the Job has failed). The second counts failed
+          #    *pods*, which is nonzero for a Job that retried and then
+          #    succeeded — it would page on healthy backups.
+          #
+          # 2. The 24h start-time bound. A failed Job persists until
+          #    failedJobsHistoryLimit rotates it out (3 here), so without this
+          #    the alert fires indefinitely for a failure already dealt with.
+          #    That is precisely how the four stale KubeJobFailed alerts
+          #    accumulated. Bounding on start time means it pages for the
+          #    failure, not for the wreckage.
+          #
+          # Scoped by name pattern rather than by naming each CronJob, so a new
+          # backup job is covered on creation. Compare LabVMUnexpectedShutoff,
+          # which named a VM decommissioned three weeks earlier and was
+          # therefore dead for three weeks.
+          expr: |
+            kube_job_failed{condition="true", job_name=~".*backup.*"} == 1
+            and on(namespace, job_name)
+            (time() - kube_job_status_start_time < 86400)
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: >-
+              Backup job {{ $labels.namespace }}/{{ $labels.job_name }} failed
+            description: >
+              A backup Job failed within the last 24h. Check:
+              kubectl -n {{ $labels.namespace }} logs job/{{ $labels.job_name }}
+              The alert clears when the Job ages past 24h or is deleted; delete
+              it once handled rather than waiting, so the next failure is
+              visible against a clean board.
+
         - alert: LabCronJobStale
           # Backups that run as Kubernetes CronJobs rather than systemd timers,
           # so no node_systemd_* rule can see them. Verified 2026-08-02:
