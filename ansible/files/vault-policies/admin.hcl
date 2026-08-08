@@ -1,0 +1,10 @@
+path "sys/auth"                    { capabilities = ["read","list"] }
+path "sys/auth/*"                  { capabilities = ["create","read","update","delete","sudo"] }
+path "sys/policies/acl"            { capabilities = ["list"] }
+path "sys/policies/acl/*"          { capabilities = ["create","read","update","delete","list","sudo"] }
+path "sys/mounts"                  { capabilities = ["read","list"] }
+path "sys/mounts/*"                { capabilities = ["create","read","update","delete","sudo"] }
+path "sys/leases/*"                { capabilities = ["create","read","update","delete","list","sudo"] }
+path "sys/storage/raft/snapshot"   { capabilities = ["read"] }
+path "auth/*"                      { capabilities = ["create","read","update","delete","list","sudo"] }
+path "secret/*"                    { capabilities = ["create","read","update","delete","list","patch"] }
