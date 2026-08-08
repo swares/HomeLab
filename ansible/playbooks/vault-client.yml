@@ -1,0 +1,100 @@
+---
+# Vault CLI on the H4, with the *server* deliberately neutralised.
+#
+# WHY
+#
+# HashiCorp ships one binary for both roles: /usr/bin/vault is the server and
+# the client. The H4 needs the client — backup-cloud.yml, healthchecks.yml and
+# vault-policies.yml all shell out to `vault` there — but it must never run a
+# Vault server. The real one lives on the rpi5 at 192.168.1.128.
+#
+# WHAT WENT WRONG WITHOUT THIS
+#
+# The H4 carried a leftover /etc/vault.d/vault.hcl from the HashiCorp package,
+# complete with an enabled vault.service. Nothing ran it, but on 2026-08-07 it
+# cost hours: `systemctl cat vault` and `dpkg -l` were run on the H4 while
+# diagnosing the *rpi5's* Vault, and the H4's config described a TLS listener
+# that contradicted the live plaintext endpoint. The mismatch was read as a
+# clue about the running server rather than as a different machine's dead file.
+#
+# It is also a loaded gun. A stray `systemctl start vault` on the H4 would bind
+# 8200 on 192.168.1.160 and answer as an empty, uninitialised Vault — on the LAN
+# the cluster trusts, next to the address every playbook points at.
+#
+# WHAT THIS DOES
+#
+#   - keeps the vault package (the client is needed)
+#   - masks vault.service, so `systemctl start vault` fails outright rather
+#     than succeeding
+#   - removes the leftover server config
+#   - sets VAULT_ADDR system-wide, so an unqualified `vault` command talks to
+#     the real server instead of defaulting to https://127.0.0.1:8200
+#
+# Safe to re-run. Deliberately declarative rather than a one-off by hand, so an
+# `apt install`, a package upgrade that re-enables the unit, or a rebuild cannot
+# quietly undo it.
+- name: Vault CLI on cluster hosts, with the server neutralised
+  hosts: microshift
+  become: true
+  vars:
+    vault_addr: "http://192.168.1.128:8200"
+    # The host that legitimately runs Vault. Used only by the guard below.
+    vault_server_ip: "192.168.1.128"
+    vault_server_config: /etc/vault.d/vault.hcl
+
+  tasks:
+    # ---- Guard ---------------------------------------------------------------
+    # Masking vault.service on the machine that actually runs Vault would take
+    # the lab's secret store offline and, because the unit would be masked, make
+    # it non-obvious why it would not restart. The inventory currently puts only
+    # h4-core in this group, but that is a fact about today's inventory, not a
+    # property this playbook should rely on.
+    - name: Preflight — refuse to run on the host that serves Vault
+      ansible.builtin.assert:
+        that:
+          - vault_server_ip not in (ansible_all_ipv4_addresses | default([]))
+        fail_msg: >-
+          {{ inventory_hostname }} holds {{ vault_server_ip }} — this is the
+          Vault server. Refusing to mask vault.service. Remove this host from
+          the play's target group.
+        quiet: true
+
+    # ---- Client --------------------------------------------------------------
+    - name: Ensure the vault package is present (client; the binary is both roles)
+      ansible.builtin.apt:
+        name: vault
+        state: present
+        update_cache: false
+
+    # ---- Server, neutralised -------------------------------------------------
+    - name: Mask vault.service so it cannot be started
+      ansible.builtin.systemd:
+        name: vault
+        enabled: false
+        state: stopped
+        masked: true
+      # masked symlinks the unit to /dev/null: `systemctl start vault` then
+      # fails rather than silently succeeding. disable alone would not survive
+      # someone typing `systemctl start`.
+
+    - name: Remove the leftover server config
+      ansible.builtin.file:
+        path: "{{ vault_server_config }}"
+        state: absent
+      # The packaged unit carries ConditionFileNotEmpty on this path, so its
+      # absence is a second, independent reason the service cannot start. Belt
+      # and braces is deliberate: the failure mode is a second Vault answering
+      # on an address the whole lab trusts.
+
+    # ---- Point the client at the real server ---------------------------------
+    - name: Set VAULT_ADDR system-wide
+      ansible.builtin.lineinfile:
+        path: /etc/environment
+        regexp: '^VAULT_ADDR='
+        line: "VAULT_ADDR={{ vault_addr }}"
+        state: present
+        mode: "0644"
+      # Without this the CLI defaults to https://127.0.0.1:8200 — which on a
+      # host that used to have a local server is exactly the confusing case.
+      # Note /etc/environment is read at login, so existing shells keep their
+      # old value until they are restarted.
