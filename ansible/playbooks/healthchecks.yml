@@ -12,6 +12,13 @@
 #        backup-etcd    Period 25h,  Grace 1h   (daily 00:30 UTC on h4-core)
 #        backup-verify  Period 8d,   Grace 12h  (weekly Sun 04:00 UTC on h4-core)
 #        backup-vault   Period 25h,  Grace 1h   (daily 02:30 UTC on rpi5)
+#        backup-offsite Period 25h,  Grace 3h   (daily 02:30 UTC on h4-core)
+#          Grace is deliberately wider than the others. restic copy duration
+#          scales with how much changed that day: a normal incremental finishes
+#          in minutes, but a day with a large immich import can push it to
+#          hours. At Grace 1h a copy starting 02:30 and ending 05:30 puts 27h
+#          between pings and false-alarms. 3h absorbs that and still catches a
+#          real failure inside 28h.
 #        h4-core        Period 5min, Grace 5min (host-alive heartbeat)
 #   3. Store all ping URLs in Vault:
 #        vault kv put secret/lab/healthchecks \
@@ -42,6 +49,10 @@
       - backup-nas
       - backup-etcd
       - backup-verify
+      # Added 2026-08-07 with the offsite tier. Until then the only copies of
+      # the NAS data were the two cold mirrors in the same chassis, and the
+      # unit that was supposed to replicate them offsite had never run.
+      - backup-offsite
       - h4-core
       # Weekly (Sun 05:00). Period 8d / Grace 12h in healthchecks.io.
       - disk-check
@@ -125,6 +136,7 @@
         - backup-nas
         - backup-etcd
         - backup-verify
+        - backup-offsite
 
     - name: Install healthchecks drop-ins for H4 backup services
       ansible.builtin.copy:
@@ -140,6 +152,7 @@
         - backup-nas
         - backup-etcd
         - backup-verify
+        - backup-offsite
       notify: reload systemd daemon
 
     - name: Install h4-heartbeat systemd service
