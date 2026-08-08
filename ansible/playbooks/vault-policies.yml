@@ -1,0 +1,191 @@
+---
+# Vault ACL policies, from git.
+#
+# WHY THIS EXISTS
+#
+# Until 2026-08-07 every policy in this lab existed only inside Vault. They were
+# written on the CLI, never reviewed, and recoverable only from a raft snapshot —
+# and `backup-vault` had been failing silently for four days when that was
+# noticed, so even that was not guaranteed. A policy is access control: it
+# deserves the same review as the workloads it protects.
+#
+# The immediate trigger: on 2026-08-05 the exposed root token was revoked and
+# took its child tokens with it (created without -orphan). Recovery needed a
+# generate-root ceremony, after which every credential had to be rebuilt. The
+# `admin` policy survived only because policies are not tokens. Had it not, it
+# would have had to be reconstructed from memory.
+#
+# WHAT THIS DELIBERATELY DOES NOT DO
+#
+# It never deletes. A policy present in Vault but absent from git is left alone
+# and merely reported. Reconciling by deletion would mean a mistyped filename
+# could strip access from a running workload, and `deletionPolicy: Retain` on the
+# ESO side would hide the damage until the next secret refresh.
+#
+# It refuses to touch `root` and `default`. Both are built in; writing them is
+# either a no-op or a way to lock yourself out.
+#
+# USAGE
+#
+#   VAULT_TOKEN=<admin token> ansible-playbook -i ansible/inventory/hosts.yml \
+#     ansible/playbooks/vault-policies.yml --check --diff     # review
+#   VAULT_TOKEN=<admin token> ansible-playbook -i ansible/inventory/hosts.yml \
+#     ansible/playbooks/vault-policies.yml                    # apply
+#
+# To capture a policy that was changed by hand, write it back to git rather than
+# editing in Vault again:
+#
+#   vault policy read <name> > ansible/files/vault-policies/<name>.hcl
+- name: Manage Vault ACL policies from git
+  hosts: microshift
+  become: false          # the vault CLI talks to the API; no root needed
+  gather_facts: false
+  vars:
+    vault_addr: "http://192.168.1.128:8200"
+    policy_src: "{{ playbook_dir }}/../files/vault-policies"
+    policy_tmp: /tmp/vault-policies
+    # Built-in policies that must never be managed from here.
+    policy_protected:
+      - root
+      - default
+
+  tasks:
+    - name: Preflight — VAULT_TOKEN must be set
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'VAULT_TOKEN') | length > 0
+        fail_msg: >-
+          VAULT_TOKEN is empty. Pass a current token:
+          VAULT_TOKEN=<token> ansible-playbook -i ansible/inventory/hosts.yml
+          ansible/playbooks/vault-policies.yml
+        quiet: true
+
+    - name: Preflight — probe Vault reachability and seal status
+      ansible.builtin.command:
+        cmd: vault status
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+      register: vault_status_probe
+      changed_when: false
+      failed_when: false
+      check_mode: false   # read-only; must run under --check or the assert is vacuous
+
+    - name: Preflight — Vault must be reachable and unsealed
+      ansible.builtin.assert:
+        that:
+          - vault_status_probe.rc == 0
+        fail_msg: >-
+          Vault at {{ vault_addr }} is unreachable or sealed.
+          {{ vault_status_probe.stderr | default('') }}
+        quiet: true
+
+    - name: Find policy files in git
+      ansible.builtin.find:
+        paths: "{{ policy_src }}"
+        patterns: "*.hcl"
+      delegate_to: localhost
+      register: policy_files
+      check_mode: false
+
+    - name: Preflight — refuse to manage built-in policies
+      ansible.builtin.assert:
+        that:
+          - (policy_files.files | map(attribute='path') | map('basename')
+             | map('regex_replace', '\.hcl$', '') | list
+             | intersect(policy_protected) | length) == 0
+        fail_msg: >-
+          {{ policy_protected | join(', ') }} are built-in and must not be
+          managed from git. Remove the corresponding .hcl file.
+        quiet: true
+
+    - name: Preflight — there must be something to manage
+      ansible.builtin.assert:
+        that:
+          - policy_files.files | length > 0
+        fail_msg: >-
+          No .hcl files in {{ policy_src }}. Export the live policies first:
+          for p in admin eso vault-snapshot lab-readonly; do
+          vault policy read "$p" > ansible/files/vault-policies/"$p".hcl; done
+        quiet: true
+
+    - name: Stage policy files on the host
+      ansible.builtin.copy:
+        src: "{{ item.path }}"
+        dest: "{{ policy_tmp }}/{{ item.path | basename }}"
+        mode: "0600"
+      loop: "{{ policy_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      # Not check_mode: false — under --check nothing is staged, and the compare
+      # below reads from git via lookup() rather than from the staged copy, so
+      # the diff is still accurate.
+
+    - name: Read the live policy for comparison
+      ansible.builtin.command:
+        cmd: vault policy read {{ item.path | basename | regex_replace('\.hcl$', '') }}
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      loop: "{{ policy_files.files }}"
+      loop_control:
+        label: "{{ item.path | basename }}"
+      register: live_policies
+      changed_when: false
+      failed_when: false   # a policy that does not exist yet returns rc != 0
+      check_mode: false    # read-only; needed for an accurate --check diff
+      # Deliberately NOT no_log. A policy contains no credentials, and censoring
+      # this is exactly what made an expired token undiagnosable in
+      # backup-cloud.yml on 2026-07-25.
+
+    - name: Show which policies differ
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.path | basename | regex_replace('\.hcl$', '') }}:
+          {{ 'ABSENT in Vault — will be created' if item.rc != 0
+             else ('differs — will be updated'
+                   if (item.stdout | trim) != (lookup('file', item.item.path) | trim)
+                   else 'up to date') }}
+      loop: "{{ live_policies.results }}"
+      loop_control:
+        label: "{{ item.item.path | basename }}"
+
+    - name: Write policies that are missing or changed
+      ansible.builtin.command:
+        cmd: >-
+          vault policy write
+          {{ item.item.path | basename | regex_replace('\.hcl$', '') }}
+          {{ policy_tmp }}/{{ item.item.path | basename }}
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      loop: "{{ live_policies.results }}"
+      loop_control:
+        label: "{{ item.item.path | basename }}"
+      when:
+        - item.rc != 0 or (item.stdout | trim) != (lookup('file', item.item.path) | trim)
+      changed_when: true
+
+    # ---- Drift report, no action ---------------------------------------------
+    - name: List policies present in Vault
+      ansible.builtin.command:
+        cmd: vault policy list
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      register: vault_policy_list
+      changed_when: false
+      check_mode: false
+
+    - name: Report policies in Vault but not in git
+      ansible.builtin.debug:
+        msg: >-
+          Present in Vault but NOT in git (left untouched, add them or accept
+          the drift): {{ unmanaged | join(', ') if unmanaged | length > 0
+          else 'none' }}
+      vars:
+        managed: >-
+          {{ policy_files.files | map(attribute='path') | map('basename')
+             | map('regex_replace', '\.hcl$', '') | list }}
+        unmanaged: >-
+          {{ vault_policy_list.stdout_lines | difference(managed)
+             | difference(policy_protected) }}
