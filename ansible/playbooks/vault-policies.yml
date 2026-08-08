@@ -44,10 +44,23 @@
     vault_addr: "http://192.168.1.128:8200"
     policy_src: "{{ playbook_dir }}/../files/vault-policies"
     policy_tmp: /tmp/vault-policies
-    # Built-in policies that must never be managed from here.
+    # Built-in policies that must never be managed from here. Vault owns these;
+    # a git copy would be overwritten on upgrade, or would overwrite Vault's.
     policy_protected:
       - root
       - default
+      # Part of Vault 2.0's native AI agent support. It lets an agent read its
+      # own Agent Registry record and the default / default-ceiling definitions,
+      # and Vault attaches it to ceiling_policies on every agent registration
+      # unless no_default_ceiling_policy is set. Its purpose is to stop an agent
+      # using a subject's permissions to alter its own governance constraints.
+      #
+      # Briefly adopted into git on 2026-08-07 because it showed up in the drift
+      # report and looked like a stray local policy. It is not: the
+      # {{identity.entity.id}} templating, the agent-registry/ path, and it
+      # granting read on itself are all signatures of a Vault-generated policy.
+      # https://developer.hashicorp.com/vault/docs/concepts/native-ai-agent-support
+      - default-ceiling
 
   tasks:
     - name: Preflight — VAULT_TOKEN must be set
@@ -119,6 +132,13 @@
       # Not check_mode: false — under --check nothing is staged, and the compare
       # below reads from git via lookup() rather than from the staged copy, so
       # the diff is still accurate.
+      #
+      # changed_when: false because this is a temp artifact, not an outcome.
+      # /tmp is cleared on reboot, so without this the play reports changed=1 on
+      # the first run after every reboot while Vault is untouched — and a
+      # playbook that is always "changed" teaches you to stop reading the recap.
+      # The only meaningful change here is a policy write, below.
+      changed_when: false
 
     - name: Read the live policy for comparison
       ansible.builtin.command:
