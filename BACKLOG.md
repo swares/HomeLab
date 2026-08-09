@@ -60,8 +60,26 @@ isn't one. See §6.3.
 ### 1.3 Finish the offsite tier
 `TODO-2026-08-03.md:274`, `ansible/playbooks/backup-offsite.yml:56`
 
-Seed is running (~30h from 08-07 19:20). When it lands: enable the timer, resume the
-paused healthchecks.io check, commit the untracked `gitops/workloads/lldap/restic-pv.yaml`.
+Seed is running (~27h in as of 08-09 02:00 UTC, ~1.9 MiB/s). When it lands: enable the
+timer, resume the paused healthchecks.io check, and commit the untracked
+`gitops/workloads/lldap/restic-pv.yaml`.
+
+**Chunker params verified 08-09** — the one setting that cannot be changed after init:
+
+    /mnt/cold-8t/restic  (4154928a)  chunker_polynomial 30f6553d487a79
+    R2 homelab-nas       (d7ac04b8)  chunker_polynomial 30f6553d487a79
+
+Identical, so `--copy-chunker-params` took and dedup between the two repos is
+preserved. Had they differed, the remote would be re-chunking everything and the only
+fix would be emptying the bucket and re-seeding.
+
+### 1.3b `backup-verify` does not check the offsite repo
+`ansible/templates/backup-verify.sh.j2`
+
+It runs `restic check` against the primary, cold-sec and the R2 *cloud* repo
+(`homelab-backup`), but not the new `homelab-nas` offsite repo. So the tier that exists
+specifically to survive losing the H4 is the one tier with no weekly integrity check.
+Add it once the seed completes — the check is meaningless against a half-populated repo.
 
 ### 1.4 `storage.yml` can `mkfs` a cold mirror by unstable device name
 `docs/REVIEW-2026-07-24.md:291` (H15)
@@ -231,6 +249,32 @@ workloads — the repo's own policy, applied to workloads but not to its own CI.
 Either write the Dockerfile and publish the image, or point `image:` at a pinned
 public one (`bitnami/kubectl:<version>` plus the extra tools installed per-job).
 
+### 4.1c `ansible.cfg` only applies if you `cd ansible` first — **verified 08-09**
+`ansible/ansible.cfg:21`, `:34` (M-new-7)
+
+Ansible auto-loads `ansible.cfg` from the **current working directory**. Run a playbook
+from the repo root with an explicit `-i ansible/inventory/hosts.yml` and the config is
+never read — so `vault_password_file` and `pipelining = True` both silently do nothing.
+
+Surfaced on 08-09: `bootstrap.yml --limit n150-1,n150-2` failed with
+
+    "Attempting to decrypt but no vault secrets found"
+
+because `kvm_hosts` carries a vaulted `ansible_become_password`. Every other playbook
+run this session was made the same way and succeeded **only because none of them
+needed to decrypt anything** — they were running without pipelining too, unnoticed.
+
+Correctness should not depend on which directory you are standing in. Options:
+
+- a repo-root `ansible.cfg` with paths adjusted (`inventory = ansible/inventory/hosts.yml`,
+  and the same absolute `vault_password_file`), so both locations work; or
+- a `Makefile` target that `cd`s first, and documenting `cd ansible` as the only
+  supported way to run playbooks.
+
+The absolute path at `:21` shows this trap was already half-known — the comment at
+`:16` explains that a *relative* `vault_password_file` resolves from the playbook
+directory. The remaining gap is the config file itself not being found at all.
+
 ### 4.2 `zot_admin_password` is undefined
 `ansible/playbooks/k3s-registry.yml:48`, `TODO-2026-08-03.md:227-229` — referenced,
 defined nowhere. Blocks giving `opi5pro-1` registry credentials.
@@ -324,9 +368,13 @@ Flashed 2026-07-13; the same file says so at `:140`. Self-contradictory.
 ### 6.8 `docs/UPDATES.md:325` — Authelia→PostgreSQL listed as a gap
 Completed 2026-07-03.
 
-### 6.9 Two files end mid-sentence
-`docs/HARDWARE.md:147` (`— investigate(2`) and `docs/services.md:121`
-(`Improvement need`). Content is missing from both.
+### 6.9 ~~Two files end mid-sentence~~ — **HARDWARE.md fixed 08-09**
+`docs/HARDWARE.md` ended mid-word at `— investigate(2`. That truncated line was the
+Authelia `Progressing` item, which had been resolved in a later session — so a
+half-written sentence kept a closed issue alive across two audits.
+
+`docs/services.md:121` still ends at `Improvement need`. Content is missing; recover
+or delete it.
 
 ### 6.10 rknpu target version disagrees
 0.9.7 everywhere except `gitops/workloads/immich/README.md:50`, which requires ≥ 0.9.8.
@@ -381,8 +429,15 @@ Zot OIDC (blocked on upstream provider naming) · Windows Update automation ·
 - Delete `/etc/vault.d/vault.hcl.unused` on the H4.
 - Rotate sudo passwords on `n150-1`/`n150-2` (exposed 2026-07-18) — `rotate-passwords.yml`.
 - Pin the Ollama image and give Whisper a versioned tag (Kyverno `disallow-latest-tag`).
-- Investigate Authelia health stuck `Progressing` in ArgoCD.
-- `bootstrap.yml` needs `-K` for `n150-1`/`n150-2` — the only hosts without passwordless sudo.
+- ~~Investigate Authelia health stuck `Progressing` in ArgoCD~~ — **DONE.** Resolved in
+  an earlier session; the leftover PVC has also been removed. The entry survived only
+  because it was carried in `README.md` and `docs/HARDWARE.md`, neither of which was
+  updated. Exactly the drift §6 exists to catch.
+- ~~`bootstrap.yml` needs `-K` for `n150-1`/`n150-2`~~ — **DONE.** Both now have
+  passwordless sudo. `bootstrap.yml:43-44` already codifies it
+  (`/etc/sudoers.d/ansible-<user>`, `NOPASSWD: ALL`), so a rebuild reproduces it.
+  Worth one `--check` run against those two hosts to confirm the codified state and
+  the hand-made one agree.
 - Confirm `*.apps` wildcard answers only `.201`, not also `.160`.
 - `community.general` vs Ansible 2.17.14 version mismatch.
 - Mirror `bitnamilegacy/kubectl` into zot before the archive is withdrawn

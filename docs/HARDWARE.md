@@ -119,6 +119,10 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 
 ## Pending / TODO
 
+> Open work lives in **[`../BACKLOG.md`](../BACKLOG.md)**. The ✅ entries below are kept
+> as a hardware changelog; the two remaining ⚠ items are carried in the backlog and
+> should be ticked there, not here.
+
 - ✅ octopi (RPi 3B #2): Bookworm flashed, Pi-hole v6.4.3/FTL v6.7 running (confirmed 2026-07-13)
 - ✅ N150 #3 (yikw): WinRM credentials corrected, Ansible win_ping confirmed (2026-07-13)
 - ✅ opi5pro-1: reflashed Ubuntu 22.04 Jammy, k3s agent rejoined, NVMe remounted at /mnt/nvme, Ollama models intact (2026-07-10)
@@ -145,4 +149,11 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 - ✅ n150-1 KVM host fixes: bridge.conf, qemu-bridge-helper setuid, AppArmor NUMA rules captured in bootstrap-kvm.yml (2026-07-18)
 - ⚠ sudo password on n150-1/n150-2 exposed in terminal output (2026-07-18) — rotate via rotate-passwords.yml
 - Kyverno cleanup pending: Ollama image pin + Whisper versioned tag (required by disallow-latest-tag policy)
-- Authelia health stuck Progressing in ArgoCD — investigate(2
+- ~~Authelia health stuck Progressing in ArgoCD~~ — RESOLVED (unused PVC removed).
+
+<!--
+This line previously read "Authelia health stuck Progressing in ArgoCD — investigate(2"
+and the file ended there, mid-word. The issue was fixed in a later session but this
+file was never updated, so the item kept resurfacing in audits via README.md's TODO
+and this list. Open work now lives in ../BACKLOG.md; do not restart a list here.
+-->
