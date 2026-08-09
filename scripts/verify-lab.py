@@ -70,6 +70,25 @@ INGRESS_VIP = "192.168.1.201"
 #   curl -s http://<host>:9100/metrics | grep node_systemd_unit_state
 KNOWN_ABSENT = {}
 
+# Different thing entirely: metrics absent BECAUSE THE LAB IS HEALTHY.
+# kube-state-metrics emits condition series only for conditions a resource actually
+# carries, so a metric describing failure has no series while nothing has failed.
+#
+# NOT the same as KNOWN_ABSENT. There the alert cannot fire; here it fires perfectly
+# and the absence is the good outcome. Conflating them would either make this check
+# permanently red on a healthy lab, or — worse — train someone to move a genuinely
+# broken metric here to quiet it.
+#
+# Only add something if you have SEEN the alert fire. LabBackupJobFailed was proven
+# on 2026-08-07 with a deliberately failing Job (backup-alerttest) that paged via
+# ntfy and resolved on deletion.
+ABSENT_WHEN_HEALTHY = {
+    "kube_job_failed":
+        "kube-state-metrics emits this only for Jobs carrying a Failed condition, "
+        "so it has zero series when no Job has failed. LabBackupJobFailed was "
+        "verified firing end-to-end on 2026-08-07.",
+}
+
 FAIL, PASS, ERROR = "FAIL", "PASS", "ERROR"
 
 
@@ -195,6 +214,14 @@ def _metric_names(expr):
     expr = re.sub(r'#[^\n]*', ' ', expr)                  # comments
     expr = re.sub(r'"[^"]*"|\'[^\']*\'', ' ', expr)       # string literals
     expr = re.sub(r'[a-zA-Z_][a-zA-Z0-9_]*\s*(=~|!~|=|!=)', ' ', expr)  # label matchers
+    # Grouping clauses name LABELS, not metrics. Added 2026-08-07 after
+    # LabBackupJobFailed's `and on(namespace, job_name)` produced
+    # "ABSENT: job_name — every rule referencing it cannot fire". job_name carries
+    # an underscore and is not followed by '(', so it passed every other filter.
+    # A false positive is expensive here: it fails the whole check and buries the
+    # genuine finding underneath it.
+    expr = re.sub(r'\b(on|ignoring|by|without|group_left|group_right)\s*\([^)]*\)',
+                  ' ', expr)
     out = set()
     for tok in re.findall(r'\b([a-zA-Z_:][a-zA-Z0-9_:]*)\b(?!\s*\()', expr):
         if tok in _PROMQL_WORDS:
@@ -236,7 +263,7 @@ def check_alert_metrics():
     if promql("vector(1)") is None:
         raise CheckError("Prometheus did not answer a trivial query")
 
-    missing, excused, unparsed = [], [], []
+    missing, excused, healthy_absent, unparsed = [], [], [], []
     for name in sorted(names):
         res = promql(f'count({name})', strict=False)
         if res is None:
@@ -246,6 +273,8 @@ def check_alert_metrics():
             unparsed.append(name)
         elif res:
             continue
+        elif name in ABSENT_WHEN_HEALTHY:
+            healthy_absent.append(name)
         else:
             (excused if name in KNOWN_ABSENT else missing).append(name)
 
@@ -255,6 +284,9 @@ def check_alert_metrics():
               f"environments this lab does not have)"]
     for n in excused:
         detail.append(f"  known-absent (documented): {n}")
+    for n in healthy_absent:
+        detail.append(f"  absent because healthy: {n} — "
+                      f"{ABSENT_WHEN_HEALTHY[n].split('.')[0]}")
     if unparsed:
         detail.append(f"  not valid metric names, ignored: {', '.join(unparsed[:12])}")
     if not missing:
