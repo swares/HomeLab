@@ -295,8 +295,26 @@ change with its own rollback story.
 — losing the embedded etcd quorum. Now `serial: 1`. Worth remembering that `make
 k3s-registry` was one working variable away from being a cluster outage.
 
-Remaining: run it once so `opi5pro-1` gets the file. With the template now matching
-what is deployed, only that node changes, so only its `k3s-agent` restarts.
+**`opi5pro-1` brought into line 08-09** — file created, its `k3s-agent` restarted,
+nothing else touched.
+
+Two further faults the `--check` caught, neither visible from reading the file, both
+fixed:
+
+- **The template said `mode: 0600`; the deployed files are `0644`.** Content matched
+  on all four configured nodes, so the only diff was the mode — but `copy` notifies
+  `restart k3s`, so applying it would have rolled **all five nodes** to tighten
+  permissions on a file holding no credentials. Set to `0644` to match. If an `auth:`
+  block is ever added, tighten it in that same commit and accept the restart then.
+
+- **The Docker play could not succeed, and would have been harmful if it had.**
+  `h4-core` runs `docker-ce 29.7.1`, which depends on `containerd.io`; the task
+  installed Ubuntu's `docker.io`, which depends on the conflicting `containerd`. Now
+  guarded by a `docker --version` probe. `xu3-1` was dropped from the play entirely:
+  Ubuntu 16.04's Python is too old for ansible-core, so every module dies with a
+  SyntaxError before task logic runs, and `ignore_unreachable` does not help because
+  the host is reachable. It is already excluded from auto-updates — configure it by
+  hand or retire it (see §6 on `xu3-1` being EOL since 2021).
 
 ### 4.3 `orchestrator_allowlist` is undefined
 `ansible/templates/orchestrator.service.j2:14` — falls back to the whole LAN, while
