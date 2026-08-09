@@ -132,15 +132,10 @@ A SHA-512 crypt hash with a hardcoded salt, and the line beneath it **states the
 plaintext password**. Every VM built from this playbook ships with a known password,
 `lock_passwd: false`, and `NOPASSWD:ALL`.
 
-### 2.4 `ldap.yml` silently falls back to a literal password
-`ansible/playbooks/ldap.yml:9`
-
-```
-ldap_admin_password: "{{ vault_ldap_admin_password | default('CHANGEME-set-via-vault') }}"
-```
-
-If the vault var is out of scope it preseeds slapd and binds with that string — while
-the file's own header says "never hardcode it".
+### 2.4 ~~`ldap.yml` silently falls back to a literal password~~ — **RESOLVED 08-09**
+The playbook was deleted rather than fixed; see §9. It preseeded slapd and bound with
+`CHANGEME-set-via-vault` whenever the vaulted variable was out of scope, while its own
+header said "never hardcode it". It had also been dead since 2026-07-18.
 
 ### 2.5 Vault unseal keys sit beside the sealed data
 `ansible/templates/vault-unseal.sh.j2:6`, `TODO-2026-08-03.md:871-876`
@@ -444,7 +439,17 @@ Zot OIDC (blocked on upstream provider naming) · Windows Update automation ·
   on the producer; `rotate-passwords.yml` and `sync-secrets-to-vault.yml` are the
   models to copy.
 
-- [ ] **`ldap.yml:23-28` — and probably delete the whole playbook.**
+- [x] **`ldap.yml` deleted 08-09** — not fixed, removed. It targeted `hosts: ldap`,
+  a group deleted from the inventory on 2026-07-18 when `ldap-1` was decommissioned
+  and lldap moved to k3s, so it matched no hosts and could only no-op. But
+  `Makefile:54` still offered a `make ldap` target, and `site.yml:14` described it as
+  "lldap VM provisioning" — which it never was; it installed OpenLDAP/slapd.
+
+  Deleting resolved three items at once: the `--check` bug below, the
+  `CHANGEME-set-via-vault` fallback (§2.4), and the dead playbook itself. Makefile
+  target and site.yml comment removed with it.
+
+  The original finding, kept because the shape is worth recognising:
   The task is `command` + `no_log`, with both conditionals reading the register:
 
       register: ldapadd

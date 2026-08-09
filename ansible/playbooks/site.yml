@@ -11,7 +11,9 @@
 #   k3s-ha-join.yml   — join agent/server nodes after h4 bootstrap
 #   dns.yml           — Pi-hole + dnsmasq on DNS hosts
 #   vault.yml         — HashiCorp Vault on RPi 5
-#   ldap.yml          — lldap VM provisioning
+#   (ldap.yml removed 2026-08-09 — it installed OpenLDAP against a host group
+#    deleted on 2026-07-18; lldap is GitOps now, gitops/workloads/lldap/. The
+#    line here described it as "lldap VM provisioning", which it never was.)
 #   ai-nodes.yml      — RKLLama + OVMS on OPi 5 Pro nodes
 #   node-exporter.yml — node-exporter on non-cluster hosts
 - import_playbook: storage.yml

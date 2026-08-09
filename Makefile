@@ -50,8 +50,13 @@ dns:         ## Configure Pi-hole/dnsmasq lab zone (primary + secondary)
 vault:       ## Install + configure Vault (RPi 5)
 	cd ansible && $(ANSIBLE) playbooks/vault.yml
 
-ldap:        ## Install + configure OpenLDAP on legacy RPi 4B (lldap now runs as k3s workload)
-	cd ansible && $(ANSIBLE) playbooks/ldap.yml
+# `ldap` target removed 2026-08-09 along with ansible/playbooks/ldap.yml.
+# It installed OpenLDAP (slapd) against `hosts: ldap` — a group deleted from the
+# inventory on 2026-07-18 when ldap-1 was decommissioned and lldap moved into k3s.
+# It therefore matched no hosts and could only ever no-op, while still carrying an
+# admin password that fell back to the literal string "CHANGEME-set-via-vault" and
+# a --check bug hidden behind no_log. A dead playbook is harmless right up until
+# someone runs it. lldap is now GitOps: gitops/workloads/lldap/.
 
 mqtt:        ## Install Mosquitto broker (lab Zero 2W)
 	cd ansible && $(ANSIBLE) playbooks/mqtt.yml
