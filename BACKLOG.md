@@ -270,9 +270,33 @@ The absolute path at `:21` shows this trap was already half-known — the commen
 `:16` explains that a *relative* `vault_password_file` resolves from the playbook
 directory. The remaining gap is the config file itself not being found at all.
 
-### 4.2 `zot_admin_password` is undefined
-`ansible/playbooks/k3s-registry.yml:48`, `TODO-2026-08-03.md:227-229` — referenced,
-defined nowhere. Blocks giving `opi5pro-1` registry credentials.
+### 4.2 ~~`zot_admin_password` is undefined~~ — **RESOLVED 08-09 by deletion**
+
+The variable was referenced at `k3s-registry.yml:48` and defined nowhere, so the play
+could only fail on an undefined variable — meaning it had never been run. Checking the
+live nodes explained why nobody noticed:
+
+    h4-core, opi5pro-2, n150-1, n150-2   registry mirror only, NO auth block
+    opi5pro-1                            file absent entirely
+
+The template was *ahead of reality in a risky direction*. It additionally mirrored
+`docker.io` and `ghcr.io` through Zot — which runs inside the cluster it serves, so a
+cold cluster or a new node would need Zot to start Zot — and added an auth block for a
+credential nothing uses. Zot serves the one lab-registry image in production
+(`registry.apps.lab.home.arpa/m5stack-adapter:0.1.1`) without authentication.
+
+So the template was reduced to match the deployed file rather than the password being
+minted. No rotation, no new secret, and the cold-start dependency never gets
+introduced. If Zot as a pull-through cache is wanted later it becomes a deliberate
+change with its own rollback story.
+
+**Also fixed, and more dangerous than the password:** the play had no `serial:`, so its
+`restart k3s` handler would have restarted all three control-plane servers in parallel
+— losing the embedded etcd quorum. Now `serial: 1`. Worth remembering that `make
+k3s-registry` was one working variable away from being a cluster outage.
+
+Remaining: run it once so `opi5pro-1` gets the file. With the template now matching
+what is deployed, only that node changes, so only its `k3s-agent` restarts.
 
 ### 4.3 `orchestrator_allowlist` is undefined
 `ansible/templates/orchestrator.service.j2:14` — falls back to the whole LAN, while

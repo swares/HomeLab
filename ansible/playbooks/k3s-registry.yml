@@ -11,6 +11,12 @@
 - name: Configure k3s nodes to trust lab registry
   hosts: k3s_server:k3s_agents
   become: true
+  # One node at a time. The handler below restarts k3s, and three of these hosts are
+  # control-plane servers sharing an embedded etcd quorum — restarting them together
+  # (Ansible's default parallelism) loses quorum and takes the API server down.
+  # Added 2026-08-09; this play had no serial and had never been run against the
+  # full group.
+  serial: 1
   vars:
     registry_host: registry.apps.lab.home.arpa
     k3s_config_dir: /etc/rancher/k3s
@@ -27,28 +33,37 @@
         dest: "{{ k3s_config_dir }}/registries.yaml"
         mode: "0600"
         content: |
-          # Ansible-managed — lab OCI registry (Zot) as pull-through cache
-          # docker.io and ghcr.io are mirrored via Zot's on-demand sync extension.
-          # Zot pulls upstream on first request and caches locally — OPi nodes never
-          # need direct internet access for image pulls.
+          # Ansible-managed — lab OCI registry (Zot, self-signed cert)
           mirrors:
             "{{ registry_host }}":
               endpoint:
                 - "https://{{ registry_host }}"
-            docker.io:
-              endpoint:
-                - "https://{{ registry_host }}"
-            ghcr.io:
-              endpoint:
-                - "https://{{ registry_host }}"
           configs:
             "{{ registry_host }}":
-              auth:
-                username: "{{ zot_admin_user | default('admin') }}"
-                password: "{{ zot_admin_password }}"
               tls:
                 insecure_skip_verify: true
       notify: restart k3s
+      # REDUCED 2026-08-09 to match what is actually deployed. The previous template
+      # additionally mirrored docker.io and ghcr.io through Zot, and added an auth
+      # block referencing `zot_admin_password` — a variable defined nowhere in this
+      # repo, so the play could only ever fail on a bare undefined-variable error.
+      #
+      # It had therefore never been run. The live file on h4-core, opi5pro-2, n150-1
+      # and n150-2 is the simpler form above: registry mirror only, no auth. Only
+      # opi5pro-1 lacks it entirely.
+      #
+      # Two reasons not to restore the richer version:
+      #
+      #   1. Cold-start dependency. Mirroring docker.io/ghcr.io routes every image
+      #      pull on every node through Zot — which runs inside the cluster it
+      #      serves. A cold cluster, a new node, or a node after image GC then needs
+      #      Zot to start Zot.
+      #   2. Nothing needs it. The only lab-registry image in use is
+      #      registry.apps.lab.home.arpa/m5stack-adapter, and Zot serves it without
+      #      authentication today.
+      #
+      # If Zot as a pull-through cache is wanted later, make it a deliberate change
+      # with its own rollback story — not a side effect of running this playbook.
 
   handlers:
     - name: restart k3s
