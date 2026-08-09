@@ -157,16 +157,14 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the full security model.
 
 ## TODO
 
-### Actionable now
-- [ ] Rotate sudo passwords on n150-1/n150-2 (exposed in terminal output 2026-07-18 — run `rotate-passwords.yml`)
-- [ ] Upgrade rknpu driver 0.9.6 → 0.9.7 to unlock 3B+ model support on opi5pro-1/2
-- [ ] Fix Ollama image pin + Whisper versioned tag (required by Kyverno `disallow-latest-tag` policy)
-- [ ] Investigate Authelia health stuck Progressing in ArgoCD
+**All open work lives in [`BACKLOG.md`](BACKLOG.md).** It is the single list, swept
+from every document and from the code, and ordered by what happens if an item is
+ignored.
 
-### Longer term
-- [ ] Vault TLS — currently plain HTTP; wire cert-manager before exposing beyond LAN
-- [ ] Windows Update automation (`windows-updates.yml`) — `ansible.windows.win_updates` module ready, playbook not yet written
-- [ ] Remote access — WireGuard or Tailscale
+This section used to carry its own list. It drifted: it claimed offsite restic backup
+was done (it had never copied a byte), and it duplicated items that also appeared in
+`docs/OVERVIEW.md`, `docs/services.md`, `docs/STANDUP.md` and three dated `TODO-*.md`
+files, each with a different idea of what was outstanding. One list or none.
 
 ### Done ✅
 - [x] octopi flashed to Bookworm, Pi-hole v6.4.3 running (2026-07-13)
@@ -183,4 +181,9 @@ See [docs/SECURITY.md](docs/SECURITY.md) for the full security model.
 - [x] ArgoCD notifications + git-directory ApplicationSet (2026-07-14)
 - [x] Semaphore Ansible UI live (2026-07-18)
 - [x] OpenTofu state in Minio; gitlab-1 VM codified (2026-07-18)
-- [x] Offsite restic backup target (backup-offsite.timer)
+- [x] Offsite restic replication to Cloudflare R2 (`homelab-nas`) — wired 2026-08-07.
+      Note: the `backup-offsite.timer` line previously here was **false**. The unit
+      existed but `offsite_restic_repo` was never set, so it exited 0 nightly and
+      reported PASSED without copying anything. See `BACKLOG.md` §1.3.
+- [x] restic repository password rotated on both local repos (2026-08-07)
+- [x] Vault: no standing root token; policies under git (2026-08-07)

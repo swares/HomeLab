@@ -48,15 +48,27 @@ INGRESS_VIP = "192.168.1.201"
 # Metrics known to be absent, with the reason. Anything absent and NOT listed
 # here is a finding. Keeping this list short and annotated is the point: an
 # entry is an admission that an alert cannot fire.
-KNOWN_ABSENT = {
-    "node_systemd_unit_state":
-        "systemd collector cannot read /run/systemd/private from the DaemonSet "
-        "(runs as 65534, socket is 0700 root). Measured 2026-07-26: "
-        "node_scrape_collector_success{collector=\"systemd\"} == 0. Backup "
-        "liveness comes from healthchecks.io instead — see lab-alerts.yaml.",
-    "node_systemd_timer_last_trigger_time_seconds":
-        "Same cause as node_systemd_unit_state.",
-}
+# Emptied 2026-08-07. Both former entries were wrong, and being wrong here is worse
+# than being absent — a suppression tells the verifier not to look.
+#
+#   "node_systemd_unit_state" was excused on the grounds that the collector "cannot
+#   read /run/systemd/private (runs as 65534, socket is 0700 root)". That diagnosis
+#   was retracted on 2026-08-02: the collector uses the D-Bus SYSTEM bus, not
+#   systemd's private socket, and it works once the socket is mounted into the pod
+#   and AppArmor is unconfined on Ubuntu nodes. See the NOTE at the top of
+#   gitops/workloads/monitoring/lab-alerts.yaml. The metric has been present since,
+#   and LabBackupUnitFailed depends on it — so this entry was telling the verifier
+#   to ignore a working metric that a critical alert relies on.
+#
+#   "node_systemd_timer_last_trigger_time_seconds" does not exist under that name at
+#   all; the real metric has no "_time" in it. Suppressing a typo suppresses nothing
+#   and hides the fact that nothing was ever checked.
+#
+# Keep this dict short and annotated. An entry is an admission that an alert cannot
+# fire — and, as of 08-07, one that must be re-checked against the exporter before it
+# is added, not inherited from an older note:
+#   curl -s http://<host>:9100/metrics | grep node_systemd_unit_state
+KNOWN_ABSENT = {}
 
 FAIL, PASS, ERROR = "FAIL", "PASS", "ERROR"
 

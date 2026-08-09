@@ -112,10 +112,15 @@ validates correctly.
 
 ## Gaps worth a decision
 
-1. ~~**Home Assistant**~~ — **DONE.** Running as a k3s Deployment in the `home-assistant` namespace (`ha.apps.lab.home.arpa`); MQTT consumer via broker at opi-zero2w-2 (.188).
-2. **Remote access** — WireGuard or Tailscale to reach the lab from outside. *Very low priority.*
-3. ~~**Reverse proxy + internal CA + SSO**~~ — **DONE.** Traefik ingress + cert-manager lab-ca + Authelia OIDC all deployed.
-4. ~~**MQTT broker**~~ — **DONE.** Relocated to always-on Zero 2W.
-5. ~~**Offsite backup**~~ — **DONE.** Nightly `restic copy` via `backup-offsite.timer`.
-6. **UPS + NUT** — *deferred.* The H4 is a single storage point; a UPS is cheap insurance.
-7. **Grafana dashboard** — basic lab health dashboard exists and working. Improvement need
+See **[`../BACKLOG.md`](../BACKLOG.md)** — the single list of open work.
+
+Delivered since this section was written: Home Assistant (k3s Deployment,
+`ha.apps.lab.home.arpa`), Traefik ingress + cert-manager lab-ca + Authelia OIDC,
+the MQTT broker relocated to an always-on Zero 2W, and a basic Grafana lab-health
+dashboard.
+
+One correction worth keeping visible: this section previously read
+"~~**Offsite backup**~~ — **DONE.** Nightly `restic copy` via `backup-offsite.timer`."
+**That was false.** The unit existed, but `offsite_restic_repo` was never set, so it
+exited 0 every night and reported PASSED without copying a byte. Real offsite
+replication to Cloudflare R2 was wired on 2026-08-07. See `BACKLOG.md` §1.3.
