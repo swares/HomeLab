@@ -67,9 +67,11 @@ Current as of 2026-07-18. Detailed service catalog in [services.md](services.md)
 
 ## Deferred / Gaps
 
-- Remote access — WireGuard or Tailscale (very low priority)
-- UPS + NUT — H4 is a single-point storage risk; cheap insurance
-- Vault TLS — currently plain HTTP; add cert-manager cert before exposing beyond LAN
-- Windows Update automation — `windows-updates.yml` playbook not yet written
-- rknpu driver 0.9.7 upgrade — unlocks 3B+ model support on opi5pro NPUs
-- OpenVINO OVMS — crash-looping on n150-1, scaled to 0; blocked on GPU runtime fix
+See **[`../BACKLOG.md`](../BACKLOG.md)** — the single list of open work. Items
+formerly listed here (remote access, UPS + NUT, Vault TLS, Windows Update
+automation, rknpu 0.9.7, OVMS) are all carried there, most under §8 "Deferred by
+choice".
+
+This list was removed rather than updated because it was one of six competing lists,
+and competing lists are how `backup-offsite` came to be marked done in three
+documents while it had never copied a byte.

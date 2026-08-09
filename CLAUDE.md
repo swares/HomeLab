@@ -47,8 +47,12 @@ Read this before acting. Full context is in `docs/` (start with `ARCHITECTURE.md
   permissions, fix the `securityContext` — never set `privileged: true`.
 - Confirm the StorageClass name with `kubectl get sc` rather than assuming it.
 - DNS is load-bearing: `api.lab.home.arpa` must resolve to `192.168.1.200` (kube-vip
-  VIP); `*.apps.lab.home.arpa` must resolve to `192.168.1.160` (Traefik ingress).
-  If Ingress doesn't resolve, check DNS first.
+  control-plane VIP); `*.apps.lab.home.arpa` must resolve to **`192.168.1.201`**
+  (kube-vip service VIP for Traefik). If Ingress doesn't resolve, check DNS first.
+  Source of truth is `ingress_vip` in `ansible/inventory/hosts.yml`, applied by
+  `ansible/playbooks/dns.yml`. **Not `192.168.1.160`** — that was the H4's own node IP
+  until 2026-07-27, a single A record whose loss took down every service URL in the
+  lab. If you find `.160` on the wildcard, that is the fault, not the fix.
 
 ## Secrets
 
