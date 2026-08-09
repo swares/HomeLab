@@ -433,11 +433,24 @@ Zot OIDC (blocked on upstream provider naming) · Windows Update automation ·
   an earlier session; the leftover PVC has also been removed. The entry survived only
   because it was carried in `README.md` and `docs/HARDWARE.md`, neither of which was
   updated. Exactly the drift §6 exists to catch.
-- ~~`bootstrap.yml` needs `-K` for `n150-1`/`n150-2`~~ — **DONE.** Both now have
-  passwordless sudo. `bootstrap.yml:43-44` already codifies it
-  (`/etc/sudoers.d/ansible-<user>`, `NOPASSWD: ALL`), so a rebuild reproduces it.
-  Worth one `--check` run against those two hosts to confirm the codified state and
-  the hand-made one agree.
+- ~~`bootstrap.yml` needs `-K` for `n150-1`/`n150-2`~~ — **DONE 08-09.** Both now have
+  passwordless sudo via `/etc/sudoers.d/ansible-swares`, applied by `bootstrap.yml`
+  rather than by hand.
+
+  Worth recording *how* this closed. The `--check` run did not confirm agreement — it
+  found that the drop-in did not exist on either host, so the working passwordless
+  sudo came from an uncodified edit elsewhere. Live and git both worked, and differed.
+  The hand edit was removed and `bootstrap.yml` applied, so there is now one source of
+  the grant instead of two. Running `--check` before the real run is what surfaced it;
+  applying blind would have left both in place, which is how a grant becomes
+  impossible to revoke.
+- [ ] **Decide whether the control node's RSA key should still be pushed.**
+  `bootstrap.yml` finds both `~/.ssh/id_ed25519.pub` and `~/.ssh/id_rsa.pub` on
+  `odroid-nas` and appends whichever is missing — so every bootstrapped host gains an
+  `ssh-rsa` (3072-bit) key alongside the ed25519 ones. Both are believed in use as of
+  08-09, so this is deferred rather than fixed. Revisit: if the RSA key turns out to
+  be a leftover, delete it from the control node rather than un-pushing it from each
+  host, and consider ordering the lookup ed25519-first so it stops propagating.
 - Confirm `*.apps` wildcard answers only `.201`, not also `.160`.
 - `community.general` vs Ansible 2.17.14 version mismatch.
 - Mirror `bitnamilegacy/kubectl` into zot before the archive is withdrawn
