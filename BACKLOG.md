@@ -422,8 +422,48 @@ Zot OIDC (blocked on upstream provider naming) · Windows Update automation ·
 
 - `lldap-backup` init container failed once and self-healed; a retry loop around
   `pg_dump` would make it deterministic (`TODO-2026-08-03.md:447-452`).
-- Re-sweep Ansible for `no_log` tasks whose register feeds a later `set_fact` — the
-  shape that broke `healthchecks.yml` under `--check` (`TODO-2026-08-03.md:290-292`).
+- [x] **Re-sweep Ansible for `no_log` registers consumed later** — done 08-09.
+  All 12 files carrying `no_log` were checked. Results, so this need not be redone:
+
+      backup-cloud.yml      OK — check_mode: false on both Vault reads
+      backup-offsite.yml    OK — check_mode: false on the Vault read
+      healthchecks.yml      FIXED 08-07 — this was the original case
+      vault-policies.yml    OK — reads deliberately not no_log
+      k3s-agent.yml         OK — uses slurp, which supports check mode and runs
+      k3s-ha-join.yml       OK — same
+      rotate-passwords.yml  OK — consumer guards `is defined` with a fallback
+      sync-secrets-to-vault OK — the set_fact guards `is not skipped and ... is defined`
+      k8s-secrets.yml       OK — no register -> consumer chain
+      sandbox-vm-update.yml OK — already carries check_mode: false on its probe
+      github-runner.yml     OK — no_log task has no consumed register
+      ldap.yml              **FINDING, below**
+
+  Two useful generalisations. `slurp` supports check mode, so it runs and populates
+  its register — only `command`/`shell` skip. And the defensive shape is a guarded
+  consumer (`when: x is defined`, or `| default(...)`), not just `check_mode: false`
+  on the producer; `rotate-passwords.yml` and `sync-secrets-to-vault.yml` are the
+  models to copy.
+
+- [ ] **`ldap.yml:23-28` — and probably delete the whole playbook.**
+  The task is `command` + `no_log`, with both conditionals reading the register:
+
+      register: ldapadd
+      changed_when: "'adding new entry' in ldapadd.stdout"
+      failed_when: ldapadd.rc not in [0, 68]
+      no_log: true
+
+  Under `--check` the command skips, so `.stdout` and `.rc` do not exist, both
+  expressions fail on undefined, and `no_log` censors the reason — the identical
+  signature to the `healthchecks.yml` bug. It is a *write* (`ldapadd`), so the fix is
+  not `check_mode: false` but defaults: `ldapadd.stdout | default('')` and
+  `ldapadd.rc | default(0)`.
+
+  **But first ask whether it should exist.** This playbook installs `slapd`, and
+  lldap replaced it as a k3s Deployment when `ldap-1` was decommissioned on
+  2026-07-04. If nothing targets it, deleting is better than fixing — a broken
+  playbook nobody runs is harmless right up until someone runs it. Note also
+  `ldap.yml:9` silently falls back to the literal `CHANGEME-set-via-vault` (§2.4),
+  which is a second reason to remove rather than repair.
 - Confirm each healthchecks.io check's Period/Grace matches
   `ansible/playbooks/healthchecks.yml` — set by hand in the UI, nothing enforces it.
 - Delete `/etc/vault.d/vault.hcl.unused` on the H4.
