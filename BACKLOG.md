@@ -61,8 +61,11 @@ isn't one. See §6.3.
 `TODO-2026-08-03.md:274`, `ansible/playbooks/backup-offsite.yml:56`
 
 Seed is running (~27h in as of 08-09 02:00 UTC, ~1.9 MiB/s). When it lands: enable the
-timer, resume the paused healthchecks.io check, and commit the untracked
-`gitops/workloads/lldap/restic-pv.yaml`.
+timer and resume the paused healthchecks.io check.
+
+*(An earlier version of this entry said to commit an untracked
+`gitops/workloads/lldap/restic-pv.yaml`. That was wrong — see §1.8. The PV never
+existed in the cluster and the file has since disappeared from the working tree.)*
 
 **Chunker params verified 08-09** — the one setting that cannot be changed after init:
 
@@ -80,6 +83,41 @@ It runs `restic check` against the primary, cold-sec and the R2 *cloud* repo
 (`homelab-backup`), but not the new `homelab-nas` offsite repo. So the tier that exists
 specifically to survive losing the H4 is the one tier with no weekly integrity check.
 Add it once the seed completes — the check is meaningless against a half-populated repo.
+
+### 1.8 lldap's restic mount is a **hard** NFS mount
+`gitops/workloads/lldap/backup-cronjob.yaml:151-154`
+
+```yaml
+- name: restic-repo
+  nfs:
+    server: 192.168.1.160
+    path: /mnt/cold-8t/restic
+```
+
+An **inline** NFS volume — and inline NFS volumes cannot carry `mountOptions`, which
+is a PV-only field. So this mounts with kernel defaults, meaning **hard**: if the H4's
+NFS export is unreachable, the pod blocks indefinitely rather than erroring.
+
+That is the 2026-08-02 incident, where `lldap-backup` hung for **3d15h**. It was
+*bounded*, not fixed: `activeDeadlineSeconds: 1800` now kills the job after 30
+minutes, and `LabBackupJobFailed` pages when it does. So the harm — a backup silently
+stalled for days — is handled. The stall itself is not.
+
+**How this was found, and a correction.** An untracked
+`gitops/workloads/lldap/restic-pv.yaml` was spotted on the H4 on 08-08 and recorded
+here as a live PV that urgently needed committing. It was not: `kubectl get pv
+lldap-restic` returns NotFound. It was an **unapplied draft** — someone's half-finished
+attempt to move this volume to a PV precisely so it could carry
+`soft,timeo=100,retrans=3`. The file has since vanished from the working tree.
+
+I asserted it was load-bearing from reading its contents without checking whether the
+object existed. The same mistake, in miniature, as trusting a green timer.
+
+**If the stall is worth fixing:** a PV plus a matching PVC, and switch the CronJob's
+volume from inline `nfs:` to `persistentVolumeClaim:`. Soft mounting turns a 30-minute
+hang into a ~30-second failure. Weigh that against changing a backup path that has run
+reliably since the deadline was added — the deadline already converts an indefinite
+hang into a bounded, alerted failure, which was the actual damage.
 
 ### 1.4 `storage.yml` can `mkfs` a cold mirror by unstable device name
 `docs/REVIEW-2026-07-24.md:291` (H15)
