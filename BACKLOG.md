@@ -71,7 +71,7 @@ Remaining:
       promptly: the success ping **un-paused** the healthchecks.io check, so it is
       now counting down against Period 25h / Grace 3h with no scheduled run to
       satisfy it. It will false-alarm ~28h after 02:19 UTC.
-- [ ] **Add `homelab-nas` to `backup-verify.sh`** — see §1.3b.
+- [x] **Add `homelab-nas` to `backup-verify.sh`** — done 08-11 (§1.3b closed).
 
 **Bug found by the first real run, fixed:** the completion line read
 `offsite copy + retention complete — 1 snapshots at destination` while retention had
@@ -94,13 +94,26 @@ Identical, so `--copy-chunker-params` took and dedup between the two repos is
 preserved. Had they differed, the remote would be re-chunking everything and the only
 fix would be emptying the bucket and re-seeding.
 
-### 1.3b `backup-verify` does not check the offsite repo
-`ansible/templates/backup-verify.sh.j2`
+### 1.3b ~~`backup-verify` does not check the offsite repo~~ — **DONE 08-11**
+`ansible/templates/backup-verify.sh.j2` §5
 
-It runs `restic check` against the primary, cold-sec and the R2 *cloud* repo
-(`homelab-backup`), but not the new `homelab-nas` offsite repo. So the tier that exists
-specifically to survive losing the H4 is the one tier with no weekly integrity check.
-Add it once the seed completes — the check is meaningless against a half-populated repo.
+It checked the primary, cold-sec and the R2 *cloud* repo (`homelab-backup`), but not
+`homelab-nas` — so the tier that exists specifically to survive losing the H4 was the
+only one with no weekly integrity check. Added once the seed completed; running it
+against a half-populated repo would only have produced noise.
+
+Three deliberate choices:
+
+- **`check` without `--read-data`.** Re-reading 204 GiB from R2 every week would cost
+  hours and, on a metered link, real money. Structural verification catches a corrupt
+  or truncated upload, which is the failure this guards against.
+- **Every call names `-r` and `--password-file` explicitly.** Section 4 exports
+  `RESTIC_REPOSITORY` and `RESTIC_PASSWORD_FILE` for the *cloud* repo and they are
+  still set; the flags win over the environment. Relying on the env here is how you
+  end up verifying one repo twice and another never.
+- **A recency check as well as integrity.** A clean `check` on a repo that stopped
+  receiving copies three weeks ago still passes. `nas`-tagged snapshot age is compared
+  against the same threshold the local repos use.
 
 ### 1.8 lldap's restic mount is a **hard** NFS mount
 `gitops/workloads/lldap/backup-cronjob.yaml:151-154`

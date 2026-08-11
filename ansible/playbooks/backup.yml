@@ -34,6 +34,11 @@
 
     # --- Weekly verification ---
     cloud_env_file: /etc/restic/cloud.env   # written by backup-cloud.yml
+    # Written by backup-offsite.yml (separate playbook — it needs a Vault token).
+    # Duplicated here so backup-verify.sh can be rendered without running that one.
+    # If they ever diverge, backup-offsite.yml is authoritative.
+    offsite_env_file: /etc/restic/offsite.env
+    offsite_password_file: /etc/restic/offsite-password
     cloud_stage_dir: /var/tmp/backup-cloud-stage  # must match backup-cloud.yml's TMPDIR
     verify_max_snapshot_age_seconds: 172800 # 48h — weekly check, daily backups
   tasks:
