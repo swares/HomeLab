@@ -186,14 +186,41 @@
         enabled: "{{ offsite_timer_enabled }}"
         state: "{{ 'started' if offsite_timer_enabled else 'stopped' }}"
 
-    - name: Report next steps
+    # Two messages, chosen by state. Until 2026-08-11 this printed seeding
+    # instructions unconditionally — including "the first copy has NOT run" and
+    # "the unit sets TimeoutStartSec=infinity" — long after both were false. A
+    # playbook that prints stale instructions on every run teaches you to skip
+    # reading its output, which is how the rest of this lab's failures survived.
+    - name: Report next steps — not yet seeded
       ansible.builtin.debug:
         msg:
-          - "Offsite configured. The first copy has NOT run."
-          - "Seed it via the unit, not the script directly — the script reads"
+          - "Offsite configured. The timer is DISABLED, so no copy is scheduled."
+          - "Seed via the unit, not the script — the script reads"
           - "RESTIC_REPOSITORY_OFFSITE and the R2 keys from the unit's"
-          - "EnvironmentFile, and the unit sets TimeoutStartSec=infinity."
+          - "EnvironmentFile."
           - "  sudo systemctl start --no-block backup-offsite.service"
           - "  journalctl -u backup-offsite.service -f"
-          - "This uploads the whole repository and can take days."
-          - "When it completes, re-run with -e offsite_timer_enabled=true"
+          - "The first copy uploads the whole repository. The 2026-08 seed was"
+          - "~204 GiB and took ~3 days at 2500 KiB/s."
+          - ""
+          - "BEFORE SEEDING: stop backup-nas.timer for the duration and raise"
+          - "TimeoutStartSec. restic copy locks the SOURCE repo, so a multi-day"
+          - "copy starves the nightly backup — it failed four nights running in"
+          - "August 2026 for exactly this reason."
+          - ""
+          - "When it completes: re-run with -e offsite_timer_enabled=true,"
+          - "restore TimeoutStartSec, and re-enable backup-nas.timer."
+      when: not offsite_timer_enabled
+
+    - name: Report next steps — seeded and scheduled
+      ansible.builtin.debug:
+        msg:
+          - "Offsite replication is configured and the timer is ENABLED."
+          - "Nightly copy at 02:30 UTC; incrementals take ~10s."
+          - "TimeoutStartSec is bounded (4h) so a runaway copy fails and alerts"
+          - "rather than silently starving backup-nas at 01:30."
+          - ""
+          - "Verify:  systemctl list-timers backup-offsite.timer"
+          - "         journalctl -u backup-offsite.service -n 20"
+          - "Weekly integrity + recency check runs via backup-verify.service."
+      when: offsite_timer_enabled
