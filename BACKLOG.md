@@ -60,8 +60,26 @@ isn't one. See §6.3.
 ### 1.3 Finish the offsite tier
 `TODO-2026-08-03.md:274`, `ansible/playbooks/backup-offsite.yml:56`
 
-Seed is running (~27h in as of 08-09 02:00 UTC, ~1.9 MiB/s). When it lands: enable the
-timer and resume the paused healthchecks.io check.
+**SEED COMPLETE 2026-08-11 02:19 UTC.** ~3.1 days wall clock, 44m35s CPU, ~204 GiB.
+Retention applied on the first run, keeping 32 snapshots across five groups
+(2 nas-old-paths + 11 nas + 8 lldap users.db + 7 lldap /tmp + 4 lldap /dump).
+`hc-ping: backup-offsite success OK`.
+
+Remaining:
+
+- [ ] **Enable `backup-offsite.timer`** — `-e offsite_timer_enabled=true`. Do this
+      promptly: the success ping **un-paused** the healthchecks.io check, so it is
+      now counting down against Period 25h / Grace 3h with no scheduled run to
+      satisfy it. It will false-alarm ~28h after 02:19 UTC.
+- [ ] **Add `homelab-nas` to `backup-verify.sh`** — see §1.3b.
+
+**Bug found by the first real run, fixed:** the completion line read
+`offsite copy + retention complete — 1 snapshots at destination` while retention had
+just kept 32. `restic snapshots --json` emits the whole array on one line, and
+`grep -c` counts matching *lines*, not matches. The assertion still caught the zero
+case (an empty array has no `"short_id"`), but the reported number was meaningless.
+Now `grep -o … | wc -l`. Same family as the `grep -q`/pipefail bug in the immich dump
+job — a grep flag answering a subtly different question than the one asked.
 
 *(An earlier version of this entry said to commit an untracked
 `gitops/workloads/lldap/restic-pv.yaml`. That was wrong — see §1.8. The PV never
