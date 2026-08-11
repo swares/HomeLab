@@ -33,6 +33,10 @@ copy reported `tools/` as absent when `tools/sdcard/` plainly exists on the H4. 
 ## 1. Data loss — the things that end the lab
 
 ### 1.1 No restore has ever been performed
+*(Drill procedure now written up in `docs/BREAK-GLASS.md`. Start with Drill 1 — a
+bounded, read-only restore from the offsite R2 repo onto a **non-H4** host, using
+only the envelope. R2 charges no egress, so it costs time and nothing else.)*
+
 `docs/BACKUP-RESTORE.md:354-372`, `docs/REVIEW-2026-07-24.md:124-144` (C2)
 
 > `| — | *no restore has ever been tested* | — | — | See §5 |`
@@ -45,7 +49,15 @@ item that makes every other backup improvement conditional.
 Do: one restic restore and one etcd restore into scratch, timed, recorded in the table.
 
 ### 1.2 The offline break-glass envelope does not exist
-`docs/BACKUP-RESTORE.md:91-111`
+`docs/BREAK-GLASS.md` (template added 08-11), `docs/BACKUP-RESTORE.md:91-111`
+
+**Plan agreed 08-11: assemble it, store it offline, then test a restore using only
+its contents.** That ordering matters — a drill run on a host that still has the
+repos, the config and the credentials proves almost nothing, and it is the drill
+that tells you whether the envelope is actually complete.
+
+`docs/BREAK-GLASS.md` holds the template, the currency log, and the drill procedure.
+It contains no secrets and must not. The filled copy goes offline.
 
 A printed or encrypted-USB copy, kept **off-site**, of the credentials needed to
 recover when everything is gone:
