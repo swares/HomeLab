@@ -122,7 +122,15 @@ restic -r "$DST" --password-file "$DSTPW" forget --prune \
 # ---- Prove something actually landed ----------------------------------------
 # The whole reason this file exists is that "the unit exited 0" was not evidence
 # of a backup. Assert a recent snapshot is present at the destination.
-count=$(restic -r "$DST" --password-file "$DSTPW" snapshots --json | grep -c '"short_id"' || true)
+# grep -o | wc -l, NOT grep -c. `restic snapshots --json` emits the entire array
+# on a single line, and grep -c counts matching LINES — so the first real run on
+# 2026-08-11 reported "1 snapshots at destination" when retention had just kept 32.
+# The assertion still held (an empty array contains no "short_id", so zero is still
+# caught), but the number was meaningless. Same family as the grep -q/pipefail bug
+# in the immich dump job: a grep flag that answers a subtly different question than
+# the one being asked.
+count=$(restic -r "$DST" --password-file "$DSTPW" snapshots --json \
+          | grep -o '"short_id"' | wc -l || true)
 if [ "${count:-0}" -lt 1 ]; then
   echo "FAIL: offsite repo holds no snapshots after copy." >&2
   exit 1
