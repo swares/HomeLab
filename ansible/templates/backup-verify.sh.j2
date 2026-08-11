@@ -25,6 +25,11 @@ COPY={{ restic_copy_repo | quote }}
 PW={{ restic_password_file | quote }}
 CLOUD_ENV={{ cloud_env_file | quote }}
 ETCD_DIR={{ etcd_snapshot_dest | quote }}
+# Offsite (R2 homelab-nas). Written by backup-offsite.yml, which is a separate
+# playbook because it needs a Vault token; these paths are duplicated in
+# backup.yml's vars so this template can be rendered without it.
+OFFSITE_ENV={{ offsite_env_file | quote }}
+OFFSITE_PW={{ offsite_password_file | quote }}
 
 failures=0
 fail() { echo "FAIL: $*" >&2; failures=$((failures + 1)); }
@@ -124,6 +129,68 @@ else
 
   cloud_count=$(restic snapshots --tag cloud --json 2>/dev/null | grep -o '"time":' | wc -l)
   echo "info: R2 holds ${cloud_count} cloud snapshots"
+fi
+
+# ---- 5. Offsite R2 (homelab-nas): integrity and recency --------------------
+# Added 2026-08-11, once the ~204 GiB initial seed completed. Until then this was
+# the ONLY repo with no weekly check — and it is the one tier that exists
+# specifically to survive losing the H4. Checking it against a half-populated repo
+# would only have produced noise, which is why it waited for the seed.
+#
+# Every restic call names its repo and password file explicitly. Section 4 exports
+# RESTIC_REPOSITORY and RESTIC_PASSWORD_FILE for the *cloud* repo and they are
+# still set here; the flags take precedence over the environment, so this cannot
+# silently check the wrong repository. Do not "simplify" this by relying on the
+# env — that is exactly how you end up verifying one repo twice and another never.
+if [ ! -r "$OFFSITE_ENV" ]; then
+  echo "warn: $OFFSITE_ENV not present — skipping offsite checks (run backup-offsite.yml?)" >&2
+elif [ ! -r "$OFFSITE_PW" ]; then
+  echo "warn: $OFFSITE_PW not present — skipping offsite checks" >&2
+else
+  # shellcheck disable=SC1090
+  set -a; . "$OFFSITE_ENV"; set +a
+  OFFSITE_REPO="${RESTIC_REPOSITORY_OFFSITE:-}"
+
+  if [ -z "$OFFSITE_REPO" ]; then
+    fail "RESTIC_REPOSITORY_OFFSITE is empty in $OFFSITE_ENV — offsite is not configured"
+  else
+    # Structural check only, no --read-data: re-reading 204 GiB from R2 weekly
+    # would cost hours and (on a metered link) real money. This verifies indexes
+    # and pack metadata, which is what catches a corrupt or truncated upload.
+    if restic -r "$OFFSITE_REPO" --password-file "$OFFSITE_PW" check \
+         > /tmp/verify-offsite.$$ 2>&1; then
+      pass "restic check clean — offsite R2"
+    else
+      fail "restic check FAILED — offsite R2"
+      sed 's/^/        /' /tmp/verify-offsite.$$ >&2
+    fi
+    rm -f /tmp/verify-offsite.$$
+
+    # Recency. backup-offsite copies daily at 02:30; this runs weekly on Sunday,
+    # so anything older than the shared threshold means the copy has stopped.
+    # Same tag/parse approach as section 2 — see the note there about 0.12.1.
+    offsite_epoch=$(restic -r "$OFFSITE_REPO" --password-file "$OFFSITE_PW" \
+        snapshots --tag nas --json 2>/dev/null \
+      | tr ',' '\n' | grep -o '"time":"[^"]*"' | tail -1 | cut -d'"' -f4 \
+      | xargs -r -I{} date -d {} +%s 2>/dev/null)
+    if [ -z "${offsite_epoch:-}" ]; then
+      fail "could not determine newest 'nas' snapshot in offsite R2"
+    else
+      offsite_age=$(( $(date +%s) - offsite_epoch ))
+      if [ "$offsite_age" -gt {{ verify_max_snapshot_age_seconds }} ]; then
+        fail "newest 'nas' snapshot offsite is ${offsite_age}s old (max {{ verify_max_snapshot_age_seconds }}s)"
+      else
+        pass "newest 'nas' snapshot offsite is ${offsite_age}s old"
+      fi
+    fi
+
+    # grep -o | wc -l, not grep -c: `snapshots --json` is one line, so grep -c
+    # would report 1 for any non-empty repo. Cost the offsite job a meaningless
+    # "1 snapshots at destination" on 2026-08-11.
+    offsite_count=$(restic -r "$OFFSITE_REPO" --password-file "$OFFSITE_PW" \
+        snapshots --json 2>/dev/null | grep -o '"short_id"' | wc -l)
+    echo "info: offsite R2 holds ${offsite_count} snapshots"
+  fi
 fi
 
 # ---- Verdict ----------------------------------------------------------------
