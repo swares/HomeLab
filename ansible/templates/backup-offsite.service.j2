@@ -16,10 +16,24 @@ EnvironmentFile=-{{ offsite_env_file }}
 # not just local reads.
 CacheDirectory=restic
 Environment=RESTIC_CACHE_DIR=/var/cache/restic
-# The first run uploads the entire repository (~203 GiB as of 2026-08) and can
-# take days on a home uplink. Seed it manually under tmux before enabling the
-# timer; see the header of backup-offsite.sh.
-TimeoutStartSec=infinity
+# Bounded to 4h as of 2026-08-11. It was `infinity` for the initial ~204 GiB seed,
+# which took three days — and `restic copy` holds a lock on the SOURCE repo for its
+# whole duration, so backup-nas could not acquire its own lock and FAILED OUTRIGHT
+# on 08, 09, 10 and 11 Aug. Four nights with no backup of /srv/nas, the VMs or the
+# immich library to any repository.
+#
+# A nightly incremental takes ~10 seconds. Four hours is enormous headroom for even
+# a very large day, and it ends at 06:30 — clear of the next backup-nas at 01:30.
+# The point is that an unbounded copy can starve the nightly job silently for days,
+# whereas a bounded one fails, and a failed unit skips hc-ping and trips
+# LabBackupUnitFailed. Both fired for the outage above and reached the phone.
+#
+# IF YOU EVER RE-SEED: raise this deliberately AND stop backup-nas.timer for the
+# duration, then re-enable it. Do not source the copy from /mnt/cold-sec/restic to
+# dodge the lock — it was initialised without --copy-chunker-params and carries a
+# different chunker polynomial (2d710aa7618093) from the primary and offsite
+# (30f6553d487a79), so copying from it would re-chunk everything and destroy dedup.
+TimeoutStartSec=4h
 # Deliberately NOT prefixed with '-'. A failed offsite copy must fail the unit so
 # hc-ping is skipped and healthchecks.io raises the alarm. The previous inline
 # ExecStart exited 0 when unconfigured and reported success for months.

@@ -45,6 +45,27 @@ item that makes every other backup improvement conditional.
 Do: one restic restore and one etcd restore into scratch, timed, recorded in the table.
 
 ### 1.2 The offline break-glass envelope does not exist
+`docs/BACKUP-RESTORE.md:91-111`
+
+A printed or encrypted-USB copy, kept **off-site**, of the credentials needed to
+recover when everything is gone:
+
+1. The restic password (`/etc/restic/password`) — **rotated 2026-08-07, so any
+   existing copy is now wrong**
+2. The R2 restic password (`/etc/restic/cloud-password`) and R2 API credentials —
+   note this now also guards the `homelab-nas` offsite repo, which reuses it
+3. The k3s server token
+4. The Vault unseal shares (3 of 5) — the doc still says "and root token"; as of
+   08-07 there deliberately isn't one, and the shares alone are the break-glass
+5. The Ansible vault password
+
+The loop it breaks, in the doc's own words: the runbook says to get the restic
+password from Vault; Vault runs on the RPi5; Vault's raft snapshots live on
+`/mnt/cold-8t`, on the H4. Lose the H4 and you need restic to recover and Vault to
+get restic's password. No automation can close that — something has to live outside
+both systems.
+
+
 `docs/BACKUP-RESTORE.md:95-111`, `docs/REVIEW-2026-07-24.md:120-122` (C8)
 
 > `**Break the loop with the offline envelope.** This is not yet solved in automation.`
@@ -168,14 +189,36 @@ The seed was designed with `TimeoutStartSec=infinity` because it was expected to
 slow. What was not considered is that a long operation against the primary starves
 the nightly job it exists to protect.
 
-**Fix for any future bulk operation: source it from `cold-sec`, not the primary.**
+**Sourcing bulk copies from `cold-sec` was proposed and then rejected — checked
+2026-08-11:**
 
-    restic -r /mnt/cold-sec/restic copy --repo2 <offsite>
+    /mnt/cold-8t/restic   chunker_polynomial 30f6553d487a79
+    R2 homelab-nas        chunker_polynomial 30f6553d487a79
+    /mnt/cold-sec/restic  chunker_polynomial 2d710aa7618093   <- different
 
-`cold-sec` holds the same data on deeper retention, nothing else contends for it, and
-the primary stays free for the 01:30 window. Applies equally to a re-seed,
-`check --read-data`, or a migration. Consider also a guard so `backup-offsite` cannot
-overlap `backup-nas` at all.
+`backup-nas-copy.sh:72-77` initialised the secondary *plainly*, without
+`--copy-chunker-params`, and says so. So copying `cold-sec → offsite` would re-chunk
+all 204 GiB: no dedup against what is already there, a full re-upload, and an offsite
+repo carrying two chunkings of the same data. Do not do it.
+
+**Fix applied instead: bound the runtime.** `TimeoutStartSec` was `infinity` for the
+seed; it is now `4h`. A nightly incremental takes ~10s, so that is enormous headroom,
+and it ends at 06:30 — clear of the next `backup-nas` at 01:30. An unbounded copy can
+starve the nightly job silently for days; a bounded one fails, and a failed unit skips
+`hc-ping` and trips `LabBackupUnitFailed`.
+
+**Procedure for any future re-seed:** raise the timeout deliberately *and* stop
+`backup-nas.timer` for the duration, then re-enable it. The nightly being paused
+knowingly is very different from it failing unnoticed.
+
+- [ ] **Optional, later: re-init `cold-sec` with `--copy-chunker-params`** to match
+      the primary. It would align all three repos, improve dedup between primary and
+      secondary (currently "imperfect" by that script's own admission), and make
+      `cold-sec` a legitimate source for future bulk work. Cost is rebuilding the
+      secondary from scratch — local disk-to-disk, so hours rather than days, but it
+      temporarily reduces you to one local copy plus offsite. **Do not attempt this
+      before a restore has actually been tested (§1.1).** Rebuilding redundancy you
+      have never verified you can restore from is the wrong order.
 
 **The alerting worked.** Both paths fired and reached the phone: healthchecks.io went
 down (hc-ping is `ExecStartPost`, skipped on failure, Period 25h / Grace 1h) and
