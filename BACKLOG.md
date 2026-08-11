@@ -150,6 +150,42 @@ hang into a ~30-second failure. Weigh that against changing a backup path that h
 reliably since the deadline was added — the deadline already converts an indefinite
 hang into a bounded, alerted failure, which was the actual damage.
 
+### 1.9 The offsite seed starved `backup-nas` for four nights — **fix pending**
+
+`backup-nas` failed outright on **08, 09, 10 and 11 Aug**. Not the copy step — the
+whole unit. Four consecutive nights with no new backup of `/srv/nas`,
+`/mnt/cold-8t/VMs` or `/mnt/cold-8t/immich` to *any* repo. Recovered by hand
+2026-08-11 03:46.
+
+    unable to create lock in backend: repository is already locked by PID 1693818
+
+PID 1693818 was the offsite seed. `restic -r <primary> copy --repo2 <offsite>` holds
+a lock on the **source** repo for the whole operation — three days — so the nightly
+`restic backup` could not acquire its own lock and the unit failed. Nightly
+incrementals take ~10s, so this only bites on multi-day work. It bit for four days.
+
+The seed was designed with `TimeoutStartSec=infinity` because it was expected to be
+slow. What was not considered is that a long operation against the primary starves
+the nightly job it exists to protect.
+
+**Fix for any future bulk operation: source it from `cold-sec`, not the primary.**
+
+    restic -r /mnt/cold-sec/restic copy --repo2 <offsite>
+
+`cold-sec` holds the same data on deeper retention, nothing else contends for it, and
+the primary stays free for the 01:30 window. Applies equally to a re-seed,
+`check --read-data`, or a migration. Consider also a guard so `backup-offsite` cannot
+overlap `backup-nas` at all.
+
+**The alerting worked.** Both paths fired and reached the phone: healthchecks.io went
+down (hc-ping is `ExecStartPost`, skipped on failure, Period 25h / Grace 1h) and
+`LabBackupUnitFailed` fired on `node_systemd_unit_state{state="failed"}`. Investigation
+was deliberately deferred until the seed completed rather than interrupting it.
+
+That is the first real-world validation of the 08-07 alerting work — a genuine
+multi-night backup outage, detected, delivered, and acted on. Worth recording against
+the three failures that preceded it, none of which anyone noticed for days.
+
 ### 1.4 `storage.yml` can `mkfs` a cold mirror by unstable device name
 `docs/REVIEW-2026-07-24.md:291` (H15)
 
