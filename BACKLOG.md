@@ -241,6 +241,45 @@ That is the first real-world validation of the 08-07 alerting work — a genuine
 multi-night backup outage, detected, delivered, and acted on. Worth recording against
 the three failures that preceded it, none of which anyone noticed for days.
 
+### 1.10 What the backups actually contained — and the window to reset cheaply
+
+Inspecting the newest `nas` snapshot on 2026-08-13, before the first restore drill:
+
+    Total File Count:   35
+    Total Size:         224.991 GiB
+
+    /mnt/cold-8t/VMs/YIKW.VHDX          224.7 GiB, unchanged since 2026-06-18
+    /mnt/cold-8t/immich/backups/*.sql.gz  ~250 MiB of nightly dumps
+    /mnt/cold-8t/immich/{library,upload,thumbs,profile,encoded-video}/.immich
+                                          13 bytes each — Immich init markers only
+    /srv/nas                              empty
+
+So the "204 GiB of irreplaceable lab data" that framed the offsite work was one
+static Windows disk image plus two weeks of database dumps **of an empty photo
+library**. `/srv/nas` and the Immich library are both empty by design — Immich was
+deliberately not populated until backups were proven stable, which is the right
+order and worth saying.
+
+**`/mnt/cold-8t/VMs` removed from `backup-nas` on 08-13.** The VHDX is recreatable
+from installation media and does not justify 224 GiB of offsite storage (~$3/month,
+and three days of seeding).
+
+- [ ] **Reset the offsite repo while it is cheap.** Existing snapshots still contain
+      the VHDX and retention keeps monthlies for 6 months, so it will linger — and be
+      billed — until roughly 2027-02. With the VHDX excluded, the real data is
+      ~250 MiB: emptying the `homelab-nas` bucket and letting the next run re-seed
+      takes minutes instead of days, and the script re-inits with
+      `--copy-chunker-params` automatically.
+
+      **The window is now.** Once the Immich library is migrated, a re-seed is
+      expensive again. Local repos can keep the VHDX — 224 GiB on an 8 TB mirror
+      costs nothing and CLAUDE.md forbids hand-pruning them anyway.
+
+- [ ] **Re-assess sizing once Immich and `/srv/nas` are populated.** `RUNBOOK.md:151`
+      plans ~1.5 TB of photo/video. At R2's $0.015/GB-month that is ~$24/month, which
+      is a different decision from $3 — and the point at which Backblaze B2 (~$0.006)
+      or a rotating external disk deserves a second look.
+
 ### 1.4 `storage.yml` can `mkfs` a cold mirror by unstable device name
 `docs/REVIEW-2026-07-24.md:291` (H15)
 
