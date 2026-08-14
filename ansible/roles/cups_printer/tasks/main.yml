@@ -38,6 +38,7 @@
   register: cups_queue_check
   changed_when: false
   failed_when: false
+  check_mode: false          # read-only; must still run under --check
 
 # -m everywhere builds its PPD by querying the device, so an unreachable printer
 # fails queue creation with a much less obvious error than this one.
@@ -46,6 +47,7 @@
   register: cups_ipp_probe
   changed_when: false
   failed_when: false
+  check_mode: false          # read-only; must still run under --check
   when: cups_queue_check.rc != 0
 
 - name: Fail early if the printer is unreachable over IPP
@@ -98,12 +100,18 @@
   ansible.builtin.command: "lpstat -v {{ cups_printer_name }}"
   register: cups_verify
   changed_when: false
+  failed_when: false
+  check_mode: false          # read-only; must still run under --check
 
 # Catches both the client.conf regression and an accidental socket:// edit.
+# Skipped under --check when the queue does not exist yet: creation was itself
+# skipped, so there is nothing to read back and asserting on empty stdout would
+# report a failure that only exists in check mode.
 - name: Assert the queue points at the expected IPP device
   ansible.builtin.assert:
     that: cups_printer_uri in cups_verify.stdout
     fail_msg: >-
       {{ cups_printer_name }} resolves to an unexpected device:
-      {{ cups_verify.stdout }}
+      {{ cups_verify.stdout | default('<no queue>') }}
     success_msg: "{{ cups_verify.stdout }}"
+  when: not ansible_check_mode or cups_queue_check.rc == 0
