@@ -17,6 +17,11 @@ cups_printer_info: "Brother HL-L5100DN"
 cups_printer_location: "Lab"
 cups_printer_default: true
 
+# Where the option-set marker lives. Not under /var/lib/cups — that path is a
+# Red Hat convention and does not exist on Ubuntu, where CUPS uses /var/spool
+# and /var/cache. Keeping our own state out of CUPS' directories anyway.
+cups_printer_state_dir: /var/lib/ansible
+
 # Applied via `lpadmin -o`. Re-applied only when the queue is created or when
 # this dict changes — see the state marker in tasks/main.yml.
 cups_printer_options:

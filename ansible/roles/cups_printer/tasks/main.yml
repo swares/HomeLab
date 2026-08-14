@@ -72,10 +72,18 @@
   when: cups_queue_check.rc != 0
   register: cups_queue_created
 
+- name: Ensure the role state directory exists
+  ansible.builtin.file:
+    path: "{{ cups_printer_state_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
 - name: Record the desired option set
   ansible.builtin.copy:
     content: "{{ cups_printer_options | dictsort | to_nice_yaml }}"
-    dest: "/var/lib/cups/.ansible-{{ cups_printer_name }}-options.yml"
+    dest: "{{ cups_printer_state_dir }}/cups-{{ cups_printer_name }}-options.yml"
     owner: root
     group: root
     mode: "0644"
