@@ -1,0 +1,20 @@
+---
+# CUPS queue for the Brother HL-L5100DN (192.168.1.34) on h4-core.
+#
+# Run: ansible-playbook -i inventory/hosts.yml playbooks/printer.yml \
+#        --vault-password-file .vault_pass --check
+#      ansible-playbook -i inventory/hosts.yml playbooks/printer.yml \
+#        --vault-password-file .vault_pass
+#
+# Not imported by site.yml — this is a standalone convenience, not part of the
+# cluster bring-up. Touches only CUPS; smbd/nfs and the backup timers are
+# untouched.
+#
+# Verify afterwards with:  lpstat -v && echo test | lp
+
+- name: Configure the Brother HL-L5100DN print queue
+  hosts: h4-core
+  become: true
+
+  roles:
+    - cups_printer
