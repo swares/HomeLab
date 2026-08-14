@@ -1,0 +1,37 @@
+---
+# Brother HL-L5100DN on the lab LAN, driven from h4-core via IPP Everywhere.
+#
+# The printer advertises AirPrint 1.5 / Mopria 1.2 and its
+# document-format-supported is ONLY application/octet-stream, image/urf and
+# image/pwg-raster. The "everywhere" driver renders PWG Raster/URF, which the
+# device accepts over IPP and NOT over raw port 9100 (that port speaks
+# PJL/PCL/PCLXL). Pointing this queue at socket://…:9100 while keeping
+# -m everywhere makes the printer interpret the raster stream as text and emit
+# a ream of garbage. Change driver and transport together or not at all.
+
+cups_printer_name: Brother_HL5100DN
+cups_printer_host: 192.168.1.34
+cups_printer_uri: "ipp://{{ cups_printer_host }}/ipp/print"
+cups_printer_model: everywhere
+cups_printer_info: "Brother HL-L5100DN"
+cups_printer_location: "Lab"
+cups_printer_default: true
+
+# Applied via `lpadmin -o`. Re-applied only when the queue is created or when
+# this dict changes — see the state marker in tasks/main.yml.
+cups_printer_options:
+  sides-default: two-sided-long-edge
+  print-color-mode-default: monochrome
+  media-default: na_letter_8.5x11in
+  printer-error-policy: retry-job
+
+cups_packages:
+  - cups
+  - cups-client
+  - cups-daemon
+  - cups-ipp-utils          # provides ipptool, used by the reachability probe
+
+# cups-browsed burns CPU spinning on discovery (27 min in 22 h on h4-core) and
+# auto-creates duplicate queues that shadow this static one. Masked rather than
+# disabled so a package upgrade cannot quietly re-enable it.
+cups_browsed_masked: true

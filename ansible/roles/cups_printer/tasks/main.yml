@@ -1,0 +1,109 @@
+---
+- name: Install CUPS packages
+  ansible.builtin.apt:
+    name: "{{ cups_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+# The load-bearing task. A ServerName here redirects every lpadmin/lpstat/lp to
+# that host instead of the local scheduler. On h4-core this file contained
+# "ServerName 192.168.1.34:631", so the CLI was talking to the printer itself:
+# lpstat returned server-error-operation-not-supported (the Brother has no
+# CUPS-Get-Printers), lpadmin hung, and the printer helpfully printed the raw
+# HTTP POST as text. cupsd was healthy the whole time. Keep this file absent.
+- name: Remove /etc/cups/client.conf so the CLI uses the local scheduler
+  ansible.builtin.file:
+    path: /etc/cups/client.conf
+    state: absent
+  notify: restart cups
+
+- name: Ensure cups is enabled and running
+  ansible.builtin.systemd:
+    name: cups
+    enabled: true
+    state: started
+
+- name: Mask cups-browsed
+  ansible.builtin.systemd:
+    name: cups-browsed
+    enabled: false
+    state: stopped
+    masked: true
+  when: cups_browsed_masked | bool
+  failed_when: false
+
+- name: Check whether the print queue already exists
+  ansible.builtin.command: "lpstat -p {{ cups_printer_name }}"
+  register: cups_queue_check
+  changed_when: false
+  failed_when: false
+
+# -m everywhere builds its PPD by querying the device, so an unreachable printer
+# fails queue creation with a much less obvious error than this one.
+- name: Probe the printer over IPP before creating the queue
+  ansible.builtin.command: "ipptool -t {{ cups_printer_uri }} get-printer-attributes.test"
+  register: cups_ipp_probe
+  changed_when: false
+  failed_when: false
+  when: cups_queue_check.rc != 0
+
+- name: Fail early if the printer is unreachable over IPP
+  ansible.builtin.fail:
+    msg: >-
+      {{ cups_printer_host }} did not answer IPP at {{ cups_printer_uri }}.
+      The 'everywhere' driver generates its PPD from the device, so queue
+      creation cannot proceed. Check the printer is powered on and on the LAN.
+  when:
+    - cups_queue_check.rc != 0
+    - cups_ipp_probe.rc != 0
+
+# lpadmin refuses -m everywhere against a socket:// URI ("IPP Everywhere driver
+# requires an IPP connection"), so the queue must be created on ipp://.
+- name: Create the print queue
+  ansible.builtin.command: >-
+    lpadmin -p {{ cups_printer_name }} -E
+    -v {{ cups_printer_uri }}
+    -m {{ cups_printer_model }}
+    -D {{ cups_printer_info | quote }}
+    -L {{ cups_printer_location | quote }}
+  when: cups_queue_check.rc != 0
+  register: cups_queue_created
+
+- name: Record the desired option set
+  ansible.builtin.copy:
+    content: "{{ cups_printer_options | dictsort | to_nice_yaml }}"
+    dest: "/var/lib/cups/.ansible-{{ cups_printer_name }}-options.yml"
+    owner: root
+    group: root
+    mode: "0644"
+  register: cups_options_marker
+
+- name: Apply printer options
+  ansible.builtin.command: >-
+    lpadmin -p {{ cups_printer_name }}
+    {% for k, v in cups_printer_options | dictsort %}-o {{ k }}={{ v | quote }} {% endfor %}
+  when: cups_options_marker is changed or cups_queue_created is changed
+
+- name: Set as the system default destination
+  ansible.builtin.command: "lpadmin -d {{ cups_printer_name }}"
+  when: cups_printer_default | bool
+  changed_when: false
+
+- name: Ensure the queue is enabled and accepting jobs
+  ansible.builtin.command: "cupsenable {{ cups_printer_name }}"
+  changed_when: false
+
+- name: Read back the queue's device URI
+  ansible.builtin.command: "lpstat -v {{ cups_printer_name }}"
+  register: cups_verify
+  changed_when: false
+
+# Catches both the client.conf regression and an accidental socket:// edit.
+- name: Assert the queue points at the expected IPP device
+  ansible.builtin.assert:
+    that: cups_printer_uri in cups_verify.stdout
+    fail_msg: >-
+      {{ cups_printer_name }} resolves to an unexpected device:
+      {{ cups_verify.stdout }}
+    success_msg: "{{ cups_verify.stdout }}"
