@@ -17,7 +17,19 @@ Environment=RESTIC_REPOSITORY={{ restic_repo }}
 Environment=RESTIC_PASSWORD_FILE={{ restic_password_file }}
 # Initialize the primary repo once if needed, then back up.
 ExecStartPre=-/usr/bin/restic init
-ExecStart=/usr/bin/restic backup {{ nas_mount }} {{ cold_primary_mount }}/VMs \
+# {{ cold_primary_mount }}/VMs REMOVED 2026-08-13. It held exactly one file —
+# YIKW.VHDX, 224.7 GiB, the HTPC's Windows disk image, unchanged since 2026-06-18 —
+# and that is 99.9% of everything this job was backing up. Total File Count for the
+# whole snapshot was 35.
+#
+# It is recreatable from installation media, so it does not warrant 224 GiB of
+# offsite storage (~$3/month of the R2 bill) or the three days the initial seed
+# spent uploading it. /srv/nas and the immich library are both still empty pending
+# migration, which is why the repository looked large and was almost entirely inert.
+#
+# Restore it by hand from a snapshot older than this change if it is ever wanted;
+# retention keeps monthlies for 6 months.
+ExecStart=/usr/bin/restic backup {{ nas_mount }} \
   {{ cold_primary_mount }}/immich \
   --tag nas --host {{ inventory_hostname }}
 # Retention is policy-driven and lives HERE only — never run forget/prune by hand.
