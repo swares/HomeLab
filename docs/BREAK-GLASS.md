@@ -99,11 +99,15 @@ A stale envelope is worse than none, because you will trust it. Anything that
 rotates a credential in the table above **must** be followed by updating the
 offline copy in the same sitting.
 
+Checkboxes are `[  ]` rather than ☐ deliberately — U+2610 is absent from Latin
+Modern, so xelatex drops it and the column you are meant to tick prints blank.
+Keep this table to ASCII.
+
 | Date | What changed | Envelope updated? |
 |------|--------------|-------------------|
-| 2026-08-07 | restic repository password rotated (#1) | ☐ |
-| 2026-08-07 | Vault root token revoked — item 5 no longer includes one | ☐ |
-| 2026-08-07 | offsite repo `homelab-nas` created, reusing the R2 restic password (#2) | ☐ |
+| 2026-08-07 | restic repository password rotated (#1) | `[  ]` |
+| 2026-08-07 | Vault root token revoked — item 5 no longer includes one | `[  ]` |
+| 2026-08-07 | offsite repo `homelab-nas` created, reusing the R2 restic password (#2) | `[  ]` |
 
 ## The drill
 
