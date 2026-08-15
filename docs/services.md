@@ -11,7 +11,7 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | Service | Status | Placement | Notes |
 |---------|:------:|-----------|-------|
 | DNS (Pi-hole / dnsmasq) | ✓ | octopi RPi 3B #2 (.148, wired) primary · RPi 4B (.116) secondary | Pi-hole on dnsmasq; `lab.home.arpa` zone via custom records; ad-block for household clients |
-| CoreDNS custom zone | ● | k3s kube-system | `coredns-custom` ConfigMap; wildcard `*.apps.lab.home.arpa → 192.168.1.160` for in-cluster pod resolution |
+| CoreDNS custom zone | ● | k3s kube-system | `coredns-custom` ConfigMap; wildcard `*.apps.lab.home.arpa → 192.168.1.201` for in-cluster pod resolution |
 | lldap (directory) | ✓ | k3s · lldap namespace | lightweight LDAP; web UI `lldap.apps.lab.home.arpa`; LDAP :3890; `dc=lab,dc=home,dc=arpa`; SQLite on local-path PVC; ldap-1 VM decommissioned |
 | Authelia (OIDC / SSO) | ✓ | k3s · authelia namespace | OIDC provider backed by lldap; gates Immich SSO; `authelia.apps.lab.home.arpa` |
 | Vault (secrets / PKI) | ✓ | RPi 5 (.128) | auto-unseal via `vault-unseal.service` on H4; `secret/lab/*` for cluster secrets |

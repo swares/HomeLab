@@ -23,7 +23,7 @@ Current as of 2026-07-18. Detailed service catalog in [services.md](services.md)
 ## Networking & DNS
 
 - **Pi-hole** — primary DNS + ad-blocking on octopi (192.168.1.148); secondary on RPi 4B (192.168.1.116); dnsmasq fallback on opi-zero2w-1
-- **CoreDNS custom zone** — wildcard `*.apps.lab.home.arpa → 192.168.1.160` for in-cluster resolution
+- **CoreDNS custom zone** — wildcard `*.apps.lab.home.arpa → 192.168.1.201` for in-cluster resolution
 - **Mosquitto MQTT** — opi-zero2w-2 primary, opi-zero2w-4 HA bridge
 
 ## Observability
