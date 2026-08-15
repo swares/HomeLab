@@ -90,21 +90,37 @@ Ansible vault password.
 Note the doc's list still says "Vault root token" — as of 08-07 there deliberately
 isn't one. See §6.3.
 
-### 1.3 Finish the offsite tier
-`TODO-2026-08-03.md:274`, `ansible/playbooks/backup-offsite.yml:56`
+### 1.3 ~~Finish the offsite tier~~ — **DONE, verified running 08-15**
+`TODO-2026-08-03.md:274`, `ansible/playbooks/backup-offsite.yml:59`
 
 **SEED COMPLETE 2026-08-11 02:19 UTC.** ~3.1 days wall clock, 44m35s CPU, ~204 GiB.
 Retention applied on the first run, keeping 32 snapshots across five groups
 (2 nas-old-paths + 11 nas + 8 lldap users.db + 7 lldap /tmp + 4 lldap /dump).
 `hc-ping: backup-offsite success OK`.
 
-Remaining:
-
-- [ ] **Enable `backup-offsite.timer`** — `-e offsite_timer_enabled=true`. Do this
-      promptly: the success ping **un-paused** the healthchecks.io check, so it is
-      now counting down against Period 25h / Grace 3h with no scheduled run to
-      satisfy it. It will false-alarm ~28h after 02:19 UTC.
+- [x] **Enable `backup-offsite.timer`** — enabled and active. Confirmed by
+      `systemctl` on 08-15, not by reading this file.
 - [x] **Add `homelab-nas` to `backup-verify.sh`** — done 08-11 (§1.3b closed).
+
+**Steady state, measured 2026-08-15.** The nightly incremental is cheap and the tier is
+behaving:
+
+    NEXT   Sun 2026-08-16 02:30 UTC        LAST  Sat 2026-08-15 02:30:11 UTC
+    ran 02:30:11 → 02:31:24                       73 s wall, 9.122 s CPU
+    "offsite copy + retention complete — 37 snapshots at destination"
+    "hc-ping: backup-offsite success OK"
+
+73 seconds against 3.1 days for the seed, and 37 snapshots against the 32 kept at seed
+time — so retention is running and the count is now meaningful (see the `grep -c` bug
+below, fixed).
+
+**Note on this entry's own accuracy.** The checkbox above sat unticked for four days
+while the timer was enabled and running nightly. On 2026-08-15 that stale checkbox was
+read as evidence the timer was off, and the warning below it — that healthchecks.io
+would false-alarm ~28h after the seed — was repeated as though it had happened. It had
+not: the check has been satisfied every night since 08-11. Nothing was changed, because
+`systemctl is-enabled` was run before the playbook. **Check the unit, not this file.**
+The same failure mode as §6 and §4.11, on the page that catalogues them.
 
 **Bug found by the first real run, fixed:** the completion line read
 `offsite copy + retention complete — 1 snapshots at destination` while retention had
@@ -778,7 +794,12 @@ this is a cluster change and DNS is the lab's most load-bearing dependency. Roll
 |---|---|---|
 | Renew `token-admin` (720h TTL) | **2026-09-06** | `TODO-2026-08-03.md:248` |
 | ESO → Kubernetes auth (token expires) | **~2026-09-08** | `TODO-2026-08-03.md:261` |
-| Enable `backup-offsite.timer` after seed | Sunday 08-09 | `TODO-2026-08-03.md:274` |
+| ~~Enable `backup-offsite.timer` after seed~~ | ~~Sunday 08-09~~ | done — §1.3 |
+
+Both remaining items expire in early September and fail **silently**: `token-admin` stops
+authenticating, and ESO stops syncing secrets with nothing visibly broken until something
+needs a refresh. Neither has an alert. Do them at a time of your choosing rather than
+theirs.
 
 ---
 
