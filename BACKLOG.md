@@ -33,9 +33,40 @@ copy reported `tools/` as absent when `tools/sdcard/` plainly exists on the H4. 
 ## 1. Data loss — the things that end the lab
 
 ### 1.1 No restore has ever been performed
-*(Drill procedure now written up in `docs/BREAK-GLASS.md`. Start with Drill 1 — a
-bounded, read-only restore from the offsite R2 repo onto a **non-H4** host, using
-only the envelope. R2 charges no egress, so it costs time and nothing else.)*
+*(Drill procedure in `docs/BREAK-GLASS.md`, **planned in full and corrected 2026-08-15**.
+Bounded, read-only, from the offsite R2 repo onto `n150-2`, using only the envelope.
+R2 charges no egress, so it costs time and nothing else.)*
+
+**The procedure had a defect that would have produced a false pass.** It restored
+`--include /srv/nas/<a known file>`, and `/srv/nas` is empty — §1.10 established that on
+08-13. The drill would have restored zero bytes, exited 0, and been written into the
+results table as a success. Precisely the shape of the `backup-offsite` bug: a check
+that cannot fail is not a check. The procedure now targets
+`/mnt/cold-8t/immich/backups/*.sql.gz`, the only real content in the repo, and the first
+pass criterion asserts a non-zero file size.
+
+Planning decisions recorded so the drill is repeatable:
+
+- **Host: a throwaway VM on n150-2**, via the existing `create-vm.yml`
+  (`-e vm_name=drill-1 vm_ram_mb=2048 vm_vcpus=2 vm_disk_gb=20`), destroyed afterwards.
+  Clean room, repeatable, and — the real reason — credential hygiene: the envelope's R2
+  keys are read-write and reach the only offsite copy, and on a permanent node they
+  survive in shell history and environment alongside a plaintext Postgres dump in `/tmp`.
+  Destroying the VM removes all of it. Not n150-1: monitoring stack. Not the RPi5: it is
+  the Vault half of the loop the envelope exists to break.
+- **Optional but valuable: run it on the `sandbox-nat` network** from
+  `sandbox-vm-update.yml` — "internet via NAT, invisible to LAN". The VM reaches R2 but
+  cannot reach the H4 or Vault, so "use only the envelope" becomes a network property
+  rather than a discipline. `create-vm.yml` defaults to `br0`, so this needs an override,
+  and the network's persistence outside that playbook is unverified — check
+  `virsh net-list --all` first.
+- **Scope: envelope items 2 and 3 only.** Items 1, 4, 5 and 6 are Drill 2. A Drill 1 pass
+  must not be recorded as "envelope verified".
+- **Window: avoid 02:25–02:40 UTC**, when `backup-offsite.timer` fires. §1.9 is the lesson.
+- **Forbidden from the drill host:** `forget`, `prune`, `init`, `migrate`, `copy`,
+  `unlock`. The envelope's R2 credentials are read-write and reach the only offsite copy.
+- **§1.2 first.** Three currency rows are unticked and the restic password rotated 08-07.
+  A drill using credentials read off the H4 tests nothing.
 
 `docs/BACKUP-RESTORE.md:354-372`, `docs/REVIEW-2026-07-24.md:124-144` (C2)
 
