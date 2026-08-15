@@ -26,7 +26,7 @@ file inside the repo.
 | 2 | R2 restic password | `/etc/restic/cloud-password` on the H4 | **both** R2 repos are undecryptable — `homelab-backup` and `homelab-nas` share this password |
 | 3 | R2 account ID, access key ID, secret access key | `secret/lab/cloudflare-r2` in Vault, or `/etc/restic/cloud.env` | you cannot reach the R2 buckets at all |
 | 4 | k3s server token | `/var/lib/rancher/k3s/server/node-token` on the H4 | etcd snapshots cannot be restored onto new hardware — k3s derives the datastore key from it |
-| 5 | Vault unseal shares (any 3 of 5 — threshold is 3) | `/etc/vault.d/unseal-keys` on the **RPi5** (`192.168.1.128`), `root:root 0400`, one key per line. `vault.yml:81` provisions **3** keys there, not 5 | Vault stays sealed; every ExternalSecret stays empty |
+| 5 | Vault unseal shares — **print all five**; threshold is 3 | `/etc/vault.d/unseal-keys` on the **RPi5** (`192.168.1.128`), `root:root 0400`, one key per line | Vault stays sealed; every ExternalSecret stays empty |
 | 6 | Ansible vault password | `ansible/.vault_pass` | encrypted group_vars are unreadable, so no playbook that touches them runs |
 
 **Not a secret, but write it down anyway** — you will not have the repo:
@@ -40,20 +40,29 @@ file inside the repo.
 
 ### A note on item 5
 
-`vault-unseal.service` on the RPi5 reads three shares from
-`/etc/vault.d/unseal-keys` at boot, which is why Vault comes back unsealed after a
-restart without anyone typing anything. Convenient, and it means:
+`vault-unseal.service` on the RPi5 reads shares from `/etc/vault.d/unseal-keys` at boot,
+which is why Vault comes back unsealed after a restart without anyone typing anything.
 
-- **Root on the RPi5 is equivalent to full Vault access.** The keys sit beside the
-  data they unseal. `docs/SECURITY.md:25` describes these shares as "Offline,
-  physically secure" — that is not true of this copy and should be corrected.
-- **Establish where shares 4 and 5 are before filling this in.** If only the three
-  on the RPi5 exist, then the envelope is not a convenience copy — it is the only
-  redundant copy of a credential that cannot be regenerated. Losing both leaves
-  Vault permanently sealed.
-- **Check no stray copies exist elsewhere.** Three shares at rest on a KVM
-  hypervisor or a workstation widens the blast radius well beyond the design:
+- **Root on the RPi5 is equivalent to full Vault access.** The keys sit beside the data
+  they unseal. This is a deliberate trade, not an oversight: under Shamir, auto-unseal and
+  "no single location can unseal" are mutually exclusive, and auto-unseal was chosen
+  because Vault gates every ExternalSecret. `docs/SECURITY.md` states this plainly now —
+  it previously described the shares as "Offline, physically secure", which was false.
+- **The envelope is the off-site redundant copy**, not a second line of defence against
+  RPi5 compromise. Losing both the RPi5 and this envelope leaves Vault permanently sealed.
+- **Print all five shares.** Three is the threshold, so five is no less secure — but a
+  smudged character at 2am costs nothing if you have spares.
+- **Rekey rather than hunt for stray copies.** `vault operator rekey` invalidates every
+  existing share at once, which is stronger than deleting a copy you cannot prove is
+  gone — see the flash-storage note under *Residual risk* below, which applies equally to
+  a laptop. Procedure in `docs/OPS.md`, "Rekey Vault unseal shares". Rekeying also settles
+  the old question of where shares 4 and 5 were: afterwards, the only shares that exist
+  are the ones you just wrote down.
+- **Do not add comments or labels to the unseal file.** `vault-unseal.sh` skips blank
+  lines only; any other non-key line is passed to `vault operator unseal`, fails, and
+  aborts the unit under `set -euo pipefail` — Vault stays sealed on boot. Keys only.
 
+      # if you still want to check for strays before rekeying:
       sudo find /etc /root /home -name 'unseal*' 2>/dev/null
 
 ## After printing — cleanup
