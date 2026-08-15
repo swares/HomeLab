@@ -30,6 +30,21 @@ cups_printer_options:
   media-default: na_letter_8.5x11in
   printer-error-policy: retry-job
 
+# Job retention. CUPS defaults to PreserveJobHistory Yes and PreserveJobFiles No,
+# which is wrong for this queue: it exists to print the break-glass envelope, so a
+# retained job file is every credential in the lab sitting in /var/spool/cups.
+#
+# On 2026-08-15, twenty rendered copies were found there, the oldest fifteen hours
+# old. The cause was the client.conf ServerName bug documented in tasks/main.yml —
+# jobs never completed, so PreserveJobFiles No never got the chance to remove them.
+# That is fixed, but "the data is only there while a job is stuck" is a weak
+# guarantee for this particular document. Set both explicitly.
+#
+# PreserveJobHistory keeps metadata (who, what, when), not content. Off here
+# because job *titles* leak what was printed, and this queue prints one thing.
+cups_preserve_job_files: 'No'
+cups_preserve_job_history: 'No'
+
 cups_packages:
   - cups
   - cups-client

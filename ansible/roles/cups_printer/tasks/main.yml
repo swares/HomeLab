@@ -18,6 +18,24 @@
     state: absent
   notify: restart cups
 
+# See the note in defaults/main.yml. This queue prints the break-glass envelope,
+# so a retained job file is every credential in the lab sitting readable by
+# root:lp in /var/spool/cups. lineinfile rather than a full template so the rest
+# of cupsd.conf stays as the package ships it.
+- name: Set job retention in cupsd.conf
+  ansible.builtin.lineinfile:
+    path: /etc/cups/cupsd.conf
+    regexp: "^#?\\s*{{ item.key }}\\s"
+    line: "{{ item.key }} {{ item.value }}"
+    insertafter: EOF
+    state: present
+  loop:
+    - { key: PreserveJobFiles,   value: "{{ cups_preserve_job_files }}" }
+    - { key: PreserveJobHistory, value: "{{ cups_preserve_job_history }}" }
+  loop_control:
+    label: "{{ item.key }}"
+  notify: restart cups
+
 - name: Ensure cups is enabled and running
   ansible.builtin.systemd:
     name: cups
