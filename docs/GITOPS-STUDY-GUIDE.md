@@ -554,8 +554,9 @@ the workload:
 1. DNS  →  2. Networking  →  3. ArgoCD sync  →  4. Pod state  →  5. App logs
 ```
 
-DNS is load-bearing in this cluster. `api.lab.home.arpa` and `*.apps.lab.home.arpa`
-must resolve to `192.168.1.160`. If an Ingress stops working, check DNS first.
+DNS is load-bearing in this cluster. `api.lab.home.arpa` must resolve to `192.168.1.200`
+(kube-vip control-plane VIP) and `*.apps.lab.home.arpa` to `192.168.1.201` (kube-vip
+service VIP for Traefik). If an Ingress stops working, check DNS first.
 
 ---
 
@@ -621,7 +622,7 @@ Common causes and fixes:
 ```bash
 # 1. DNS first
 nslookup <hostname>.apps.lab.home.arpa
-# Should return 192.168.1.160 (odroid-nas / Traefik)
+# Should return 192.168.1.201 (kube-vip service VIP for Traefik)
 
 # 2. Check Ingress exists and has the right host
 kubectl get ingress -n <namespace>

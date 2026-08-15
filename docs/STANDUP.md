@@ -33,7 +33,7 @@ to build on** (don't build the NAS on a faulted disk link).
      ```
 3. 🔧 **Network & addressing.** Give every infra node a **static / DHCP-reserved IP** (Pi-hole
    client-scoping and the k8s API both need stable addresses). Confirm the gateway
-   (`lab_gateway`, flagged *confirm* in the inventory) and the ingress VIP (`192.168.1.160`).
+   (`lab_gateway`, flagged *confirm* in the inventory) and the ingress VIP (`192.168.1.201`).
 4. 🔧 **Credentials.** Replace the map's shared password with **SSH keys** (`ansible_user`), and
    generate real secrets — Vault init/unseal keys, the Pi-hole web hash, the
    restic repo password. Keep them out of Git (Ansible Vault now; HashiCorp Vault once it's up).
@@ -69,7 +69,7 @@ Goal: name resolution, storage, identity, and secrets — the things everything 
    on top for the UI/blocking if you want it (the playbook pre-seeds `pihole.toml`). Verify:
    ```bash
    dig @192.168.1.148 h4-core.lab.home.arpa +short          # -> 192.168.1.160
-   dig @192.168.1.148 anything.apps.lab.home.arpa +short    # -> 192.168.1.160 (Traefik ingress VIP)
+   dig @192.168.1.148 anything.apps.lab.home.arpa +short    # -> 192.168.1.201 (kube-vip service VIP for Traefik)
    ```
    *Depends on:* Phase 1. *Unblocks:* the cluster API + all `*.apps` ingress names.
 2. 🟢 **Storage on the H4** (only once the 8 TB CRC link is proven, Phase 0):

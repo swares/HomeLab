@@ -8,7 +8,11 @@ This document captures every issue encountered wiring MinIO Console to Authelia 
 - **Client:** MinIO Console (native OIDC via `MINIO_IDENTITY_OPENID_*` env vars)
 - **Ingress:** Traefik (k3s default), TLS terminated with lab CA (ECDSA P-256)
 - **Session storage:** fasthttp/session → Postgres (no Redis)
-- **DNS:** `*.apps.lab.home.arpa` → 192.168.1.160 (kube-vip VIP, Traefik)
+- **DNS:** `*.apps.lab.home.arpa` → 192.168.1.160 (Traefik on the H4)
+  > **Historical value, deliberately not updated.** The LAN wildcard moved to
+  > `192.168.1.201` (kube-vip service VIP) on 2026-07-27. `.160` is retained here because
+  > the hairpin-NAT analysis in Issue 3 below depends on the value that was in force
+  > during this session. For current DNS see [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ---
 

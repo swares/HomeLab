@@ -546,6 +546,33 @@ IR conversion, and a valid `config.json` (the deployed one contains `//` comment
 `docs/REVIEW-2026-07-24.md` (Medium) — live gap at
 `gitops/workloads/home-assistant/deployment.yaml:51-53`.
 
+### 4.11 CoreDNS in-cluster wildcard still answers `192.168.1.160` — **needs confirming**
+`gitops/workloads/coredns-custom/configmap.yaml` — the `apps.lab.home.arpa:53` template
+answers every in-cluster query for `*.apps.lab.home.arpa` with `192.168.1.160`, and the
+file's own comment calls that "Traefik ingress VIP". It is not: `.160` is the H4's node
+IP. The LAN wildcard moved to `.201` (`ingress_vip`, `hosts.yml:48`) on 2026-07-27; the
+in-cluster zone did not move with it.
+
+Two questions, in order:
+
+1. **Is it deliberate?** Pods reaching a node IP rather than the service VIP may be
+   intentional — `docs/sso-authelia-minio-troubleshooting.md:65-102` documents a
+   hairpin-NAT failure on the pod→VIP path, fixed with `hostAliases` to Traefik's
+   ClusterIP. If `.160` is a workaround for the same problem, it needs to say so in the
+   file, because right now it reads as an oversight.
+2. **If not deliberate, it is an HA gap.** In-cluster ingress resolution is pinned to one
+   node. Lose the H4 and pods stop resolving `*.apps` names even though the VIP has
+   floated to a surviving control-plane node — the exact single-A-record failure the
+   `.201` change was made to eliminate, still live one layer down.
+
+Found 2026-08-15 while fixing the documentation half of §6.1. **Flagged, not changed** —
+this is a cluster change and needs verifying against the running ConfigMap
+(`kubectl get cm -n kube-system coredns-custom -o yaml`) before a PR.
+
+Three documents accurately describe the current config and should be corrected *with* it,
+not before: `docs/ARCHITECTURE.md:146`, `docs/services.md:14`, `docs/OVERVIEW.md:26`.
+`tofu/dns/main.tf:8` carries the same value but cannot be applied (§4.5).
+
 ---
 
 ## 5. Scheduled / time-bound

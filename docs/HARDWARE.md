@@ -85,7 +85,7 @@ API: `https://api.lab.home.arpa:6443`.
 | `opi5pro-1` | agent | `192.168.1.168` | Ubuntu 22.04 Jammy | `role=inference`; NVMe-backed Ollama PVC (`/mnt/nvme`) |
 | `opi5pro-2` | agent | `192.168.1.172` | Ubuntu 22.04 | `role=inference`; NVMe-backed Ollama PVC |
 
-Ingress: Traefik. DNS: `*.apps.lab.home.arpa` → `192.168.1.160`; `api.lab.home.arpa` → `192.168.1.200` (VIP).
+Ingress: Traefik. DNS: `*.apps.lab.home.arpa` → `192.168.1.201` (kube-vip service VIP); `api.lab.home.arpa` → `192.168.1.200` (kube-vip control-plane VIP).
 ArgoCD bootstraps all workloads from `gitops/` via `gitops/bootstrap/root-app.yaml`.
 CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home.arpa` resolution.
 
