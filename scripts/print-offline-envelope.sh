@@ -136,14 +136,18 @@ TOK2="${tok:half}"
 
 # Credentials — as of $(date -u '+%Y-%m-%d %H:%M UTC')
 
-| #  | What                       | Without it |
-| -- | -------------------------- | ---------- |
-| 1  | restic repository password | \`/mnt/cold-8t/restic\` and \`/mnt/cold-sec/restic\` are undecryptable ciphertext |
-| 2  | R2 restic password         | **both** R2 repos are undecryptable — \`homelab-backup\` and \`homelab-nas\` share it |
-| 3  | R2 account ID + API keys   | you cannot reach the R2 buckets at all |
-| 4  | k3s server token           | etcd snapshots are unrestorable on new hardware — k3s derives the datastore key from it |
-| 5  | Vault unseal shares        | Vault stays sealed; every ExternalSecret stays empty |
-| 6  | Ansible vault password     | encrypted group_vars are unreadable, so those playbooks will not run |
+Column widths in a pandoc pipe table come from the dash counts below, so the
+separator row is deliberately lopsided — keep it that way or the right column
+runs off the page.
+
+| #  | What                     | Without it |
+|:---|:-------------------------|:-------------------------------------------------------------------------------------|
+| 1  | restic password          | both local repos are undecryptable ciphertext |
+| 2  | R2 restic password       | **both** R2 repos are undecryptable — they share one password |
+| 3  | R2 account ID + API keys | you cannot reach the R2 buckets at all |
+| 4  | k3s server token         | etcd snapshots are unrestorable on new hardware; k3s derives the datastore key from it |
+| 5  | Vault unseal shares      | Vault stays sealed, so every ExternalSecret stays empty |
+| 6  | Ansible vault password   | encrypted group_vars are unreadable, so those playbooks will not run |
 
 | What | Value |
 | ---- | ----- |
@@ -161,13 +165,23 @@ TOK2="${tok:half}"
 | MinIO root user | \`${CRED[RC_ENV_MINIO_ROOT_USER]:-MISSING}\` |
 | MinIO root password | \`${CRED[RC_ENV_MINIO_ROOT_PASSWORD]:-MISSING}\` |
 
-| Not secret, but you will not have the repo | Value |
-| ------------------------------------------ | ----- |
-| Offsite NAS repo | \`${OFFSITE_REPO}\` |
-| Offsite cluster-state repo | \`${CLOUD_REPO}\` |
-| Git remote | \`${GIT_REMOTE}\` |
-| Vault address | \`${VAULT_ADDR}\` |
-| Vault unseal keys file (on \`${VAULT_HOST}\`) | \`${UNSEAL_FILE}\` |
+## Not secret, but you will not have the repo
+
+Deliberately a list, not a table. These are long unbroken URLs, and inline code
+spans do not wrap in LaTeX — \`fvextra\`'s breaklines applies to code *blocks*, not
+\`\\texttt\`. In a table they simply run off the right margin. As list items they
+wrap like ordinary text.
+
+- **Offsite NAS repo**
+  \`${OFFSITE_REPO}\`
+- **Offsite cluster-state repo**
+  \`${CLOUD_REPO}\`
+- **Git remote**
+  \`${GIT_REMOTE}\`
+- **Vault address**
+  \`${VAULT_ADDR}\`
+- **Vault unseal keys file**, on \`${VAULT_HOST}\`
+  \`${UNSEAL_FILE}\`
 
 The k3s token is split across two rows only to fit the page. Concatenate parts 1
 and 2 with no separator and no whitespace.
