@@ -174,12 +174,27 @@ and 2 with no separator and no whitespace.
 EOF
 } > "$WORKDIR/envelope.md"
 
+# LaTeX preamble as a file, not as a -M/-V argument. `-M header-includes` sets
+# *metadata*, which pandoc escapes — so \usepackage arrives as \textbackslash
+# usepackage, lands before \begin{document}, and xelatex fails with
+# "Missing \begin{document}". A header file passes through verbatim and needs no
+# shell escaping, which is the whole class of bug avoided.
+#
+# seqsplit lets long unbroken secrets wrap; fvextra does the same inside code
+# spans. Both matter here: unseal shares and the k3s token are single tokens
+# wider than the page.
+cat > "$WORKDIR/header.tex" <<'TEX'
+\usepackage{seqsplit}
+\usepackage{fvextra}
+\DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines=true,breakanywhere=true,commandchars=\\\{\}}
+TEX
+
 pandoc "$WORKDIR/envelope.md" -o "$WORKDIR/envelope.pdf" \
   --pdf-engine=xelatex \
+  --include-in-header="$WORKDIR/header.tex" \
   -V fontsize=8pt \
   -V geometry:landscape \
   -V geometry:"top=2cm, bottom=2cm, left=1cm, right=1cm" \
-  -M header-includes="\\usepackage{seqsplit}\\usepackage{fvextra}\\DefineVerbatimEnvironment{Highlighting}{Verbatim}{breaklines=true,breakanywhere=true,commandchars=\\\\\\{\\}}" \
   -f markdown
 
 if [ "$DRY_RUN" -eq 1 ]; then
