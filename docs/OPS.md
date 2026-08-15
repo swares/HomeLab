@@ -332,6 +332,51 @@ kubectl get secret -n argocd argocd-initial-admin-secret \
 
 ---
 
+## Change CoreDNS custom config
+
+**A merged, synced `coredns-custom` change is not live until CoreDNS is restarted.**
+Argo will report the app Healthy and Synced, `kubectl get cm` will show the new value, and
+CoreDNS will keep serving the old one. There is no alert for this and no drift for Argo to
+detect — the ConfigMap genuinely matches git. Only a query tells you the truth.
+
+Observed 2026-08-15: after the `*.apps.lab.home.arpa` wildcard was changed from `.160` to
+`.201` (`BACKLOG.md` §4.11), a synced cluster still answered `.160` until the deployment
+was restarted by hand.
+
+```bash
+# 1. Merge the change to gitops/workloads/coredns-custom/configmap.yaml and let Argo sync.
+
+# 2. Confirm the ConfigMap actually carries the new value.
+kubectl get cm -n kube-system coredns-custom -o yaml
+
+# 3. Restart CoreDNS — this is the step that makes it live.
+kubectl rollout restart -n kube-system deployment/coredns
+kubectl rollout status  -n kube-system deployment/coredns
+
+# 4. Verify by querying, from inside a pod. Do not skip this.
+#    An explicit image tag is required — Kyverno disallow-latest-tag rejects untagged
+#    images. The default namespace is excluded from require-resource-limits, so no
+#    resource stanza is needed.
+kubectl run dnstest --rm -it --image=nicolaka/netshoot:v0.13 --restart=Never -- \
+  dig +short immich.apps.lab.home.arpa
+# expect: 192.168.1.201
+```
+
+To test the network path rather than resolution — useful when changing what the wildcard
+points *at* — force the address and bypass DNS entirely:
+
+```bash
+kubectl run dnstest --rm -it --image=nicolaka/netshoot:v0.13 --restart=Never -- \
+  curl -sk -o /dev/null -w "%{http_code}\n" \
+  --resolve immich.apps.lab.home.arpa:443:192.168.1.201 \
+  https://immich.apps.lab.home.arpa
+```
+
+Any HTTP code is a pass; a hang or `000` is the failure. Rollback for any CoreDNS change is
+`git revert` plus a restart plus one cache TTL (30 s).
+
+---
+
 ## Debug a stuck pod
 
 ```bash

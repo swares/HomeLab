@@ -7,11 +7,27 @@
 #    2026-07-27 and this zone was left behind, pinning in-cluster ingress resolution to a
 #    single node — the same single-A-record failure the .201 change removed, one layer
 #    down. See BACKLOG.md §4.11.
-# 2. Forward zone for lab.home.arpa → the two dnsmasq fallbacks (.184, .217).
+# 2. Forward zone for lab.home.arpa → all four lab DNS servers, ordered strongest first.
 #    This lets pods resolve any *.lab.home.arpa hostname (e.g. gitlab, cores3, h4-core).
 #    apps.lab.home.arpa is more specific and wins over the forward zone for ingress names.
-#    NOTE: neither Pi-hole (.148, .116) is listed here. Whether that is deliberate is
-#    still open — BACKLOG.md §4.11, "adjacent finding".
+#
+#    ORDER IS LOAD-BEARING ONLY BECAUSE OF `policy sequential`. The forward plugin's
+#    default policy is `random`, which ignores the order entirely — the list used to read
+#    `.184 .217` and that conveyed no preference at all, it just excluded the two Pi-holes.
+#    With sequential, CoreDNS uses the first healthy upstream and falls through on error.
+#
+#    Ranked by hardware, per docs/HARDWARE.md:
+#      .116  RPi 4B         Cortex-A72 4C, 8 GB, wired   Pi-hole   — strongest
+#      .184  OPi Zero 2W #1 H618 A53 4C,  4 GB, wired    dnsmasq
+#      .217  OPi Zero 2W #3 H618 A53 4C,  4 GB, WiFi     dnsmasq   — same silicon, worse link
+#      .148  RPi 3B #2      Cortex-A53 4C, 1 GB, wired   Pi-hole   — weakest (1 GB)
+#
+#    Note the inversion this exposes: .148, the weakest box in the fleet, is the LAN's
+#    PRIMARY Pi-hole while the 8 GB RPi 4B is secondary. That is a separate question about
+#    client-side DNS ordering and is not changed here — see BACKLOG.md §4.11.
+#
+#    If failover speed matters more than query count, add `health_check 5s` inside the
+#    forward block; the default is passive failure detection only.
 #
 # Why there are no longer per-hostname ClusterIP overrides:
 #   A `lab-apps-internal.server` block used to pin authelia.apps.lab.home.arpa to the
@@ -25,6 +41,15 @@
 #   The override was therefore redundant and was removed. If a hostname ever does need
 #   pinning again, add a more-specific server block — but re-test the hairpin path first
 #   rather than assuming the old failure still applies.
+#
+# HOW TO APPLY A CHANGE TO THIS FILE:
+#   Merging and letting Argo sync is NOT enough. CoreDNS keeps serving the old value while
+#   Argo reports Healthy and Synced and `kubectl get cm` shows the new one — there is no
+#   drift to detect, because the ConfigMap really does match git. Observed 2026-08-15.
+#     kubectl rollout restart -n kube-system deployment/coredns
+#     kubectl run dnstest --rm -it --image=nicolaka/netshoot:v0.13 --restart=Never -- \
+#       dig +short immich.apps.lab.home.arpa
+#   Full recipe in docs/OPS.md, "Change CoreDNS custom config".
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -40,6 +65,8 @@ data:
     }
   lab.server: |
     lab.home.arpa:53 {
-        forward . 192.168.1.184 192.168.1.217
+        forward . 192.168.1.116 192.168.1.184 192.168.1.217 192.168.1.148 {
+            policy sequential
+        }
         cache 30
     }

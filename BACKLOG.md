@@ -559,11 +559,24 @@ the picture and only the network path was under test:
 authelia was tested specifically because it is the one host with a documented failure on
 this path, and the override was masking it.
 
-**Residual risk, small:** the test pod ran on one node. `.201` is ARP-announced by a single
-kube-vip holder, so in principle a pod on a different node could take a different path. If
-in-cluster ingress resolution misbehaves after this change, that is the first thing to
-check — repeat the `curl --resolve` test with the pod pinned to each node in turn.
-Rollback is `git revert` plus one cache TTL (30 s).
+**Residual per-node risk: closed 08-15.** `.201` is ARP-announced by a single kube-vip
+holder, so a pod on a different node could in principle have taken a different path. Tested
+from all five nodes with the pod pinned via `spec.nodeName`:
+
+    n150-1      200
+    n150-2      200
+    odroid-nas  200
+    opi5pro-1   200
+    opi5pro-2   200
+
+Both arm64 agents included. The pod→service-VIP path works from every node in the cluster,
+so nothing here depends on where a workload happens to be scheduled.
+
+Note for anyone repeating this: a per-node `dig` proves nothing. CoreDNS answers from its
+own pods, so resolution is identical regardless of client placement — only `curl --resolve`,
+which bypasses DNS and forces the address, exercises the per-node network path.
+
+Rollback for the whole change is `git revert`, a CoreDNS restart, and one cache TTL (30 s).
 
 The original finding, and the reasoning behind the choice, is kept below: the CNAME dead
 end in particular is recorded so nobody spends an afternoon rediscovering it.
@@ -675,15 +688,56 @@ ConfigMap, not ahead of it: `docs/ARCHITECTURE.md:149`, `docs/services.md:14`,
 `docs/OVERVIEW.md:26`. `tofu/dns/main.tf:8` carries the same value but cannot be applied
 (§4.5).
 
-#### Adjacent finding — in-cluster forwarders skip both Pi-holes
+#### Adjacent finding — in-cluster forwarders — **FIXED 08-15**
 
-`lab.server` forwards `lab.home.arpa` to `192.168.1.184` and `192.168.1.217` — the two OPi
-Zero 2W dnsmasq boxes, the *tertiary* and *secondary* fallbacks. Neither Pi-hole is listed,
-though line 6 of the file claims "Pi-hole + dnsmasq secondaries". So in-cluster resolution
-of every `*.lab.home.arpa` name depends entirely on the two weakest boards in the fleet
-while `.148` and `.116` sit unused. Possibly deliberate — keeping blocklists off cluster
-traffic is a defensible reason — but undocumented, and the comment says the opposite of
-what the config does. Decide, then make the comment true.
+`lab.server` forwarded `lab.home.arpa` to `192.168.1.184` and `192.168.1.217` only — the
+two OPi Zero 2W dnsmasq boxes — while line 6 of the file claimed "Pi-hole + dnsmasq
+secondaries". Neither Pi-hole was listed. In-cluster resolution of every `*.lab.home.arpa`
+name depended on two of the weaker boards while `.148` and `.116` sat unused.
+
+Now forwards to all four, ordered strongest first, with `policy sequential`:
+
+| Order | IP | Host | CPU / RAM | Link | Engine |
+|---|---|---|---|---|---|
+| 1 | `.116` | RPi 4B | A72 4C / 8 GB | wired | Pi-hole |
+| 2 | `.184` | OPi Zero 2W #1 | H618 A53 4C / 4 GB | wired | dnsmasq |
+| 3 | `.217` | OPi Zero 2W #3 | H618 A53 4C / 4 GB | **WiFi** | dnsmasq |
+| 4 | `.148` | RPi 3B #2 | A53 4C / **1 GB** | wired | Pi-hole |
+
+**`policy sequential` is what makes the order mean anything.** The forward plugin defaults
+to `random`, which ignores order — so the old two-entry list expressed no preference, it
+merely excluded the Pi-holes. Anyone reordering a `forward` list without setting the policy
+is changing nothing.
+
+**All four verified to serve the zone before promoting `.116` to first** — config intent
+was not taken as sufficient. `hosts.yml:83-104` puts all four in the `dns` group as
+`dns-1`…`dns-4`, so `dns.yml` gives each the same `dns_records` and
+`address=/apps.lab.home.arpa/{{ ingress_vip }}`. Confirmed at runtime 08-15, querying each
+resolver directly:
+
+| Queried | `gitlab.lab.home.arpa` | `h4-core.lab.home.arpa` | `*.apps` canary |
+|---|---|---|---|
+| `.116` | `192.168.1.50` | `192.168.1.160` | `192.168.1.201` |
+| `.184` | `192.168.1.50` | `192.168.1.160` | `192.168.1.201` |
+| `.217` | `192.168.1.50` | `192.168.1.160` | `192.168.1.201` |
+| `.148` | `192.168.1.50` | `192.168.1.160` | `192.168.1.201` |
+
+`.116` mattered most: `hosts.yml:91-96` records that it sat outside the `dns` group until
+2026-07-27 and "kept handing out 192.168.1.160 indefinitely" while the three managed
+resolvers moved to `.201` — *"an unmanaged resolver does not drift gradually; it holds
+whatever it was last told, forever."* This change promotes that box to first upstream, so
+the wildcard column above is the specific thing being checked. It now answers `.201`,
+which also confirms the 07-27 re-add took effect.
+
+Repeat this table's query if `.116` is ever rebuilt or drops out of the group.
+
+#### Still open — the LAN primary is the weakest box
+
+Ranking the forwarders exposed an inversion this entry does not fix: `.148` is a 1 GB
+RPi 3B and is the LAN's **primary** Pi-hole, while the 8 GB RPi 4B at `.116` is secondary
+(`docs/HARDWARE.md:21-22`, `:114`). In-cluster traffic now prefers `.116`; every other
+client on the network still asks `.148` first. That is client-side DNS ordering — Pi-hole
+and DHCP config, not this ConfigMap — and wants a decision of its own.
 
 Found 2026-08-15 while fixing the documentation half of §6.1. **Flagged, not changed** —
 this is a cluster change and DNS is the lab's most load-bearing dependency. Rollback is
