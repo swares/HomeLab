@@ -353,27 +353,56 @@ kubectl get cm -n kube-system coredns-custom -o yaml
 kubectl rollout restart -n kube-system deployment/coredns
 kubectl rollout status  -n kube-system deployment/coredns
 
-# 4. Verify by querying, from inside a pod. Do not skip this.
-#    An explicit image tag is required — Kyverno disallow-latest-tag rejects untagged
-#    images. The default namespace is excluded from require-resource-limits, so no
-#    resource stanza is needed.
-kubectl run dnstest --rm -it --image=nicolaka/netshoot:v0.13 --restart=Never -- \
-  dig +short immich.apps.lab.home.arpa
-# expect: 192.168.1.201
+# 4. Verify by querying. Do not skip this. Query CoreDNS directly on its ClusterIP —
+#    reachable from any node via kube-proxy. No pod, no admission, no attach.
+dig +noall +comments +answer @$(kubectl get svc -n kube-system kube-dns \
+  -o jsonpath='{.spec.clusterIP}') gitlab.lab.home.arpa
+dig +noall +comments +answer @$(kubectl get svc -n kube-system kube-dns \
+  -o jsonpath='{.spec.clusterIP}') immich.apps.lab.home.arpa
 ```
 
-To test the network path rather than resolution — useful when changing what the wildcard
-points *at* — force the address and bypass DNS entirely:
+Read the `status:` line, not just the answer. Expect `NOERROR` with
+`gitlab.lab.home.arpa → 192.168.1.50` (exercises the `lab.server` forward zone) and
+`immich.apps.lab.home.arpa → 192.168.1.201` (exercises the wildcard template). `SERVFAIL`
+means the zone is served but the upstreams aren't answering.
+
+### Testing from pod network
+
+The ClusterIP query above runs from the node. To confirm resolution as a *pod* sees it —
+worth doing when changing the wildcard or the forwarders — run a throwaway pod, but **do
+not use `kubectl run --rm -it`**. On a pod that exits immediately, `kubectl` loses the race
+to attach and prints nothing; on 2026-08-15 that silently swallowed two verification runs
+and read as a failure on a change that was working. Detach and read the logs instead:
 
 ```bash
-kubectl run dnstest --rm -it --image=nicolaka/netshoot:v0.13 --restart=Never -- \
-  curl -sk -o /dev/null -w "%{http_code}\n" \
-  --resolve immich.apps.lab.home.arpa:443:192.168.1.201 \
-  https://immich.apps.lab.home.arpa
+# An explicit image tag is required — Kyverno disallow-latest-tag rejects untagged images.
+# The default namespace is excluded from require-resource-limits, so no resource stanza.
+kubectl run dnstest --image=nicolaka/netshoot:v0.13 --restart=Never --command -- \
+  sh -c 'dig +noall +comments +answer gitlab.lab.home.arpa; dig +noall +comments +answer immich.apps.lab.home.arpa'
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/dnstest --timeout=60s
+kubectl logs dnstest
+kubectl delete pod dnstest
 ```
 
-Any HTTP code is a pass; a hang or `000` is the failure. Rollback for any CoreDNS change is
-`git revert` plus a restart plus one cache TTL (30 s).
+### Testing the network path rather than resolution
+
+Useful when changing what the wildcard points *at*. `--resolve` forces the address and
+bypasses DNS entirely, so this exercises the pod→target path only:
+
+```bash
+kubectl run dnstest --image=nicolaka/netshoot:v0.13 --restart=Never --command -- \
+  curl -sk -o /dev/null -w "%{http_code}\n" --max-time 10 \
+  --resolve immich.apps.lab.home.arpa:443:192.168.1.201 https://immich.apps.lab.home.arpa
+kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod/dnstest --timeout=60s
+kubectl logs dnstest; kubectl delete pod dnstest
+```
+
+Any HTTP code is a pass; a hang or `000` is the failure. To check every node — the VIP is
+ARP-announced by one holder at a time, so paths can differ — pin the pod with
+`--overrides="{\"spec\":{\"nodeName\":\"$n\"}}"` and loop over
+`kubectl get nodes -o name | cut -d/ -f2`.
+
+Rollback for any CoreDNS change is `git revert`, a restart, and one cache TTL (30 s).
 
 ---
 

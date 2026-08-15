@@ -731,6 +731,33 @@ which also confirms the 07-27 re-add took effect.
 
 Repeat this table's query if `.116` is ever rebuilt or drops out of the group.
 
+**Verified live after the restart, 08-15.** Querying CoreDNS on its ClusterIP from the H4,
+after `kubectl rollout restart -n kube-system deployment/coredns`:
+
+    gitlab.lab.home.arpa       NOERROR  → 192.168.1.50    (via the lab.server forward zone)
+    immich.apps.lab.home.arpa  NOERROR  → 192.168.1.201   (via the wildcard template)
+
+CoreDNS logs confirm all three server blocks loaded — `.:53`, `apps.lab.home.arpa.:53`,
+`lab.home.arpa.:53` — with no plugin errors, so `policy sequential` parses correctly on
+CoreDNS 1.14.4. The `No files matching import glob pattern: /etc/coredns/custom/*.override`
+warning is benign: no `.override` keys exist. It does confirm k3s wires up that import
+path, which is the mechanism the rejected third option would have used.
+
+**Theory raised and dismissed: Pi-hole listening mode.** Before this change the forwarders
+were `.184` and `.217`, both bare dnsmasq; it now leads with `.116` and includes `.148`,
+both Pi-hole. Pi-hole v6 defaults `listeningMode` to local-subnet-only and
+`ansible/templates/pihole.toml.j2` does not set it, so there was a plausible failure mode:
+queries arriving from the pod CIDR (`10.42.0.0/16`) being dropped by a resolver that
+dnsmasq would have answered. **Tested — it does not occur.** Flannel masquerades pod
+traffic leaving the cluster CIDR, so Pi-hole sees the node's `192.168.1.x` address and
+permits the query. The Pi-holes were not excluded for this reason, and promoting them is
+safe. Recorded so the theory is not re-raised as an objection.
+
+**Tooling note.** Two verification runs returned no output and read as failures on a change
+that was working. Cause was `kubectl run --rm -it` losing the attach race against a pod
+that exits immediately — not DNS. `docs/OPS.md` now leads with the ClusterIP `dig`, which
+needs no pod at all.
+
 #### Still open — the LAN primary is the weakest box
 
 Ranking the forwarders exposed an inversion this entry does not fix: `.148` is a 1 GB
