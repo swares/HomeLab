@@ -23,7 +23,7 @@ Add to Pi-hole / dnsmasq on octopi (`192.168.1.148`):
 | Record | Type | Value |
 |--------|------|-------|
 | `api.lab.home.arpa` | A | `192.168.1.200` | k3s API server (kube-vip VIP) |
-| `*.apps.lab.home.arpa` | A | `192.168.1.160` |
+| `*.apps.lab.home.arpa` | A | `192.168.1.201` | kube-vip service VIP for Traefik |
 
 CoreDNS handles `*.apps.lab.home.arpa` inside the cluster automatically via the
 `coredns-custom` ConfigMap — no extra steps for new Ingresses.

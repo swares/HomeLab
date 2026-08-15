@@ -79,7 +79,7 @@ model (hot NVMe + two cold SATA RAID 1 mirrors) keeps data safe.
 | `minio.apps.lab.home.arpa` | Minio (S3 API) |
 | `minio-console.apps.lab.home.arpa` | Minio console |
 | `stt.apps.lab.home.arpa` | Whisper STT |
-| `*.apps.lab.home.arpa` | → 192.168.1.160 (Traefik ingress) |
+| `*.apps.lab.home.arpa` | → 192.168.1.201 (kube-vip service VIP for Traefik) |
 
 ## Fleet
 
@@ -105,7 +105,7 @@ model (hot NVMe + two cold SATA RAID 1 mirrors) keeps data safe.
 > Full step-by-step is in [docs/RUNBOOK.md](docs/RUNBOOK.md).
 
 1. **Prereqs** — Ubuntu 22.04 on eMMC, NVMe + SATA disks ready, SSH key access, DNS
-   records for `api.lab.home.arpa` and `*.apps.lab.home.arpa` → 192.168.1.160.
+   records for `api.lab.home.arpa` → 192.168.1.200 and `*.apps.lab.home.arpa` → 192.168.1.201.
 2. **Set your repo URL** — replace the `repoURL` in `gitops/bootstrap/root-app.yaml`.
 3. **Bootstrap:**
    ```bash

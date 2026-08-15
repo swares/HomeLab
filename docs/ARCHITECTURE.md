@@ -131,7 +131,10 @@ flowchart LR
 
 The lab is a flat **192.168.1.0/24** network. **DNS is the linchpin of the install** —
 k3s needs `api.lab.home.arpa → 192.168.1.200` (kube-vip VIP) and
-`*.apps.lab.home.arpa → 192.168.1.160` (H4 Traefik ingress).
+`*.apps.lab.home.arpa → 192.168.1.201` (kube-vip service VIP for Traefik). Source of
+truth is `ingress_vip` in `ansible/inventory/hosts.yml`, applied by
+`ansible/playbooks/dns.yml`. It was `192.168.1.160` — the H4's own node IP — until
+2026-07-27; finding `.160` on the wildcard is the fault, not the fix.
 
 Four DNS servers provide redundancy:
 
