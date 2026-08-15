@@ -125,26 +125,167 @@ The drill is only meaningful if it simulates the loss it exists for. That means:
 
 ### Drill 1 — data restore from offsite (start here)
 
-Bounded, read-only, and proves the whole chain: envelope → R2 → plaintext.
+Bounded, read-only, and proves the chain: envelope → R2 → plaintext.
 
-On a non-H4 host with restic installed and internet access:
+> **Corrected 2026-08-15.** The earlier version of this procedure restored
+> `--include /srv/nas/<a known file>`. **`/srv/nas` is empty** — `BACKLOG.md` §1.10
+> confirms it, by design, until the Immich migration. That drill would have restored
+> zero bytes, exited 0, and been recorded as a pass. The same shape as `backup-offsite`
+> reporting success for weeks without copying a byte. **Restore something that exists,
+> and assert on its size.**
+
+#### What is actually in the repo
+
+Per §1.10, inspected 2026-08-13 — 35 files, and after the VHDX was dropped from
+`backup-nas` on 08-13 the only real content is:
+
+| Path | Contents |
+|---|---|
+| `/mnt/cold-8t/immich/backups/*.sql.gz` | **~250 MiB of nightly Postgres dumps — restore one of these** |
+| `/mnt/cold-8t/immich/{library,upload,thumbs,profile,encoded-video}/.immich` | 13-byte init markers |
+| `/srv/nas` | empty |
+
+Snapshots older than 08-13 also hold `YIKW.VHDX` (224.7 GiB). Do not target it.
+
+#### Scope — what this drill does and does not prove
+
+Drill 1 uses **envelope items 2 and 3 only** (R2 restic password; R2 account ID and
+API keys), plus the repo URL from the non-secret table. Passing it says nothing about
+items 1, 4, 5 or 6 — the local restic password, k3s server token, Vault unseal shares
+and Ansible vault password are all exercised by Drill 2. Do not record Drill 1 as
+"envelope verified".
+
+#### Host — a throwaway VM
+
+**Provision a disposable VM, run the drill in it, destroy it.** Not a permanent node.
+Three reasons, the third being the one that matters most:
+
+1. **Clean room.** No restic, no `/etc/restic`, no lab config to fall back on — so "use
+   only the envelope" is enforced rather than promised.
+2. **Repeatable.** A fresh VM each time means the drill measures the same thing on every
+   run, instead of gradually becoming a test of one host's accumulated state.
+3. **Credential hygiene.** The envelope's R2 keys are read-write and reach the only
+   offsite copy of the lab. On a permanent node they persist in `~/.bash_history`, in the
+   environment, and the restored plaintext Postgres dump sits in `/tmp` indefinitely.
+   Destroying the VM takes all of it at once.
+
+`ansible/playbooks/create-vm.yml` already does this — Ubuntu 24.04 cloud image onto the
+`kvm_hosts` group:
 
 ```bash
-# From the envelope: items 2 and 3.
-export AWS_ACCESS_KEY_ID='<envelope item 3>'
-export AWS_SECRET_ACCESS_KEY='<envelope item 3>'
-export RESTIC_REPOSITORY='s3:https://<account-id>.r2.cloudflarestorage.com/homelab-nas'
-
-restic snapshots --tag nas --latest 1        # prompts for envelope item 2
-restic restore latest --target /tmp/drill --include /srv/nas/<a known file>
+cd ~/lab/homelab/homelab/ansible
+ansible-playbook -i inventory/hosts.yml playbooks/create-vm.yml -l n150-2 \
+  -e "vm_name=drill-1 vm_ram_mb=2048 vm_vcpus=2 vm_disk_gb=20"
 ```
 
-Then verify the restored file against the original, and record how long the whole
-thing took.
+Host it on **n150-2**, not n150-1 (which carries the monitoring stack). 20 GB is ample —
+the restore is ~250 MiB.
 
-Cost note: R2 has **no egress fees**, so this costs nothing but time. That was a
-deliberate reason for choosing R2 over cheaper storage — a restore drill must never
-be something you avoid because of the bill.
+**Consider the isolated network.** `sandbox-vm-update.yml` builds a `sandbox-nat` network
+described as *"internet via NAT, invisible to LAN"*. That is close to ideal here: the VM
+can reach R2 but **cannot reach the H4, Vault, or anything else it might cheat with**,
+which turns "do not reach outside the envelope" from discipline into a property of the
+network. `create-vm.yml` defaults to `vm_bridge: br0`, so this needs an override, and
+`sandbox-nat` may only exist while `sandbox-vm-update.yml` has run — **verify it exists
+before relying on it** (`virsh net-list --all` on n150-2). Falling back to `br0` is fine;
+the isolation is a bonus, not a requirement.
+
+It does not complicate pass criterion 4: read the H4's `sha256sum` separately and compare
+the two 64-character strings by eye.
+
+Install restic from the distro inside the VM. Version does not matter for reading —
+this drill never writes.
+
+#### Before you start
+
+1. **The envelope must exist and be current.** §1.2 is a prerequisite, not a parallel
+   task — a drill run from credentials you read off the H4 proves nothing. Three rows in
+   the currency table above are unticked; fill and print via
+   `scripts/print-offline-envelope.sh` first.
+2. **Do not run between 02:25 and 02:40 UTC.** `backup-offsite.timer` fires at 02:30.
+   §1.9 is the lesson: a long restic operation holding a lock starved the nightly job for
+   four nights.
+3. **Never run these from the drill host:** `forget`, `prune`, `init`, `migrate`, `copy`,
+   `unlock`. The envelope's R2 credentials are read-write, so a typo reaches the only
+   offsite copy of the lab. CLAUDE.md forbids hand-running retention anywhere.
+
+#### Procedure
+
+```bash
+# --- on n150-2, as yourself. Values from the OFFLINE envelope only. ---
+sudo apt-get install -y restic
+export AWS_ACCESS_KEY_ID='<envelope item 3: access key id>'
+export AWS_SECRET_ACCESS_KEY='<envelope item 3: secret access key>'
+export RESTIC_REPOSITORY='s3:https://<envelope item 3: account id>.r2.cloudflarestorage.com/homelab-nas'
+
+date -u +%FT%TZ                                  # START — write this down
+
+restic snapshots --tag nas --latest 1            # prompts for envelope item 2
+restic ls latest /mnt/cold-8t/immich/backups | tail -5   # pick a real filename
+
+restic restore latest --target /tmp/drill \
+  --include /mnt/cold-8t/immich/backups/<chosen>.sql.gz
+
+date -u +%FT%TZ                                  # END — write this down
+```
+
+#### Pass criteria — all five
+
+```bash
+# 1. Something was actually restored. This is the check the old procedure lacked.
+find /tmp/drill -name '*.sql.gz' -size +1k -printf '%s\t%p\n'
+
+# 2. The archive is internally valid — no reference to the H4 needed.
+gunzip -t /tmp/drill/mnt/cold-8t/immich/backups/<chosen>.sql.gz && echo "gzip OK"
+
+# 3. It is a Postgres dump, not a valid-but-wrong file.
+zcat /tmp/drill/mnt/cold-8t/immich/backups/<chosen>.sql.gz | head -5
+
+# 4. Byte-identical to the original (run the second line on the H4).
+sha256sum /tmp/drill/mnt/cold-8t/immich/backups/<chosen>.sql.gz
+#   h4: sha256sum /mnt/cold-8t/immich/backups/<chosen>.sql.gz
+
+# 5. Nothing outside the envelope was needed.
+```
+
+Checks 1–3 stand alone; 4 is fidelity, and needs the H4 only because this is a drill
+rather than a real loss. **If check 5 failed — if you reached for anything not in the
+envelope — the envelope is wrong. Stop and add it.** That outcome is more valuable than
+a pass.
+
+#### Known failure modes
+
+| Symptom | Likely cause |
+|---|---|
+| `Fatal: wrong password` | Envelope item 2 stale. Item 1 rotated 2026-08-07; confirm which password the row refers to |
+| `SignatureDoesNotMatch` | Clock skew on the drill host, or item 3 mistranscribed |
+| `x509: certificate signed by unknown authority` | Missing `ca-certificates` on a fresh host |
+| Repo opens, zero snapshots | Wrong bucket — `homelab-nas` is NAS data, `homelab-backup` is cluster state |
+| Restore "succeeds", `/tmp/drill` empty | The `/srv/nas` trap. Check 1 exists to catch this |
+
+Cost: R2 charges **no egress**, so this costs time only. That was a deliberate reason for
+choosing R2 — a restore drill must never be something you avoid because of the bill.
+
+#### Teardown — part of the drill, not an afterthought
+
+Record the results **first** — the VM holds the only copy of the timings.
+
+```bash
+# on n150-2
+virsh destroy drill-1 && virsh undefine drill-1 --remove-all-storage
+```
+
+Do this even if the drill fails. The read-write R2 credentials and the plaintext Postgres
+dump go with it.
+
+#### When it passes
+
+Fill in the results table below, then tick §1.1 in `BACKLOG.md`. Drill 2 and the
+`cold-sec` re-init (§1.9) are both gated on this.
+
+Record the duration honestly, including time spent working out what to type. *"It works"*
+is worth much less than *"it takes 40 minutes, and 25 of those were finding the right
+snapshot"* — the second tells you what 2am looks like.
 
 ### Drill 2 — cluster state (do after drill 1 passes)
 
