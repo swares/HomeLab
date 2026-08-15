@@ -22,9 +22,29 @@ can be used and cannot be stored inside it:
 
 | Credential | Where stored | Why |
 |------------|-------------|-----|
-| Vault unseal keys (3-of-5) | Offline, physically secure | Required to unseal after restart |
-| Vault root token | Offline, alongside unseal keys | Required to generate new tokens |
+| Vault unseal keys (3-of-5) | **All five on the RPi5** at `/etc/vault.d/unseal-keys`, `root:root 0400` — plus all five in the offline envelope | Required to unseal after restart |
 | Ansible Vault password (`.vault_pass` on H4) | Gitignored | Gates all bootstrap secrets |
+
+> **The unseal shares are not "offline, physically secure", and this table used to say
+> they were.** They sit on the same host as the raft store they unseal, so **root on the
+> RPi5 is equivalent to full Vault access**. That is a deliberate trade: `vault-unseal.service`
+> reads them at boot so Vault returns unsealed without intervention, and Vault gates every
+> ExternalSecret in the cluster.
+>
+> Under Shamir these two properties are mutually exclusive — auto-unseal needs a threshold
+> of shares on the host, and "no single location can unseal" needs fewer than a threshold
+> everywhere. Auto-unseal was chosen. The offline envelope
+> (`docs/BREAK-GLASS.md`) is the off-site redundant copy, not a second line of defence
+> against RPi5 compromise. Escaping the trade entirely means transit or cloud-KMS
+> auto-unseal, which adds a dependency the lab does not currently have.
+>
+> Storing all five rather than three changes nothing: three is already the threshold, and
+> `vault-unseal.sh` reads only the first three. See `BACKLOG.md` §2.5.
+
+> **There is deliberately no Vault root token.** It was revoked 2026-08-07 and this table
+> used to list it as a credential to safeguard. Generate a short-lived one with
+> `vault operator generate-root` if a break-glass admin action ever needs it. See
+> `BACKLOG.md` §6.3.
 
 ## Rotate the credentials from the hardware map
 

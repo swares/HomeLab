@@ -87,6 +87,47 @@ its contents.** That ordering matters — a drill run on a host that still has t
 repos, the config and the credentials proves almost nothing, and it is the drill
 that tells you whether the envelope is actually complete.
 
+#### Sequenced 2026-08-15 — split into two tracks
+
+The envelope does not have to be complete before Drill 1 starts. Drill 1 uses **items 2
+and 3 only** (R2 restic password; R2 account ID and API keys), neither of which touches
+Vault. Blocking the first restore this lab has ever performed on a Vault rekey would be
+the wrong order.
+
+1. **Fill items 2 and 3 → run Drill 1** (`docs/BREAK-GLASS.md`). Unblocked now.
+2. **Rekey Vault** → `docs/OPS.md`, "Rekey Vault unseal shares".
+3. **Fill and print the full envelope** with the fresh shares. Printing before the rekey
+   makes it stale the moment you rekey.
+4. **Drill 2.**
+
+#### The unseal-share question is resolved — by rekeying, not by searching
+
+The earlier note asked where shares 4 and 5 were before filling item 5 in. They were in a
+plaintext file on a laptop. **`vault operator rekey` invalidates every existing share at
+once**, which is strictly better than deleting that file: `rm`/`shred` do not reliably
+erase flash storage, so you cannot prove the old copy is gone — but you can make it
+worthless. After a rekey the only shares in existence are the ones just written down.
+
+Decisions taken, so they are not re-litigated:
+
+- **All five shares go in `/etc/vault.d/unseal-keys`**, and all five get printed in the
+  envelope. Three is already the threshold and the RPi5 already equals full Vault access,
+  so the extra two change nothing — they are inert, since `vault-unseal.sh` reads the
+  first `vault_unseal_threshold` valid lines and stops. Five in the envelope buys
+  tolerance for a mistranscribed character.
+- **Auto-unseal is kept.** Under Shamir, auto-unseal and "no single location can unseal"
+  are mutually exclusive: the first needs a threshold of shares on the host, the second
+  needs fewer than a threshold everywhere. Vault gates every ExternalSecret, so the trade
+  favours availability. Escaping it entirely means transit or cloud-KMS auto-unseal, which
+  is a new dependency — deliberately not taken.
+- **Therefore §2.5 is fixed by correcting the claim, not the storage.** Done: see §2.5.
+
+**Trap when hand-editing the unseal file:** no comments, no labels. `vault-unseal.sh`
+skips blank lines only; any other non-key line is handed to `vault operator unseal`, fails,
+and aborts the unit under `set -euo pipefail`, leaving Vault sealed on boot with nothing to
+warn you until the next reboot. Rewrite the file in the same sitting as the rekey and test
+it with a deliberate `vault operator seal` rather than waiting for a reboot to find out.
+
 `docs/BREAK-GLASS.md` holds the template, the currency log, and the drill procedure.
 It contains no secrets and must not. The filled copy goes offline.
 
@@ -383,12 +424,26 @@ The playbook was deleted rather than fixed; see §9. It preseeded slapd and boun
 `CHANGEME-set-via-vault` whenever the vaulted variable was out of scope, while its own
 header said "never hardcode it". It had also been dead since 2026-07-18.
 
-### 2.5 Vault unseal keys sit beside the sealed data
+### 2.5 ~~Vault unseal keys sit beside the sealed data~~ — **claim corrected 08-15; storage kept, deliberately**
 `ansible/templates/vault-unseal.sh.j2:6`, `TODO-2026-08-03.md:871-876`
 
-`docs/SECURITY.md:25` describes them as "Offline, physically secure". They are on the
-RPi5 at `0400`, next to the raft store they unseal. Either fix the storage or fix the
-claim — as written the document is load-bearing and false.
+`docs/SECURITY.md` described the shares as "Offline, physically secure". They are on the
+RPi5 at `0400`, next to the raft store they unseal, so root there is equivalent to full
+Vault access. The entry said: fix the storage or fix the claim.
+
+**The claim is fixed.** `docs/SECURITY.md` now states where the shares actually are, that
+the RPi5 is a single point of full access, and why.
+
+**The storage is kept, and that is a decision rather than an omission.** Under Shamir,
+auto-unseal and "no single location can unseal" cannot both hold — auto-unseal requires a
+threshold of shares on the host. Vault gates every ExternalSecret in the cluster, so a
+reboot without auto-unseal leaves every workload's secrets empty until someone
+intervenes. Availability wins here. The genuine escape is transit or cloud-KMS auto-unseal,
+which adds an external dependency; **not taken**, and recorded in §8 rather than left
+looking unconsidered.
+
+All five shares now live in that file rather than three. That changes nothing: three is
+the threshold, and `vault-unseal.sh` reads only the first three. See §1.2.
 
 ### 2.6 Vault runs plaintext HTTP
 `ansible/templates/vault.hcl.j2:8-9`, `README.md:167`, `docs/OVERVIEW.md:72`
@@ -927,6 +982,12 @@ RAG · Vault OIDC auth · OVMS until a concrete iGPU use case · rknpu 0.9.7 unt
 model is worth running · Home Assistant and LiteLLM SSO (not worth the complexity) ·
 Zot OIDC (blocked on upstream provider naming) · Windows Update automation ·
 `externalTrafficPolicy: Local` on the Traefik VIP until Traefik runs 2+ replicas.
+
+**Vault transit / cloud-KMS auto-unseal** — the only real escape from the trade in §2.5,
+where auto-unseal requires a threshold of shares on the RPi5 and therefore makes root
+there equivalent to full Vault access. Rejected because it introduces an external
+dependency (or a second Vault) in the recovery path, which is the opposite of what the
+break-glass work is for. Revisit only if the RPi5 stops being trusted.
 
 ---
 

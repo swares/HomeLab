@@ -465,6 +465,85 @@ kubectl get externalsecret -A
 
 ---
 
+## Rekey Vault unseal shares
+
+Issues a fresh set of unseal shares and **invalidates every existing one immediately**.
+
+Use it when shares may exist somewhere you no longer control. It is better than trying to
+delete a stray copy: `rm` and `shred` do not reliably erase flash storage (the same reason
+`docs/BREAK-GLASS.md` prefers rendering to `/dev/shm` over cleaning up afterwards). You
+cannot prove an old copy is gone — you can make it worthless.
+
+`rekey` replaces the **unseal shares**. It does not rotate the underlying encryption key
+(that is `vault operator rotate`) and does not touch tokens or policies.
+
+**Before you start:** Vault must be initialized and **unsealed**, and you need a threshold
+(3) of the *current* shares. New shares are printed in plaintext — run this in a session
+that is not being logged, and clear scrollback afterwards.
+
+```bash
+ssh swares@192.168.1.128
+export VAULT_ADDR=http://127.0.0.1:8200
+vault status          # Initialized true, Sealed false
+
+# 1. Start the rekey. Returns a nonce.
+vault operator rekey -init -key-shares=5 -key-threshold=3
+
+# 2. Submit 3 CURRENT shares, one command each, using the nonce from step 1.
+vault operator rekey -nonce=<nonce>     # prompts for a share; repeat 3x
+```
+
+The third submission prints the **new** shares. Write all five down before you do
+anything else — they are shown once.
+
+### Immediately after: rewrite the unseal file, same sitting
+
+The old shares are dead the moment the rekey completes, so
+`/etc/vault.d/unseal-keys` is now wrong. **Nothing will tell you until the next reboot**,
+when `vault-unseal.service` fails and every ExternalSecret goes empty.
+
+```bash
+sudo install -m 0400 -o root -g root /dev/null /etc/vault.d/unseal-keys
+sudo tee /etc/vault.d/unseal-keys >/dev/null <<'EOF'
+<new share 1>
+<new share 2>
+<new share 3>
+<new share 4>
+<new share 5>
+EOF
+```
+
+Storing all five is fine — the RPi5 already equals full Vault access at three, so the
+extra two change nothing (`BACKLOG.md` §2.5). Note they are inert: `vault-unseal.sh`
+reads the **first `vault_unseal_threshold` valid lines and stops**.
+
+**Do not put comments or labels in this file.** The script skips blank lines only; any
+other non-key line is passed to `vault operator unseal`, fails, and `set -euo pipefail`
+aborts the unit — leaving Vault sealed on boot. Keys only, one per line.
+
+If you changed `-key-threshold`, update `vault_unseal_threshold` in
+`ansible/inventory/group_vars/vault/vault.yml:11` to match.
+
+### Verify — do not wait for a reboot to find out
+
+Seal and let the unit unseal it. Brief ESO interruption, worth it.
+
+```bash
+vault operator seal
+sudo systemctl start vault-unseal
+sudo systemctl status vault-unseal --no-pager | tail -5   # "unsealed successfully"
+vault status                                              # Sealed false
+kubectl get externalsecret -A                             # all SecretSynced
+```
+
+### Then
+
+1. Update the **offline envelope** with all five new shares — `docs/BREAK-GLASS.md` item 5.
+2. Tick the currency table in that file.
+3. Any older copy of the old shares is now worthless and needs no secure deletion.
+
+---
+
 ## Bootstrap a new Linux node as k3s agent
 
 ### Prerequisites
