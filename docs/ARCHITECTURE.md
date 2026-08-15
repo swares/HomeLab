@@ -146,8 +146,10 @@ Four DNS servers provide redundancy:
 | Quaternary | OPi Zero 2W #3 | `192.168.1.217` | dnsmasq (Armbian Trixie, 2026-07-10) |
 
 Inside the cluster, CoreDNS has a custom zone (`coredns-custom` ConfigMap in kube-system)
-that answers all `*.apps.lab.home.arpa` queries with `192.168.1.160`, ensuring pods on any
-node resolve Ingress names without relying on the host's `systemd-resolved`.
+that answers all `*.apps.lab.home.arpa` queries with `192.168.1.201`, ensuring pods on any
+node resolve Ingress names without relying on the host's `systemd-resolved`. This matches
+the LAN record deliberately — it answered `192.168.1.160` (the H4's node IP) until
+2026-08-15, which pinned in-cluster ingress resolution to a single node.
 
 ## Identity & SSO
 

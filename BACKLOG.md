@@ -546,32 +546,148 @@ IR conversion, and a valid `config.json` (the deployed one contains `//` comment
 `docs/REVIEW-2026-07-24.md` (Medium) — live gap at
 `gitops/workloads/home-assistant/deployment.yaml:51-53`.
 
-### 4.11 CoreDNS in-cluster wildcard still answers `192.168.1.160` — **needs confirming**
+### 4.11 ~~CoreDNS in-cluster wildcard answers `192.168.1.160`~~ — **FIXED 08-15, tested from a pod**
+
+**Resolution.** The wildcard now answers `192.168.1.201`, matching the LAN record, and the
+per-hostname `lab-apps-internal.server` override was removed as redundant. Verified from a
+pod before changing anything, forcing the address with `curl --resolve` so DNS was out of
+the picture and only the network path was under test:
+
+    immich.apps.lab.home.arpa   → 192.168.1.201 → 200
+    authelia.apps.lab.home.arpa → 192.168.1.201 → 200
+
+authelia was tested specifically because it is the one host with a documented failure on
+this path, and the override was masking it.
+
+**Residual risk, small:** the test pod ran on one node. `.201` is ARP-announced by a single
+kube-vip holder, so in principle a pod on a different node could take a different path. If
+in-cluster ingress resolution misbehaves after this change, that is the first thing to
+check — repeat the `curl --resolve` test with the pod pinned to each node in turn.
+Rollback is `git revert` plus one cache TTL (30 s).
+
+The original finding, and the reasoning behind the choice, is kept below: the CNAME dead
+end in particular is recorded so nobody spends an afternoon rediscovering it.
+
+---
+
+#### Original finding — 2026-08-15
 `gitops/workloads/coredns-custom/configmap.yaml` — the `apps.lab.home.arpa:53` template
-answers every in-cluster query for `*.apps.lab.home.arpa` with `192.168.1.160`, and the
-file's own comment calls that "Traefik ingress VIP". It is not: `.160` is the H4's node
-IP. The LAN wildcard moved to `.201` (`ingress_vip`, `hosts.yml:48`) on 2026-07-27; the
-in-cluster zone did not move with it.
+answers every in-cluster query for `*.apps.lab.home.arpa` with `192.168.1.160`. The LAN
+wildcard moved to `.201` (`ingress_vip`, `hosts.yml:48`) on 2026-07-27; the in-cluster
+zone did not move with it.
 
-Two questions, in order:
+`kubectl get cm -n kube-system coredns-custom -o yaml` on 08-15 matches git byte for byte
+— no drift, so the committed file is the whole story.
 
-1. **Is it deliberate?** Pods reaching a node IP rather than the service VIP may be
-   intentional — `docs/sso-authelia-minio-troubleshooting.md:65-102` documents a
-   hairpin-NAT failure on the pod→VIP path, fixed with `hostAliases` to Traefik's
-   ClusterIP. If `.160` is a workaround for the same problem, it needs to say so in the
-   file, because right now it reads as an oversight.
-2. **If not deliberate, it is an HA gap.** In-cluster ingress resolution is pinned to one
-   node. Lose the H4 and pods stop resolving `*.apps` names even though the VIP has
-   floated to a surviving control-plane node — the exact single-A-record failure the
-   `.201` change was made to eliminate, still live one layer down.
+**Is it deliberate? Partly, and the part that is doesn't scale.** The hairpin workaround
+is real: `lab-apps-internal.server` overrides exactly one hostname, `authelia`, to
+Traefik's ClusterIP `10.43.10.71`. Line 24 of the file states the design outright — *"Add
+entries here for each ingress hostname pods need to reach internally."* It is a manual
+allowlist with one entry, added because authelia broke loudly during the SSO session
+(`docs/sso-authelia-minio-troubleshooting.md:65-102`). Every other ingress name still
+resolves to `.160`.
+
+**The comment is also wrong.** Line 2 calls `192.168.1.160` the "Traefik ingress VIP". It
+is the H4's node IP. The ingress VIP is `.201`. Fix this whichever way the decision goes.
+
+**The HA gap is real.** In-cluster resolution for every ingress name except `authelia` is
+pinned to one node — and that node is the H4, which also carries the NAS. Lose it and
+kube-vip floats `.201` to a surviving control-plane node, LAN clients keep working, and
+in-cluster pods stop resolving `*.apps` names. That is the single-A-record failure the
+`.201` change eliminated, still live one layer down.
+
+#### The three candidate targets
+
+| Target | Hardcoded IP | Confidence | Note |
+|---|---|---|---|
+| `192.168.1.201` (service VIP) | No | **Tested 08-15 → 200. CHOSEN.** | Smallest change. One value for LAN and cluster. |
+| `10.43.10.71` (Traefik ClusterIP) | Yes | High | Already proven by the authelia override. Rejected: hardcodes a ClusterIP that changes if the Traefik Service is recreated. |
+| `rewrite` in a `*.override` key | No | Medium | Cleanest, but unverified. Not needed now — keep in reserve if `.201` ever regresses. |
+
+**Do not assume `.201` fails.** An earlier draft of this entry implied it would, reasoning
+from the documented hairpin failure. That reasoning does not carry: the hairpin note was
+written against `.160`, which was then the H4's *node* IP — pod → node IP → out the
+physical NIC → back in, the path that breaks. `.201` is a kube-vip **service** VIP, so
+kube-proxy holds iptables rules for it and pod→`.201` should DNAT straight to the Traefik
+pod without leaving the node. Different path, unknown outcome, cheap to test.
+
+#### The test that decides it
+
+`require-resource-limits` excludes the `default` namespace, so only an explicit image tag
+is needed to clear admission (`disallow-latest-tag` rejects untagged images).
+
+```bash
+kubectl run dnstest --rm -it --image=nicolaka/netshoot:<pinned-tag> --restart=Never -- curl -sk -o /dev/null -w "%{http_code}\n" --resolve immich.apps.lab.home.arpa:443:192.168.1.201 https://immich.apps.lab.home.arpa
+```
+
+Repeat with `10.43.10.71`. TLS is unaffected either way — SNI still carries the hostname
+and the cert is `*.apps.lab.home.arpa`, which is why the authelia override works today.
+
+- **`.201` returns 200** → change the wildcard to `.201`, delete `lab-apps-internal.server`.
+  One line, no new plugin behaviour, and in-cluster DNS finally agrees with the LAN record.
+- **`.201` hangs, ClusterIP returns 200** → the hairpin problem generalises to the service
+  VIP. Use `10.43.10.71` and accept the hardcoded value, noting that a recreated Traefik
+  Service changes the ClusterIP and would break in-cluster resolution for everything at
+  once. Consider pinning `spec.clusterIP` via `HelmChartConfig` if so.
+
+#### Why the CNAME form was rejected — checked 08-15, do not retry
+
+The tempting fix is a CNAME to `traefik.kube-system.svc.cluster.local`, avoiding any
+literal IP. **It does not work in this Corefile**, for three reasons:
+
+1. `upstream` no longer exists in the *template* plugin syntax; coredns/coredns#2436
+   defaulted it to self and made arguments an error.
+2. "Resolve against itself" means the plugin chain **in that server block**. The plugin
+   README's own *Fabricate a CNAME* example only returns the A record because its Corefile
+   has `forward . 8.8.8.8` in the same block.
+3. `apps.lab.home.arpa:53` contains `template` and `cache` and nothing else. No `forward`,
+   no `kubernetes` plugin — nothing that can resolve `cluster.local`.
+
+Result: a bare CNAME with no A record, leaving the pod's stub resolver to chase it. glibc
+generally will; musl (Alpine images) is less dependable. coredns/coredns#2600 is someone
+hitting exactly this.
+
+#### The third option, if a literal IP is unacceptable
+
+k3s's `coredns-custom` supports **`*.override`** keys, which are imported into the main
+`.:53` server block — the one that *does* have the `kubernetes` plugin. Only `*.server`
+keys create separate blocks, which is why the current config is stuck in a block with no
+resolver. Deleting both `.server` keys and adding:
+
+```yaml
+lab-apps.override: |
+  rewrite stop {
+      name regex (.*)\.apps\.lab\.home\.arpa traefik.kube-system.svc.cluster.local
+      answer auto
+  }
+```
+
+lets those queries fall through to `.:53`, where the rewrite maps them to the Traefik
+Service, the `kubernetes` plugin resolves it, and `answer auto` maps the name back. No IP
+anywhere. **Unverified:** `answer auto` under a many-to-one regex — every ingress name
+collapses to one target and no documented example covers that shape. Needs a live trial,
+not a merge.
+
+#### Fix alongside, not before
+
+Three documents accurately describe the current config and must be corrected *with* the
+ConfigMap, not ahead of it: `docs/ARCHITECTURE.md:149`, `docs/services.md:14`,
+`docs/OVERVIEW.md:26`. `tofu/dns/main.tf:8` carries the same value but cannot be applied
+(§4.5).
+
+#### Adjacent finding — in-cluster forwarders skip both Pi-holes
+
+`lab.server` forwards `lab.home.arpa` to `192.168.1.184` and `192.168.1.217` — the two OPi
+Zero 2W dnsmasq boxes, the *tertiary* and *secondary* fallbacks. Neither Pi-hole is listed,
+though line 6 of the file claims "Pi-hole + dnsmasq secondaries". So in-cluster resolution
+of every `*.lab.home.arpa` name depends entirely on the two weakest boards in the fleet
+while `.148` and `.116` sit unused. Possibly deliberate — keeping blocklists off cluster
+traffic is a defensible reason — but undocumented, and the comment says the opposite of
+what the config does. Decide, then make the comment true.
 
 Found 2026-08-15 while fixing the documentation half of §6.1. **Flagged, not changed** —
-this is a cluster change and needs verifying against the running ConfigMap
-(`kubectl get cm -n kube-system coredns-custom -o yaml`) before a PR.
-
-Three documents accurately describe the current config and should be corrected *with* it,
-not before: `docs/ARCHITECTURE.md:146`, `docs/services.md:14`, `docs/OVERVIEW.md:26`.
-`tofu/dns/main.tf:8` carries the same value but cannot be applied (§4.5).
+this is a cluster change and DNS is the lab's most load-bearing dependency. Rollback is
+`git revert` plus one cache TTL (30s).
 
 ---
 

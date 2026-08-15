@@ -5,7 +5,8 @@
 #
 # Architecture:
 #   api.lab.home.arpa     → 192.168.1.200  (kube-vip VIP — k8s API server)
-#   *.apps.lab.home.arpa  → 192.168.1.160  (Traefik ingress — all workload ingresses)
+#   *.apps.lab.home.arpa  → 192.168.1.201  (kube-vip service VIP for Traefik — all
+#                                            workload ingresses; matches the resource below)
 #
 # Pi-hole wildcard DNS: the pihole provider supports individual CNAME records.
 # The *.apps wildcard is handled by Pi-hole's "Local DNS → CNAME Records" using
