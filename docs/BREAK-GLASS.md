@@ -56,6 +56,43 @@ restart without anyone typing anything. Convenient, and it means:
 
       sudo find /etc /root /home -name 'unseal*' 2>/dev/null
 
+## After printing — cleanup
+
+Printing this document puts every credential in the lab into a CUPS spool file, a
+pandoc temp directory, and onto paper. On 2026-08-15 a first attempt left **twenty**
+rendered copies in `/var/spool/cups/` for fifteen hours. `scripts/print-offline-envelope.sh`
+now handles the machine side; the rest is yours.
+
+### Automated by the script
+
+- Renders into `/dev/shm` (tmpfs — never touches persistent storage) and shreds it
+  on any exit path, including Ctrl-C and errors
+- Waits for the print queue to drain, **then** purges the CUPS spool, job cache and
+  `tmp/` — purging before the job prints would cancel it
+- Truncates the CUPS logs
+
+### Manual — the script cannot do these
+
+1. **Destroy every draft.** Cross-cut shred or burn. Strip-cut can be reassembled.
+   Iterating on the layout produces a stack of complete credential dumps, and this
+   is the copy that needs no root access to read.
+2. **Power-cycle the printer.** A Brother HL-5100DN buffers jobs in RAM; a power
+   cycle clears it. Check its web UI for secure-print or reprint storage while you
+   are there — if the model has a disk, that is a longer conversation.
+3. **Store the keeper copy off the property.** An envelope in the same building as
+   the H4 solves the credential problem and not the fire.
+4. **Tick the currency table below** for anything that has rotated since the last
+   printing.
+
+### Residual risk worth knowing
+
+`rm` and `shred` do not reliably destroy data on flash storage — wear levelling
+means the original blocks may persist regardless. `/var/spool/cups` lives on the
+H4's eMMC. Removing the files is still correct and worth doing; just do not mistake
+it for erasure. The `/dev/shm` rendering path avoids the problem entirely by never
+writing to disk in the first place, which is why it is preferred over cleaning up
+afterwards.
+
 ## Currency
 
 A stale envelope is worse than none, because you will trust it. Anything that
