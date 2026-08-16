@@ -121,6 +121,23 @@
           vault policy read "$p" > ansible/files/vault-policies/"$p".hcl; done
         quiet: true
 
+    # copy does not create a parent directory when dest is a file path, so
+    # without this the staging step fails with "Destination directory
+    # /tmp/vault-policies does not exist". It only ever worked because the
+    # directory survived from a previous run — and /tmp is cleared on reboot, so
+    # the first run after any reboot failed. Observed 2026-08-16.
+    #
+    # --check does not catch it: copy in check mode never tests the parent, so
+    # the dry run reported success against a host where the real run could not
+    # work. changed_when: false for the same reason as the staging task below —
+    # a temp artifact is not an outcome.
+    - name: Ensure the staging directory exists
+      ansible.builtin.file:
+        path: "{{ policy_tmp }}"
+        state: directory
+        mode: "0700"
+      changed_when: false
+
     - name: Stage policy files on the host
       ansible.builtin.copy:
         src: "{{ item.path }}"

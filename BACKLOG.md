@@ -122,10 +122,22 @@ the wrong order.
 1. ~~**Fill items 2 and 3 → run Drill 1**~~ — **DONE 2026-08-16, passed.** Items 2 and 3
    are proven: they opened the offsite repo from a machine with nothing else on it. See
    §1.1.
-2. **Rekey Vault** → `docs/OPS.md`, "Rekey Vault unseal shares". ← *next*
-3. **Fill and print the full envelope** with the fresh shares. Printing before the rekey
-   makes it stale the moment you rekey.
-4. **Drill 2.**
+2. ~~**Rekey Vault**~~ — **DONE 2026-08-16.** Five new shares, all five written to
+   `/etc/vault.d/unseal-keys`, verified by `systemctl restart vault` → sealed →
+   `vault-unseal` → unsealed. Pre-rekey snapshot `vault-snap-20260816-155152` kept as the
+   undo point; post-rekey `vault-snap-20260816-181204` taken immediately so the new shares
+   have something to open. Needed a new `rekey` policy and a short-lived token — see
+   §1.11 — `generate-root` is authenticated since Vault 2.0.0 and needs a config change
+   first, which is why a policy was the faster route here.
+3. **Decide the break-glass auth method (§1.11) *before* printing** ← *next*. Without it
+   the envelope unseals Vault and cannot administer it. Printing twice means two full
+   credential dumps through the CUPS spool, so settle this first.
+4. **Fill and print the full envelope**: five new shares, the break-glass credential, and
+   the five *old* shares labelled *"valid only for Vault snapshots taken before
+   2026-08-16 — destroy after 2026-11-16"*. Pre-rekey snapshots persist for 30 days
+   locally and ~3 months in R2 (`--keep-monthly 3`), and only the old shares open them.
+5. **Delete the plaintext copy of the old shares** once they are in the envelope.
+6. **Drill 2.**
 
 #### The unseal-share question is resolved — by rekeying, not by searching
 
@@ -395,6 +407,67 @@ and three days of seeding).
       is a different decision from $3 — and the point at which Backblaze B2 (~$0.006)
       or a rotating external disk deserves a second look.
 
+### 1.11 The envelope does not tell you how to regain Vault admin — **found 08-16, small**
+`docs/BREAK-GLASS.md` item 5, `docs/RUNBOOK.md:175-188`
+
+**An earlier version of this entry claimed the envelope could not recover administrative
+control of Vault at all. That was wrong, and the repo already said so.** It is recorded
+here rather than deleted because the mistake is instructive: the claim was written after
+grepping for auth methods and for `token-admin`, but without grepping the docs for
+`generate-root` — asserting an absence without checking. The exact failure §6 exists for.
+
+What is true:
+
+`vault operator generate-root -init` returns `403 permission denied`, tested properly with
+`VAULT_TOKEN` unset and `~/.vault-token` moved aside. **Vault 2.0.0 made `sys/generate-root`
+and `sys/rekey` authenticated by default** — the fix for HCSEC-2026-08 / CVE-2026-5807,
+where unauthenticated callers could spam attempt/cancel with bogus fragments and block
+legitimate operations.
+
+**But the recovery path exists, is documented, and has been used.**
+`docs/RUNBOOK.md:175-188` ("Root token lost (Vault 2.x)") temporarily appends
+`enable_unauthenticated_access = ["generate-root"]` to `vault.hcl`, HUPs Vault, runs the
+ceremony with three unseal shares, then removes the line. `vault-policies.yml`'s header
+records this being performed on **2026-08-05** after the exposed root token was revoked.
+
+So the chain from the envelope is: unseal with item 5 → root shell on the rpi5 → temporary
+config → generate-root → full admin. It works. It just needs host root as well as the
+envelope, which in a rebuild you would have anyway.
+
+**And it was documented twice.** `TODO-2026-08-03.md:727-814` carries a section titled
+*"Why `generate-root` was blocked — and the actual fix"*: the identical 403 with no token,
+the `enable_unauthenticated_access` remedy, and at `:760` the full list of families —
+**`"rekey"`, `"generate-root"`, `"generate-operation-token"`**. The `rekey` family is
+precisely what blocked the 08-16 ceremony for an hour before it was solved a different way.
+
+That is the sharpest argument yet for §7 of `docs/DOC-CONSOLIDATION-PLAN.md`. The knowledge
+was not missing; it was in a dated session note that is now frozen and unread. Freezing a
+file removes it from the maintenance surface *and* from the places anyone looks. Durable
+operational content has to be promoted into the live docs before its source is frozen —
+`RUNBOOK.md` got the `generate-root` half, and nothing got the `rekey` half.
+
+The remaining gaps are small but real:
+
+- **The envelope does not mention it.** Item 5 hands you five shares with no pointer to
+  `RUNBOOK.md`, so at 2am on paper you would not know the config step exists. Add a
+  "Regaining admin access" note to `BREAK-GLASS.md` — the procedure, not a credential.
+- **`vault.hcl` is Ansible-managed** (`vault.hcl.j2`). A hand-edit is correct for a
+  ceremony but will be reverted by the next `vault.yml` run, and a *forgotten* line would
+  be silently removed — which is fine here, but worth knowing rather than discovering.
+- **The HUP reload is unverified for this option.** It worked on 08-05, so treat that as
+  evidence rather than proof; if it ever does not, restart the service.
+- `token-admin` still expires **2026-09-06** (§5). Not fatal given the above, but it is
+  the credential everything routine depends on.
+
+Optional, not required: a `break-glass` userpass credential carrying `admin`, password in
+the envelope. It removes the config-edit-under-pressure step. Weigh against one more
+standing credential that grants full Vault access. **Not** recommended is making
+`enable_unauthenticated_access` permanent — Vault here is plaintext HTTP on `0.0.0.0:8200`
+(§2.6) with no host firewall (§2.9), so that would leave the DoS vector open permanently
+rather than for the length of a ceremony.
+
+Related: §2.11 (cannot seal), §2.12 (version lag), §4.6 (`vault-restore.yml` broken).
+
 ### 1.4 `storage.yml` can `mkfs` a cold mirror by unstable device name
 `docs/REVIEW-2026-07-24.md:291` (H15)
 
@@ -504,6 +577,59 @@ If the trade stops being acceptable: scope `sys/policies/acl/*` to read/list, dr
 `kubectl` appears three times, all in `allow` — every mutation unguarded. Denies
 `systemctl stop nfs-server` while Ubuntu's unit is `nfs-kernel-server`, and no
 `sudo`-prefixed variants of any deny rule.
+
+### 2.11 Vault cannot be sealed deliberately — **found 08-16, decide**
+`ansible/files/vault-policies/admin.hcl`
+
+`vault operator seal` returns `403 permission denied`. `admin.hcl` grants no `sys/seal`
+path, and the root token was revoked 08-07, so **no credential in this lab can seal
+Vault**. Found while writing the rekey verification step in `docs/OPS.md`, which
+originally prescribed exactly that and could never have worked.
+
+"Something is wrong, lock the secrets" is a legitimate break-glass action and is
+currently unavailable.
+
+- **Add `path "sys/seal" { capabilities = ["update","sudo"] }` to `admin.hcl`** — simple,
+  but it turns a leaked admin token into a denial-of-service against every ExternalSecret
+  in the cluster.
+- ~~Leave it and use `vault operator generate-root`, which authorises from unseal shares
+  rather than a token.~~ **This escape does not exist.** Tested 08-16 with no token and no
+  `~/.vault-token`: `generate-root -init` returns 403 as well. See §1.11 — it is the same
+  root cause and a much larger problem than sealing.
+- **A dedicated policy plus a short-lived token**, as done for `rekey` on 08-16
+  (`ansible/files/vault-policies/rekey.hcl`). Least privilege, auditable, and the pattern
+  is now proven.
+
+The third option is the one that worked for rekey and is the obvious template here.
+Recorded rather than done, because "can seal Vault" deserves a deliberate decision.
+
+Not blocking: rekey verification uses `systemctl restart vault` instead, since Vault
+always starts sealed and that needs no token at all.
+
+### 2.12 Vault is seven weeks behind its installed binary — **found 08-16**
+`ansible/playbooks/update-non-apt.yml:213-221,248`, `docs/UPDATES.md` §5
+
+Restarting Vault during the 08-16 rekey moved it from **2.0.3 (built 2026-06-17)** to
+**2.0.4 (built 2026-08-03)**. The newer package had been installed by the apt tier and the
+service had never been restarted into it.
+
+`update-non-apt.yml` starts Vault only when it is *inactive*
+(`when: vault_svc.status.ActiveState != "active"`). A running Vault is never restarted, so
+the running version drifts behind the installed one indefinitely — on a secrets manager.
+
+**And the play reports the wrong number.** Line 248 prints
+`Version: {{ vault_version.stdout }}`, captured from `vault version` — the **CLI binary**,
+not the server. It would have reported 2.0.4 while the server ran 2.0.3. Not a missing
+check: a check that asserts the opposite of the truth.
+
+Fix: compare the server version (`vault status -format=json`, `.version`) against the
+binary (`vault version`) and flag a pending restart when they differ. Report rather than
+auto-restart — `vault-unseal.service` makes a restart safe, but it should be a decision.
+`docs/UPDATES.md` §5 documents the seal risk *after* a restart and should also cover the
+risk of never restarting.
+
+Same family as the CoreDNS ConfigMap in §4.11: the artefact updates, the process does not,
+and nothing says so.
 
 ---
 

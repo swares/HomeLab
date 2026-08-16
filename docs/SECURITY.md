@@ -42,9 +42,12 @@ can be used and cannot be stored inside it:
 > `vault-unseal.sh` reads only the first three. See `BACKLOG.md` §2.5.
 
 > **There is deliberately no Vault root token.** It was revoked 2026-08-07 and this table
-> used to list it as a credential to safeguard. Generate a short-lived one with
-> `vault operator generate-root` if a break-glass admin action ever needs it. See
-> `BACKLOG.md` §6.3.
+> used to list it as a credential to safeguard. Generate a short-lived one when a
+> break-glass admin action needs it — but note that since Vault 2.0.0 `sys/generate-root`
+> is authenticated by default (HCSEC-2026-08), so the ceremony needs a temporary
+> `enable_unauthenticated_access` line in `vault.hcl` first. Full procedure in
+> [`RUNBOOK.md`](RUNBOOK.md) → "Root token lost (Vault 2.x)"; last performed 2026-08-05.
+> See `BACKLOG.md` §6.3 and §1.11.
 
 ## Rotate the credentials from the hardware map
 
