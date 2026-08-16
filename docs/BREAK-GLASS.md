@@ -27,6 +27,7 @@ file inside the repo.
 | 3 | R2 account ID, access key ID, secret access key | `secret/lab/cloudflare-r2` in Vault, or `/etc/restic/cloud.env` | you cannot reach the R2 buckets at all |
 | 4 | k3s server token | `/var/lib/rancher/k3s/server/node-token` on the H4 | etcd snapshots cannot be restored onto new hardware — k3s derives the datastore key from it |
 | 5 | Vault unseal shares — **print all five**; threshold is 3 | `/etc/vault.d/unseal-keys` on the **RPi5** (`192.168.1.128`), `root:root 0400`, one key per line | Vault stays sealed; every ExternalSecret stays empty |
+| 5b | **Superseded** unseal shares — **all five**, labelled with the date they were replaced and a destroy-after date | Wherever the previous set was recorded. After a rekey they exist nowhere else — the live file has been overwritten | Vault snapshots taken *before* the rekey cannot be opened. See below |
 | 6 | Ansible vault password | `ansible/.vault_pass` | encrypted group_vars are unreadable, so no playbook that touches them runs |
 
 **Not a secret, but write it down anyway** — you will not have the repo:
@@ -61,6 +62,33 @@ which is why Vault comes back unsealed after a restart without anyone typing any
 - **Do not add comments or labels to the unseal file.** `vault-unseal.sh` skips blank
   lines only; any other non-key line is passed to `vault operator unseal`, fails, and
   aborts the unit under `set -euo pipefail` — Vault stays sealed on boot. Keys only.
+
+### Item 5b — why superseded shares stay in the envelope
+
+**A rekey does not re-encrypt snapshots already taken.** A Vault raft snapshot carries the
+barrier keyring as it was, so a pre-rekey snapshot is opened by the **old** shares and
+nothing else. Those snapshots persist for **30 days** on `/mnt/cold-8t/vault-snapshots`
+(`backup-vault.yml:18`) and up to **~3 months** in the R2 `homelab-backup` repo
+(`--keep-monthly 3`). Discard the old shares and you discard every restore point older
+than the rekey.
+
+So the envelope carries two labelled sets. Keep **all five** of the superseded set, not
+three: the threshold is 3, and a set of exactly 3 has no tolerance for one mistranscribed
+character.
+
+**Capture the outgoing shares before you overwrite the file.** `sudo cat
+/etc/vault.d/unseal-keys` shows only what is currently live — after the rewrite, shares
+that existed nowhere else are gone. If part of the outgoing set lived somewhere separate
+(a workstation file, a second envelope), collect *that* part first; the live file alone
+may hold fewer than the threshold.
+
+Record them as:
+
+    OLD — replaced 2026-08-16. Opens Vault snapshots taken before that date only.
+    Destroy after 2026-11-16, once the last pre-rekey monthly has aged out of R2.
+
+Diary the destroy date. A superseded set with no expiry becomes a permanent second copy of
+full Vault access, which is the opposite of what the rekey was for.
 
       # if you still want to check for strays before rekeying:
       sudo find /etc /root /home -name 'unseal*' 2>/dev/null
@@ -108,15 +136,28 @@ A stale envelope is worse than none, because you will trust it. Anything that
 rotates a credential in the table above **must** be followed by updating the
 offline copy in the same sitting.
 
-Checkboxes are `[  ]` rather than ☐ deliberately — U+2610 is absent from Latin
-Modern, so xelatex drops it and the column you are meant to tick prints blank.
-Keep this table to ASCII.
+Checkboxes are `[  ]` rather than a ballot-box glyph (U+2610) deliberately — that
+character is absent from Latin Modern, so xelatex drops it and the column you are
+meant to tick prints blank. Keep this table to ASCII.
+
+The glyph is named here rather than shown, for the same reason. Until 2026-08-16 this
+paragraph contained a literal U+2610: the warning against the character was written
+using the character, so every render logged a `Missing character` warning for it and
+the printed sentence read "rather than&nbsp;&nbsp;deliberately", with a hole where the
+example should have been. An example you cannot see in the output it describes is not
+an example.
+
+**Do not quote the warning text verbatim either.** The first attempt at this paragraph
+reintroduced U+2610 inside a code span while explaining why not to use it. Refer to the
+codepoint; never paste the glyph.
 
 | Date | What changed | Envelope updated? |
 |------|--------------|-------------------|
 | 2026-08-07 | restic repository password rotated (#1) | `[  ]` |
 | 2026-08-07 | Vault root token revoked — item 5 no longer includes one | `[  ]` |
 | 2026-08-07 | offsite repo `homelab-nas` created, reusing the R2 restic password (#2) | `[  ]` |
+| 2026-08-16 | Vault unseal shares **rekeyed** — all five of item 5 are new | `[  ]` |
+| 2026-08-16 | superseded shares become item 5b — destroy after 2026-11-16 | `[  ]` |
 
 ## The drill
 

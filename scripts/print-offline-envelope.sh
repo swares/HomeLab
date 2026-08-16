@@ -118,8 +118,35 @@ OFFSITE_REPO=${CRED[OS_ENV_RESTIC_REPOSITORY_OFFSITE]:-UNKNOWN}
 # Account ID is a substring of either URL — extract rather than hardcode.
 R2_ID=$(sed -E 's#^s3:https://([^.]+)\..*#\1#' <<<"$CLOUD_REPO")
 
-readarray -t UNSEAL < <(ssh "$VAULT_HOST" "sudo cat $UNSEAL_FILE")
-[ "${#UNSEAL[@]}" -ge 3 ] || { echo "FATAL: expected >=3 unseal keys, got ${#UNSEAL[@]}" >&2; exit 1; }
+# Every share in the file, not the first three. The envelope used to carry exactly
+# the threshold, which left no tolerance for one mistranscribed character on paper
+# — and after the 2026-08-16 rekey the file holds all five, so the shares beyond
+# the third existed only there. Blank lines are dropped, matching vault-unseal.sh,
+# which skips them and would choke on anything else.
+readarray -t UNSEAL_RAW < <(ssh "$VAULT_HOST" "sudo cat $UNSEAL_FILE")
+UNSEAL=()
+for k in "${UNSEAL_RAW[@]}"; do
+  k=${k//[$'\r']/}
+  [ -n "${k// /}" ] && UNSEAL+=("$k")
+done
+unset UNSEAL_RAW
+
+# Below the threshold the envelope cannot unseal anything, so that is fatal. Above
+# it, print what exists and say how many — a short set is a decision to record on
+# the page, not a reason to refuse to print.
+[ "${#UNSEAL[@]}" -ge 3 ] || {
+  echo "FATAL: need >=3 unseal keys to be useful (threshold is 3), got ${#UNSEAL[@]}" >&2
+  echo "       check $UNSEAL_FILE on $VAULT_HOST" >&2
+  exit 1
+}
+[ "${#UNSEAL[@]}" -ge 5 ] || \
+  echo "NOTE: only ${#UNSEAL[@]} unseal shares in $UNSEAL_FILE (expected 5)" >&2
+
+UNSEAL_ROWS=""
+for i in "${!UNSEAL[@]}"; do
+  UNSEAL_ROWS+="| Vault unseal share $((i + 1)) of ${#UNSEAL[@]} (#5) | \`${UNSEAL[$i]}\` |"$'\n'
+done
+UNSEAL_ROWS=${UNSEAL_ROWS%$'\n'}
 
 # The k3s token is ~100 chars and overflows the page; split it across two rows.
 tok=${CRED[RANCHER_K3S_TOKEN]}
@@ -146,7 +173,8 @@ runs off the page.
 | 2  | R2 restic password       | **both** R2 repos are undecryptable — they share one password |
 | 3  | R2 account ID + API keys | you cannot reach the R2 buckets at all |
 | 4  | k3s server token         | etcd snapshots are unrestorable on new hardware; k3s derives the datastore key from it |
-| 5  | Vault unseal shares      | Vault stays sealed, so every ExternalSecret stays empty |
+| 5  | Vault unseal shares      | Vault stays sealed, so every ExternalSecret stays empty. All ${#UNSEAL[@]} are below; any 3 will unseal |
+| 5b | Superseded unseal shares | pre-rekey Vault snapshots cannot be opened. **Not printed — write them on this page by hand** |
 | 6  | Ansible vault password   | encrypted group_vars are unreadable, so those playbooks will not run |
 
 | What | Value |
@@ -158,12 +186,25 @@ runs off the page.
 | AWS_SECRET_ACCESS_KEY (#3) | \`${CRED[RC_ENV_AWS_SECRET_ACCESS_KEY]:-MISSING}\` |
 | k3s server token, part 1 of 2 (#4) | \`${TOK1}\` |
 | k3s server token, part 2 of 2 (#4) | \`${TOK2}\` |
-| Vault unseal share 1 (#5) | \`${UNSEAL[0]}\` |
-| Vault unseal share 2 (#5) | \`${UNSEAL[1]}\` |
-| Vault unseal share 3 (#5) | \`${UNSEAL[2]}\` |
+${UNSEAL_ROWS}
 | Ansible vault password (#6) | \`${CRED[ANSIBLE_VAULT_PASS]}\` |
 | MinIO root user | \`${CRED[RC_ENV_MINIO_ROOT_USER]:-MISSING}\` |
 | MinIO root password | \`${CRED[RC_ENV_MINIO_ROOT_PASSWORD]:-MISSING}\` |
+
+## Superseded unseal shares (#5b) — fill in by hand
+
+A rekey does not re-encrypt snapshots already taken, so Vault snapshots from before
+the last rekey are opened by the **previous** shares and nothing else. They persist
+30 days on the cold tier and ~3 months in R2. The live file no longer holds them, so
+this script cannot read them — copy them here from the outgoing set.
+
+| # | Superseded share | Replaced on | Destroy after |
+|:--|:-----------------|:------------|:--------------|
+| 1 |                  |             |               |
+| 2 |                  |             |               |
+| 3 |                  |             |               |
+| 4 |                  |             |               |
+| 5 |                  |             |               |
 
 ## Not secret, but you will not have the repo
 
