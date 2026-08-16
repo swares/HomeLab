@@ -32,7 +32,32 @@ copy reported `tools/` as absent when `tools/sdcard/` plainly exists on the H4. 
 
 ## 1. Data loss — the things that end the lab
 
-### 1.1 No restore has ever been performed
+### 1.1 ~~No restore has ever been performed~~ — **DRILL 1 PASSED 2026-08-16**
+
+The first restore ever performed in this lab. `immich-2026-08-15.sql.gz` (16,662,251 B)
+pulled from snapshot `23056e8d` in the R2 `homelab-nas` repo, onto a throwaway VM on
+n150-2 with no lab config, using **only envelope items 2 and 3**. Byte-identical to the
+H4 original (`sha256 e03bea7d…3d4c`). **9m23s** end to end, of which the restore was 3s.
+Full record and criteria in `docs/BREAK-GLASS.md` → Results.
+
+**The backup chain is no longer a belief.** Three repos, retention, verification,
+alerting and an offsite tier — one leg of which has now demonstrably restored something.
+
+Still open, and deliberately not claimed:
+
+- **Envelope items 1, 4, 5 and 6 are untested.** The local restic password, k3s server
+  token, Vault unseal shares and Ansible vault password were never used. That is Drill 2,
+  which is the harder half and carries its own known blocker (§4.6, `vault-restore.yml`
+  does not work as written).
+- **The timing does not extrapolate.** 3 seconds moved 15.9 MiB. Real content is ~250 MiB
+  today and ~1.5 TB once Immich is populated (§1.10).
+- **§1.9's `cold-sec` re-init is now unblocked** — it was gated on this.
+
+*Original entry below, retained for the reasoning.*
+
+---
+
+#### Original finding
 *(Drill procedure in `docs/BREAK-GLASS.md`, **planned in full and corrected 2026-08-15**.
 Bounded, read-only, from the offsite R2 repo onto `n150-2`, using only the envelope.
 R2 charges no egress, so it costs time and nothing else.)*
@@ -94,8 +119,10 @@ and 3 only** (R2 restic password; R2 account ID and API keys), neither of which 
 Vault. Blocking the first restore this lab has ever performed on a Vault rekey would be
 the wrong order.
 
-1. **Fill items 2 and 3 → run Drill 1** (`docs/BREAK-GLASS.md`). Unblocked now.
-2. **Rekey Vault** → `docs/OPS.md`, "Rekey Vault unseal shares".
+1. ~~**Fill items 2 and 3 → run Drill 1**~~ — **DONE 2026-08-16, passed.** Items 2 and 3
+   are proven: they opened the offsite repo from a machine with nothing else on it. See
+   §1.1.
+2. **Rekey Vault** → `docs/OPS.md`, "Rekey Vault unseal shares". ← *next*
 3. **Fill and print the full envelope** with the fresh shares. Printing before the rekey
    makes it stale the moment you rekey.
 4. **Drill 2.**

@@ -120,8 +120,9 @@ Keep this table to ASCII.
 
 ## The drill
 
-An untested restore is a belief, not a backup. As of 2026-08-11 **no restore has
-ever been performed in this lab**.
+An untested restore is a belief, not a backup. **Drill 1 passed 2026-08-16** — the first
+restore ever performed in this lab; see Results below. **Drill 2 has never been run**, so
+cluster state, the Vault raft snapshots and envelope items 1, 4, 5 and 6 remain untested.
 
 The drill is only meaningful if it simulates the loss it exists for. That means:
 
@@ -313,4 +314,50 @@ worth more than a passed one nobody remembers.
 
 | Date | Drill | Restored | Duration | Outcome | Notes |
 |------|-------|----------|----------|---------|-------|
-| — | — | — | — | *no restore has ever been tested* | see `BACKLOG.md` §1.1 |
+| 2026-08-16 | 1 — offsite data restore | `immich-2026-08-15.sql.gz`, 16,662,251 B, from snapshot `23056e8d` in R2 `homelab-nas` | **9m23s** end to end (17:09:25Z→17:18:48Z); the `restic restore` itself was 3s | **PASS** — all five criteria | Details below |
+
+**Drill 1, 2026-08-16 — the first restore ever performed in this lab.**
+
+Setup: throwaway Ubuntu 24.04 VM (`drill-1`, 2 vCPU / 2 GB) on n150-2, libvirt `default`
+NAT network, restic from the distro. No lab config, no `/etc/restic`, no credentials
+beyond the envelope.
+
+Criteria:
+
+    size       16,662,251 bytes           not an empty restore
+    gunzip -t  OK                         archive intact
+    header     "PostgreSQL database dump" correct content, not valid-but-wrong
+    sha256     e03bea7d…3d4c              identical to the H4 original
+    envelope   items 2 and 3 only         nothing reached for outside it
+
+`repository d7ac04b8 opened` matches the chunker verification recorded in `BACKLOG.md`
+§1.3, confirming the right bucket — `homelab-nas`, not `homelab-backup`.
+
+**What this proves:** envelope items 2 and 3 are correct and sufficient to read the
+offsite repo from a machine with nothing else on it. R2 credentials, R2 restic password,
+repo URL — all good.
+
+**What it does not prove:** items 1, 4, 5 and 6 were never used. The local restic
+password, k3s server token, Vault unseal shares and Ansible vault password remain
+untested — that is Drill 2. Nor does the timing extrapolate: 3 seconds restored 15.9 MiB,
+and the repo's real content is ~250 MiB of dumps. Once Immich is populated (~1.5 TB
+planned) this number means nothing.
+
+**Nine minutes, three seconds of it restoring.** The rest was opening a repo for the
+first time, listing snapshots, and choosing a file. That is the honest 2am number.
+
+**Two faults found on the way, both now fixed:**
+
+- The procedure restored `--include /srv/nas/<a known file>`. `/srv/nas` is empty
+  (`BACKLOG.md` §1.10), so it would have restored zero bytes, exited 0, and been written
+  into this table as a pass. Corrected before the drill ran; the size assertion above
+  exists because of it.
+- `create-vm.yml` hardcoded `--network bridge=br0`. This LAN serves DHCP to reserved MACs
+  only, so the VM booted, applied its cloud-init identity, got no lease, never installed
+  `qemu-guest-agent`, and the play reported success while printing an empty IP. Now
+  defaults to the NAT network, with preflights and an IP lookup that can fail.
+
+**Honest note on isolation:** libvirt's `default` network masquerades outbound to the LAN
+as well as the internet, so the VM *could* have reached the H4. "Use only the envelope"
+held by discipline, not by enforcement. A restricted-forward network would make it
+structural.

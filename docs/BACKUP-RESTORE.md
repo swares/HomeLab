@@ -353,7 +353,8 @@ Record the date, duration, and anything surprising in the log below.
 
 | Date | What was tested | Result | Time taken | Notes |
 |---|---|---|---|---|
-| — | *no restore has ever been tested* | — | — | See §5 |
+| 2026-08-16 | Test 4 — decrypt and restore one R2 snapshot **using only the offline envelope**, on a throwaway VM, no Vault and no H4 | **PASS** | 9m23s (restore itself 3s) | `immich-2026-08-15.sql.gz`, 16,662,251 B, snapshot `23056e8d`, sha256 identical to the H4 original. Full record in [`BREAK-GLASS.md`](BREAK-GLASS.md) → Results |
+| — | Tests 1–3 (etcd into scratch, Vault raft into scratch, Postgres dump into a scratch DB and count rows) | *not yet tested* | — | Drill 2; blocked in part by `vault-restore.yml` (§4.6 in `BACKLOG.md`) |
 
 ---
 
