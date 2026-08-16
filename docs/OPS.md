@@ -481,10 +481,42 @@ cannot prove an old copy is gone — you can make it worthless.
 (3) of the *current* shares. New shares are printed in plaintext — run this in a session
 that is not being logged, and clear scrollback afterwards.
 
+> **You need a token, and `token-admin` is not enough.** Vault 2.0.0 made `sys/rekey` and
+> `sys/generate-root` authenticated by default (HCSEC-2026-08 / CVE-2026-5807 — an
+> unauthenticated caller could spam attempt/cancel and block real operations). `admin.hcl`
+> grants neither path, so `token-admin` gets `403 permission denied`, and so does an
+> anonymous call. `generate-root` is **not** an escape hatch — it 403s too. See
+> `BACKLOG.md` §1.11.
+>
+> The route that works is a dedicated policy and a short-lived token:
+>
+> ```bash
+> # ansible/files/vault-policies/rekey.hcl already exists:
+> #   path "sys/rekey/*" { capabilities = ["create","read","update","delete","sudo"] }
+> cd ~/lab/homelab/homelab/ansible
+> VAULT_TOKEN=<admin> ansible-playbook -i inventory/hosts.yml playbooks/vault-policies.yml --check --diff
+> VAULT_TOKEN=<admin> ansible-playbook -i inventory/hosts.yml playbooks/vault-policies.yml
+>
+> vault token create -orphan -policy=rekey -ttl=1h -display-name=rekey-ceremony
+> ```
+>
+> `admin` holds `auth/*` with `sudo`, so it can mint a token carrying a policy it does not
+> hold itself. `-orphan` because the 08-05 root revocation took its child tokens with it.
+
+**Take a snapshot first.** It is the undo point. If the new shares are lost between the
+rekey completing and being written down, Vault keeps running but seals permanently at the
+next restart — restoring this snapshot with the *old* shares is the only way back.
+
 ```bash
-ssh swares@192.168.1.128
+sudo systemctl start backup-vault.service
+ssh h4-core.lab.home.arpa 'ls -lt /mnt/cold-8t/vault-snapshots | head -3'
+```
+
+```bash
+export VAULT_TOKEN=<rekey-ceremony token>
 export VAULT_ADDR=http://127.0.0.1:8200
-vault status          # Initialized true, Sealed false
+vault status                            # Initialized true, Sealed false
+vault operator rekey -status            # Nonce n/a, Started false
 
 # 1. Start the rekey. Returns a nonce.
 vault operator rekey -init -key-shares=5 -key-threshold=3
@@ -492,6 +524,8 @@ vault operator rekey -init -key-shares=5 -key-threshold=3
 # 2. Submit 3 CURRENT shares, one command each, using the nonce from step 1.
 vault operator rekey -nonce=<nonce>     # prompts for a share; repeat 3x
 ```
+
+`vault operator rekey -cancel` aborts cleanly until the third share lands.
 
 The third submission prints the **new** shares. Write all five down before you do
 anything else — they are shown once.
@@ -526,21 +560,84 @@ If you changed `-key-threshold`, update `vault_unseal_threshold` in
 
 ### Verify — do not wait for a reboot to find out
 
-Seal and let the unit unseal it. Brief ESO interruption, worth it.
+Restart Vault so it comes back sealed, then let the unit unseal it from the new file.
+Brief ESO interruption, worth it.
+
+**Have the five new shares in front of you first.** If the file is wrong, Vault stays
+sealed and you recover with `vault operator unseal` ×3 by hand — but only if you can read
+them.
 
 ```bash
-vault operator seal
+sudo systemctl restart vault
+vault status                                              # Sealed true
 sudo systemctl start vault-unseal
 sudo systemctl status vault-unseal --no-pager | tail -5   # "unsealed successfully"
 vault status                                              # Sealed false
-kubectl get externalsecret -A                             # all SecretSynced
+kubectl get externalsecret -A                             # from the H4 — all SecretSynced
+```
+
+> **Not `vault operator seal`.** This recipe originally said to seal Vault directly.
+> **No credential in this lab can do that.** `ansible/files/vault-policies/admin.hcl`
+> grants no `sys/seal` path, and the root token was revoked 2026-08-07, so it returns
+> `403 permission denied` — confirmed 2026-08-16. Restarting the service achieves the
+> same thing, because Vault always starts sealed, and needs no token at all.
+>
+> If a deliberate seal is ever genuinely needed, mint a root token — but `generate-root`
+> is itself authenticated since Vault 2.0.0 and needs a temporary
+> `enable_unauthenticated_access` line in `vault.hcl`. See [`RUNBOOK.md`](RUNBOOK.md) →
+> "Root token lost (Vault 2.x)", and `BACKLOG.md` §1.11.
+
+### Immediately after: take a fresh snapshot
+
+**Rekeying does not re-encrypt snapshots already taken.** Until a post-rekey snapshot
+exists, every Vault snapshot you hold can only be opened with the *old* shares. Do not
+wait for the 02:30 timer.
+
+```bash
+sudo systemctl start backup-vault.service
+sudo systemctl status backup-vault.service --no-pager | tail -5
+ssh h4-core.lab.home.arpa 'ls -lt /mnt/cold-8t/vault-snapshots | head -3'
 ```
 
 ### Then
 
-1. Update the **offline envelope** with all five new shares — `docs/BREAK-GLASS.md` item 5.
-2. Tick the currency table in that file.
-3. Any older copy of the old shares is now worthless and needs no secure deletion.
+1. **Revoke the ceremony token.** Check what you are holding first — `vault token lookup`
+   should show `token-rekey-ceremony` — because running `-self` while `token-admin` is
+   loaded destroys the only credential that can administer Vault (§1.11).
+
+   ```bash
+   vault token lookup | grep -E 'display_name|policies'
+   vault token revoke -self
+   ```
+
+2. Update the **offline envelope** with all five new shares — `docs/BREAK-GLASS.md` item 5.
+3. **Keep the five old shares, labelled.** They are *not* worthless: pre-rekey Vault
+   snapshots need them, and those persist for 30 days on `/mnt/cold-8t/vault-snapshots`
+   and up to ~3 months in the R2 `homelab-backup` repo (`--keep-monthly 3`). Record them
+   in the envelope as *"OLD — valid only for Vault snapshots taken before <date>; destroy
+   after <date + 3 months>"*.
+4. Tick the currency table in `docs/BREAK-GLASS.md`.
+5. Delete any plaintext copy elsewhere — its contents now live in the envelope.
+
+### Recorded run — 2026-08-16
+
+Worked end to end, ~1 hour including working out the 403s. What actually happened, so the
+next run is faster:
+
+    pre-rekey snapshot   vault-snap-20260816-155152.snap   67,525 B
+    rekey                5 shares, threshold 3, via token-rekey-ceremony
+    unseal file          3 lines → 5
+    verification         systemctl restart vault → Sealed true
+                         systemctl start vault-unseal → Sealed false
+    post-rekey snapshot  vault-snap-20260816-181204.snap   69,898 B
+    ExternalSecrets      16/16 SecretSynced
+
+Two things surfaced only because the service was restarted:
+
+- Vault went **2.0.3 → 2.0.4**. The newer package had been installed weeks earlier and the
+  service never restarted into it (§2.12).
+- `sys/seal` is unavailable to every credential in the lab (§2.11), which is why
+  verification restarts the service instead of sealing.
 
 ---
 
