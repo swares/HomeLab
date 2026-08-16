@@ -6,6 +6,23 @@
 #     -l n150-1 \
 #     -e "vm_name=example-1 vm_ram_mb=4096 vm_vcpus=2 vm_disk_gb=20" \
 #     --vault-password-file .vault_pass --ask-become-pass
+#
+# NETWORKING — read this before overriding it.
+#
+# Defaults to the libvirt NAT network ('default'), which runs its own dnsmasq and
+# hands the VM an address without involving the LAN. Attach to a LAN bridge with
+#   -e vm_bridge=br0
+# but understand what that costs here: this lab addresses infra nodes by static or
+# DHCP-reserved IP (docs/STANDUP.md), so a router that only serves reservations
+# gives a freshly generated MAC nothing at all. Until 2026-08-16 this playbook
+# hardcoded bridge=br0, and on n150-2 that produced a VM which booted, applied its
+# cloud-init hostname and user, failed to get a lease, therefore never installed
+# qemu-guest-agent, therefore never answered `virsh domifaddr --source agent` — and
+# the play reported success. One missing lease, four symptoms, no error.
+#
+# Use a bridge when the VM needs to be reachable from the LAN and you have added a
+# reservation for it. Use the NAT default for throwaway VMs (e.g. the restore drill
+# in docs/BREAK-GLASS.md), which only need outbound access.
 
 - name: Create KVM VM from cloud image
   hosts: kvm_hosts
@@ -21,7 +38,13 @@
     vm_ram_mb: 4096
     vm_vcpus: 2
     vm_disk_gb: 20
-    vm_bridge: br0
+
+    # Network attachment. vm_network is a libvirt NAT network; vm_bridge, if set to
+    # a non-empty value, overrides it and attaches to that bridge instead.
+    vm_network: default
+    vm_bridge: ""
+    vm_net_arg: "{{ ('bridge=' ~ vm_bridge) if (vm_bridge | length > 0) else ('network=' ~ vm_network) }}"
+
     images_dir: /var/lib/libvirt/images
     base_image: "{{ images_dir }}/ubuntu-24.04-cloud.img"
     vm_disk: "{{ images_dir }}/{{ vm_name }}.qcow2"
@@ -57,10 +80,84 @@
         msg: "VM {{ vm_name }} already exists — delete it first with: virsh destroy {{ vm_name }} && virsh undefine {{ vm_name }} --remove-all-storage"
       when: vm_exists.rc == 0
 
+    # ---- Preflight -----------------------------------------------------------
+    # Both of these used to surface late and unhelpfully: a missing base image as a
+    # qemu-img "Could not open backing image" four tasks in, and an unusable network
+    # as ten minutes of IP retries followed by a successful-looking play.
+
+    - name: Preflight — base cloud image must be present
+      ansible.builtin.stat:
+        path: "{{ base_image }}"
+      register: base_img
+      check_mode: false
+
+    - name: Preflight — fail clearly if the base image is absent
+      ansible.builtin.fail:
+        msg: |
+          Base image {{ base_image }} is missing on {{ inventory_hostname }}.
+
+          This playbook has never downloaded it. It is an undocumented prerequisite
+          that happens to be satisfied on whichever host built a VM first, so it
+          only shows up the first time you target a new hypervisor.
+
+          Fetch and verify it (note the rename — base_image expects this filename):
+            cd /tmp
+            curl -fsSLO https://cloud-images.ubuntu.com/releases/noble/release/SHA256SUMS
+            curl -fsSLO https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-amd64.img
+            sha256sum -c --ignore-missing SHA256SUMS
+            sudo install -m 0644 -o root -g root \
+              ubuntu-24.04-server-cloudimg-amd64.img {{ base_image }}
+      when: not base_img.stat.exists
+
+    - name: Preflight — libvirt network must exist and be active
+      ansible.builtin.command: virsh net-info {{ vm_network }}
+      register: net_info
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: vm_bridge | length == 0
+
+    - name: Preflight — fail clearly if the libvirt network is unusable
+      ansible.builtin.fail:
+        msg: >-
+          libvirt network '{{ vm_network }}' is missing or inactive on
+          {{ inventory_hostname }}. Start it with:
+          virsh net-start {{ vm_network }} && virsh net-autostart {{ vm_network }}
+      # default() on both: when vm_bridge is set the net-info task is skipped, and a
+      # skipped task's registered var has no .rc/.stdout. Ansible evaluates every
+      # item in a `when` list rather than short-circuiting on the first false one,
+      # so an unguarded net_info.rc raises undefined instead of being ignored.
+      when:
+        - vm_bridge | length == 0
+        - (net_info.rc | default(1)) != 0 or not ((net_info.stdout | default('')) is search('Active:\s+yes'))
+
+    - name: Preflight — bridge must exist when one is requested
+      ansible.builtin.stat:
+        path: "/sys/class/net/{{ vm_bridge }}/bridge"
+      register: br_stat
+      check_mode: false
+      when: vm_bridge | length > 0
+
+    - name: Preflight — fail clearly if the bridge is absent
+      ansible.builtin.fail:
+        msg: >-
+          Bridge '{{ vm_bridge }}' does not exist on {{ inventory_hostname }}.
+          Check `ip -br link` and `bridge link show`. Remember a bridged VM also
+          needs a DHCP reservation on this LAN — see the header of this file.
+      when:
+        - vm_bridge | length > 0
+        - not (br_stat.stat.exists | default(false))
+
+    # ---- Create --------------------------------------------------------------
+
     - name: Create VM disk from base image
       ansible.builtin.command: >
         qemu-img create -f qcow2 -F qcow2 -b {{ base_image }} {{ vm_disk }} {{ vm_disk_gb }}G
       args:
+        # NOTE: if a previous run failed *after* qemu-img created the file, this
+        # guard skips disk creation on the retry and the VM boots from a truncated
+        # or backing-less disk with no error. If a create fails, delete the qcow2
+        # before re-running.
         creates: "{{ vm_disk }}"
 
     - name: Create cloud-init meta-data
@@ -107,7 +204,7 @@
           --os-variant ubuntu24.04
           --disk {{ vm_disk }},format=qcow2,bus=virtio
           --disk {{ vm_cloudinit }},device=cdrom
-          --network bridge={{ vm_bridge }},model=virtio
+          --network {{ vm_net_arg }},model=virtio
           --graphics none
           --noautoconsole
           --import
@@ -127,16 +224,52 @@
           ansible.builtin.pause:
             seconds: 30
 
-        - name: Get VM IP
-          ansible.builtin.command: >
-            virsh domifaddr {{ vm_name }} --source agent
+        # Three sources, in order of reliability. --source agent alone was the old
+        # behaviour and it only works once cloud-init has installed and started
+        # qemu-guest-agent — which needs working networking, so it cannot report on
+        # the failure most likely to have occurred. lease covers libvirt NAT
+        # networks; arp is a last resort and only sees hosts this machine has
+        # actually talked to.
+        - name: Get VM IP (guest agent, then DHCP lease, then ARP)
+          ansible.builtin.shell: |
+            set -o pipefail
+            for src in agent lease arp; do
+              ip=$(virsh domifaddr {{ vm_name }} --source "$src" 2>/dev/null \
+                   | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' \
+                   | grep -v '^127\.' | head -1)
+              if [ -n "$ip" ]; then echo "$ip"; exit 0; fi
+            done
+            exit 1
+          args:
+            executable: /bin/bash
           register: vm_ip
-          retries: 10
+          retries: 12
           delay: 10
-          until: vm_ip.rc == 0 and '192.168' in vm_ip.stdout
+          until: vm_ip.rc == 0
           changed_when: false
           failed_when: false
 
+        # This used to be `failed_when: false` with no follow-up, so an exhausted
+        # retry loop printed "msg": [] and the play reported success. A check that
+        # cannot fail is not a check.
+        - name: Fail clearly if no IP could be determined
+          ansible.builtin.fail:
+            msg: |
+              {{ vm_name }} is running but no address could be found after ~2 minutes
+              via guest agent, DHCP lease, or ARP.
+
+              Most likely the VM booted and got no lease. Check, on this host:
+                virsh console {{ vm_name }}        # press Enter; escape is Ctrl+]
+                virsh domifaddr {{ vm_name }} --source lease
+
+              If attached to a bridge, confirm the MAC has a DHCP reservation —
+              this LAN does not serve arbitrary MACs. See the header of this file.
+              The VM has been left running for inspection; remove it with:
+                virsh destroy {{ vm_name }} && virsh undefine {{ vm_name }} --remove-all-storage
+          when: vm_ip.rc != 0
+
         - name: Show VM IP
           ansible.builtin.debug:
-            msg: "{{ vm_ip.stdout_lines }}"
+            msg: >-
+              {{ vm_name }} is at {{ vm_ip.stdout | trim }} —
+              ssh swares@{{ vm_ip.stdout | trim }}
