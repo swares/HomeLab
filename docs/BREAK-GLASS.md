@@ -500,9 +500,9 @@ worth more than a passed one nobody remembers.
 | Date | Drill | Restored | Duration | Outcome | Notes |
 |------|-------|----------|----------|---------|-------|
 | 2026-08-16 | 1 — offsite data restore | `immich-2026-08-15.sql.gz`, 16,662,251 B, from snapshot `23056e8d` in R2 `homelab-nas` | **9m23s** end to end (17:09:25Z→17:18:48Z); the `restic restore` itself was 3s | **PASS** — all five criteria | Details below |
-| 2026-08-17 | 2a — a Postgres dump actually loads | `immich-2026-08-17.sql.gz`, 16,662,246 B, from snapshot `a6c04a33` in the **local** repo `4154928a` | **3m45s** (20:06:45Z→20:10:30Z), most of it pulling the image | **PASS** on the load; **item 1 NOT proven** | Details below |
+| 2026-08-17 | 2a — a Postgres dump actually loads | `immich-2026-08-17.sql.gz`, 16,662,246 B, from snapshot `a6c04a33` in the **local** repo `4154928a` | **3m45s** (20:06:45Z→20:10:30Z), most of it pulling the image | **PASS** — load and envelope item 1 | Details below |
 
-**Drill 2a, 2026-08-17 — the dump loads, and the envelope credential did not.**
+**Drill 2a, 2026-08-17 — the dump loads, and item 1 is current.**
 
 Loaded into a throwaway `ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0`
 container on the H4, via `docker exec -i … psql` so nothing was installed on the NAS core.
@@ -522,19 +522,31 @@ dumps *of an empty photo library*". The photo library is empty; the database is 
 `geodata_places` alone carries 224,210 rows of reverse-geocoding data, and the 16 MB is
 mostly that. The dumps have real content and it restores.
 
-**Item 1 was not proven, and that is the finding.** The drill is supposed to open the local
-repo with envelope item 1. The value on hand returned `wrong password or no key found`,
-while `--password-file /etc/restic/password` opened repository `4154928a` immediately. So
-the repository is healthy and the *recorded* credential is not the live one.
+**Item 1 verified.** Envelope item 1 opens repository `4154928a`, so the recorded value is
+current with respect to the 2026-08-07 rotation.
 
-The likely explanation is sitting unticked in the currency table above: **restic repository
-password rotated 2026-08-07**. A copy predating that rotation would behave exactly like
-this. Pending a hash comparison to separate "stale copy" from "mistyped at the prompt" —
-until then item 1 stands **unverified**, and 2a is a partial pass.
+It did not look that way at first, and the detour is the more useful lesson. The initial
+attempt returned `wrong password or no key found` while `--password-file
+/etc/restic/password` worked, which pointed straight at the unticked *"restic repository
+password rotated 2026-08-07"* row in the currency table above — a tidy, plausible story
+that was wrong. **`read -rs` echoes nothing, and one fumbled character produces an error
+message identical to a genuinely stale credential.**
 
-Also learned: item 1 alone is insufficient anyway. `/mnt/cold-8t/restic` is root-only, so
-reading the local repo needs the credential **and** a privileged shell on the H4. Drill 1
-never hit this because R2 is reached over the network. The envelope does not say so.
+Before concluding the envelope is stale, discriminate — two commands, no secret displayed:
+
+```bash
+sudo sh -c "tr -d '\n' < /etc/restic/password | sha256sum"
+printf '%s' "$RESTIC_PASSWORD" | sha256sum
+```
+
+Same hash means your copy is right and your fingers were not. Different means the copy is
+stale and the envelope needs reprinting. Cheap, and it settles in seconds what otherwise
+becomes an afternoon of suspecting the wrong thing.
+
+**Item 1 alone is still insufficient**, which the drill did establish. `/mnt/cold-8t/restic`
+is root-only, so reading the local repo needs the credential **and** a privileged shell on
+the H4. Drill 1 never hit this because R2 is reached over the network with no local
+permissions involved. The envelope does not say so, and should.
 
 **Drill 1, 2026-08-16 — the first restore ever performed in this lab.**
 
