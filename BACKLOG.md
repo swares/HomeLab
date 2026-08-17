@@ -387,6 +387,14 @@ library**. `/srv/nas` and the Immich library are both empty by design — Immich
 deliberately not populated until backups were proven stable, which is the right
 order and worth saying.
 
+**Corrected 2026-08-17 by Drill 2a: "empty photo library" oversold it.** The library holds
+no photos; the database is far from empty. Loading `immich-2026-08-17.sql.gz` into a scratch
+Postgres gives `geodata_places` **224,210 rows**, `naturalearth_countries` 4,274, and 68
+applied migrations — the 16 MB dump is mostly Immich's reverse-geocoding dataset. It is
+reconstructible from upstream, so this does not change the sizing argument above, but
+"dumps of an empty library" reads as "dumps of nothing" and they are not. They contain real
+data and it restores.
+
 **`/mnt/cold-8t/VMs` removed from `backup-nas` on 08-13.** The VHDX is recreatable
 from installation media and does not justify 224 GiB of offsite storage (~$3/month,
 and three days of seeding).
@@ -782,9 +790,32 @@ channel if the pinned var isn't in scope. An unattended run could upgrade the cl
 `tofu/dns/terraform.tf:6-11` — no Pi-hole v6 provider. The ingress VIP is now
 maintained by hand in three places (`main.tf:43`, `hosts.yml`, `verify-lab.py:46`).
 
-### 4.6 `vault-restore.yml` cannot work as written
-`docs/REVIEW-2026-07-24.md:295` (H21) — the automated Vault restore path is broken.
-Directly compounds §1.1.
+### 4.6 `vault-restore.yml` cannot work as written — **rewrite after Drill 2b, not before**
+`docs/REVIEW-2026-07-24.md:296` (H21), `ansible/playbooks/vault-restore.yml:26,65-68`
+
+H21 records a hard-coded dated tarball (`vault-backup-20260627.tar.gz`) in
+`/mnt/cold-8t/backups/`, a directory nothing maintains, plus a controller-side `src` for
+a file that lives on the H4.
+
+**It is worse than mis-pathed.** The play stops Vault, wipes `/opt/vault/data` and unpacks
+a tarball — a file-level restore. The live backups are raft **snapshots**
+(`vault-snap-*.snap`, `/mnt/cold-8t/vault-snapshots/`, 30-day retention) which restore
+through the API with `vault operator raft snapshot restore`. The method does not match the
+artefact the backups produce, so this is a rewrite rather than a path fix.
+
+**Sequence deliberately inverted 2026-08-16: do the manual drill first.** Rewriting from
+the review note would replace one unverified procedure with another and leave no way to
+know the replacement works either. Drill 2b (`docs/BREAK-GLASS.md`) restores a snapshot by
+hand and produces the real command sequence, the flags that current Vault actually accepts,
+and the timings — then the playbook gets written from evidence.
+
+Precedent from the same day: `create-vm.yml` yielded three real defects — missing base
+image, a bridged default that cannot get a lease on this LAN, and an IP check that could
+not fail — none of which were findable by reading it. The manual run surfaced all three in
+twenty minutes.
+
+Still compounds §1.1 in the sense that no automated Vault restore exists. It no longer
+blocks anything: the drill does not need it.
 
 ### 4.7 PDBs block node drains
 `docs/REVIEW-2026-07-24.md:271` (H7) — three PDBs with `minAvailable: 1` against
