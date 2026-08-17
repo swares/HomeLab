@@ -355,7 +355,8 @@ Record the date, duration, and anything surprising in the log below.
 |---|---|---|---|---|
 | 2026-08-16 | Test 4 — decrypt and restore one R2 snapshot **using only the offline envelope**, on a throwaway VM, no Vault and no H4 | **PASS** | 9m23s (restore itself 3s) | `immich-2026-08-15.sql.gz`, 16,662,251 B, snapshot `23056e8d`, sha256 identical to the H4 original. Full record in [`BREAK-GLASS.md`](BREAK-GLASS.md) → Results |
 | 2026-08-17 | Test 3 — Postgres dump into a scratch database, count rows (Drill 2a) | **PASS** — load and envelope item 1 | 3m45s | `immich-2026-08-17.sql.gz` from the local repo `4154928a`. `psql` exit 0 under `ON_ERROR_STOP=1`; `vchord 0.4.3` and `vector 0.8.1` restored; `geodata_places` 224,210 rows. Item 1 opens the repo, so it is current with the 2026-08-07 rotation. Full record in [`BREAK-GLASS.md`](BREAK-GLASS.md) → Results |
-| — | Tests 1–2 (etcd into scratch, Vault raft into scratch) | *not yet tested* | — | Drills 2c and 2b. `vault-restore.yml` is broken (§4.6) but does **not** block 2b — run it by hand first, then rewrite the playbook from what worked |
+| 2026-08-17 | Test 2 — Vault raft snapshot into a scratch Vault (Drill 2b) | **PASS** — restore, envelope item 5, and data | 11m40s | `vault-snap-20260816-181204.snap` onto a throwaway VM running Vault 2.0.4. Unsealed with 3 of the 5 printed shares; cluster ID matches production; `secret/lab` lists 23 paths; `secret/lab/restic` hashes identically to the live file and the envelope. **Requires a Vault restart after `raft snapshot restore`** before the seal config is readable. Full record in [`BREAK-GLASS.md`](BREAK-GLASS.md) → Results |
+| — | Test 1 (etcd into scratch) | *not yet tested* | — | Drill 2c; needs envelope item 4, the k3s server token |
 
 ---
 

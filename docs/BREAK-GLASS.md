@@ -506,6 +506,51 @@ worth more than a passed one nobody remembers.
 |------|-------|----------|----------|---------|-------|
 | 2026-08-16 | 1 — offsite data restore | `immich-2026-08-15.sql.gz`, 16,662,251 B, from snapshot `23056e8d` in R2 `homelab-nas` | **9m23s** end to end (17:09:25Z→17:18:48Z); the `restic restore` itself was 3s | **PASS** — all five criteria | Details below |
 | 2026-08-17 | 2a — a Postgres dump actually loads | `immich-2026-08-17.sql.gz`, 16,662,246 B, from snapshot `a6c04a33` in the **local** repo `4154928a` | **3m45s** (20:06:45Z→20:10:30Z), most of it pulling the image | **PASS** — load and envelope item 1 | Details below |
+| 2026-08-17 | 2b — Vault raft snapshot into a scratch Vault | `vault-snap-20260816-181204.snap`, 69,898 B, onto throwaway VM `drill-2b` | **11m40s** (20:57:50Z→21:09:30Z) restore to unsealed | **PASS** — restore, envelope item 5, and data | Details below |
+
+**Drill 2b, 2026-08-17 — a Vault snapshot restores and the printed shares open it.**
+
+Throwaway VM `drill-2b` on n150-2 (libvirt NAT), Vault 2.0.4 from the HashiCorp apt repo —
+the same build that wrote the snapshot. Snapshot copied in over `ProxyJump` from the H4.
+
+    restore started      2026-08-17T20:57:50Z
+    unsealed             2026-08-17T21:09:30Z      11m40s
+    snapshot restored    raft: "restored user snapshot: index=87393"
+    unseal               3 of the 5 shares from the PRINTED envelope
+    identity             Cluster ID 141170ed-...-413d1e3b1c7b — the production cluster
+    secret/lab           23 paths listed
+    secret/lab/restic    sha256 847905df...a71a
+
+**That hash is the result worth having.** It matches `/etc/restic/password` on the H4 and
+the value on the printed envelope, from Drill 2a. Three independent sources agree: live
+file, paper, and a snapshot restored onto a machine that had never seen this Vault. The
+snapshot carries the *current correct* secret, not merely something decryptable.
+
+Four things learned that the procedure did not previously say:
+
+1. **Vault must be restarted after `raft snapshot restore`.** Immediately after the restore
+   `vault status` still reported the scratch cluster's `Total Shares 1, Threshold 1`. The
+   running core had loaded seal parameters at startup and did not pick up the restored
+   ones. Feeding it three real shares against a threshold of 1 would have failed
+   confusingly. After `systemctl restart vault` it correctly read `5 / 3`.
+2. **`-force` is required**, and on 2.0.4 it still means "bypass checks that the shamir
+   keys are consistent with the snapshot data" — exactly the case here.
+3. **Install Vault at or above the source version.** 2.0.4 restoring 2.0.4 was clean;
+   restoring into an older binary is the one version direction that can genuinely fail.
+4. **A restored Vault briefly advertises the source's active node address.** Status showed
+   `HA Mode standby, Active Node Address http://192.168.1.128:8200` before it took over
+   locally. The raft peer set was local-only
+   (`servers="[{... ID:drill-2b Address:127.0.0.1:8201}]"`) so nothing was contacted, and
+   the stray `unlocking HA lock failed: cannot find peer` is that advertisement being
+   released. Harmless here — but the restore host could reach `192.168.1.128` outbound
+   over libvirt NAT, so **run restores where they cannot reach the production Vault**
+   rather than merely somewhere separate.
+
+`vault operator init` on the scratch cluster is throwaway: its key and root token become
+meaningless the moment the snapshot's barrier replaces them. They only need to survive
+long enough to run the restore.
+
+VM destroyed afterwards. It held every secret in the lab.
 
 **Drill 2a, 2026-08-17 — the dump loads, and item 1 is current.**
 
