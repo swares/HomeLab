@@ -153,11 +153,16 @@ codepoint; never paste the glyph.
 
 | Date | What changed | Envelope updated? |
 |------|--------------|-------------------|
-| 2026-08-07 | restic repository password rotated (#1) | `[  ]` |
-| 2026-08-07 | Vault root token revoked — item 5 no longer includes one | `[  ]` |
-| 2026-08-07 | offsite repo `homelab-nas` created, reusing the R2 restic password (#2) | `[  ]` |
-| 2026-08-16 | Vault unseal shares **rekeyed** — all five of item 5 are new | `[  ]` |
-| 2026-08-16 | superseded shares become item 5b — destroy after 2026-11-16 | `[  ]` |
+| 2026-08-07 | restic repository password rotated (#1) | `[x]` 08-17 |
+| 2026-08-07 | Vault root token revoked — item 5 no longer includes one | `[x]` 08-17 |
+| 2026-08-07 | offsite repo `homelab-nas` created, reusing the R2 restic password (#2) | `[x]` 08-17 |
+| 2026-08-16 | Vault unseal shares **rekeyed** — all five of item 5 are new | `[x]` 08-17 |
+| 2026-08-16 | superseded shares become item 5b — destroy after 2026-11-16 | `[x]` 08-17 |
+
+**Envelope printed and in use from 2026-08-17.** All rows above are propagated. Item 1 and
+items 2, 3 are additionally *proven* rather than assumed — Drills 1 and 2a opened real
+repositories with them. Item 5 is proven against the live server but not yet against a
+snapshot; that is Drill 2b.
 
 ## The drill
 

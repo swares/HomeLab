@@ -104,7 +104,32 @@ item that makes every other backup improvement conditional.
 
 Do: one restic restore and one etcd restore into scratch, timed, recorded in the table.
 
-### 1.2 The offline break-glass envelope does not exist
+### 1.2 ~~The offline break-glass envelope does not exist~~ — **PRINTED AND IN USE 2026-08-17**
+
+It exists. Printed 08-17 carrying the five post-rekey unseal shares, the five superseded
+shares as item 5b (destroy after 2026-11-16), and current values for items 1–4 and 6. All
+five currency rows in `docs/BREAK-GLASS.md` are ticked.
+
+Three of the six items are **proven** rather than assumed, which is the part that took the
+drills: items 2 and 3 opened the R2 repo from a machine with nothing else on it (Drill 1),
+and item 1 opened the local repo (Drill 2a). Item 5 works against the live server; proving
+it against a *snapshot* is Drill 2b. Item 4 is Drill 2c. Item 6 is exercised by any playbook
+run against encrypted `group_vars`.
+
+The loop this closes, in the document's own words: the runbook says to get the restic
+password from Vault; Vault runs on the RPi5; Vault's snapshots live on the H4. Lose the H4
+and you need restic to recover and Vault to get restic's password. That loop is now broken
+by something outside both systems.
+
+Remaining, and it is manual: confirm the post-print cleanup ran — drafts shredded, printer
+power-cycled, keeper copy **off the property**. `scripts/print-offline-envelope.sh` handles
+the machine side and prints the rest as instructions because it cannot shred paper.
+
+*Original entry below.*
+
+---
+
+#### Original finding
 `docs/BREAK-GLASS.md` (template added 08-11), `docs/BACKUP-RESTORE.md:91-111`
 
 **Plan agreed 08-11: assemble it, store it offline, then test a restore using only
@@ -1064,12 +1089,18 @@ this is a cluster change and DNS is the lab's most load-bearing dependency. Roll
 |---|---|---|
 | Renew `token-admin` (720h TTL) | **2026-09-06** | `TODO-2026-08-03.md:248` |
 | ESO → Kubernetes auth (token expires) | **~2026-09-08** | `TODO-2026-08-03.md:261` |
+| Destroy superseded unseal shares (envelope item 5b) | **2026-11-16** | §1.2, `docs/BREAK-GLASS.md` |
 | ~~Enable `backup-offsite.timer` after seed~~ | ~~Sunday 08-09~~ | done — §1.3 |
 
-Both remaining items expire in early September and fail **silently**: `token-admin` stops
-authenticating, and ESO stops syncing secrets with nothing visibly broken until something
-needs a refresh. Neither has an alert. Do them at a time of your choosing rather than
-theirs.
+The two September items fail **silently**: `token-admin` stops authenticating, and ESO stops
+syncing secrets with nothing visibly broken until something needs a refresh. Neither has an
+alert. Do them at a time of your choosing rather than theirs — and note that since §1.11,
+letting `token-admin` lapse means a `generate-root` ceremony to get back in, so it costs
+more than it used to.
+
+The November item is the opposite shape: nothing breaks if it is missed, but a superseded
+set of unseal shares with no expiry quietly becomes a permanent second copy of full Vault
+access, which is the reverse of what the rekey was for.
 
 ---
 
