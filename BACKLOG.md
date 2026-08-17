@@ -110,11 +110,19 @@ It exists. Printed 08-17 carrying the five post-rekey unseal shares, the five su
 shares as item 5b (destroy after 2026-11-16), and current values for items 1–4 and 6. All
 five currency rows in `docs/BREAK-GLASS.md` are ticked.
 
-Three of the six items are **proven** rather than assumed, which is the part that took the
+**Four of the six items are proven** rather than assumed, which is the part that took the
 drills: items 2 and 3 opened the R2 repo from a machine with nothing else on it (Drill 1),
-and item 1 opened the local repo (Drill 2a). Item 5 works against the live server; proving
-it against a *snapshot* is Drill 2b. Item 4 is Drill 2c. Item 6 is exercised by any playbook
-run against encrypted `group_vars`.
+item 1 opened the local repo (Drill 2a), and item 5 unsealed a Vault barrier restored from
+a snapshot onto a machine that had never seen this Vault (Drill 2b, 2026-08-17). Item 4 is
+Drill 2c. Item 6 is exercised by any playbook run against encrypted `group_vars`.
+
+Drill 2b also produced a three-way agreement worth recording: `secret/lab/restic` inside
+the restored snapshot hashes identically to `/etc/restic/password` on the H4 and to the
+value on the printed page.
+
+*(This paragraph read "three of the six" until 2026-08-17. It was written before Drill 2b
+ran and merged after — git had no conflict to report, because nothing textually collided.
+A merge that succeeds is not a merge that is still true.)*
 
 The loop this closes, in the document's own words: the runbook says to get the restic
 password from Vault; Vault runs on the RPi5; Vault's snapshots live on the H4. Lose the H4
@@ -815,7 +823,7 @@ channel if the pinned var isn't in scope. An unattended run could upgrade the cl
 `tofu/dns/terraform.tf:6-11` — no Pi-hole v6 provider. The ingress VIP is now
 maintained by hand in three places (`main.tf:43`, `hosts.yml`, `verify-lab.py:46`).
 
-### 4.6 `vault-restore.yml` cannot work as written — **rewrite after Drill 2b, not before**
+### 4.6 `vault-restore.yml` cannot work as written — **Drill 2b done 08-17; ready to rewrite from evidence**
 `docs/REVIEW-2026-07-24.md:296` (H21), `ansible/playbooks/vault-restore.yml:26,65-68`
 
 H21 records a hard-coded dated tarball (`vault-backup-20260627.tar.gz`) in
@@ -830,9 +838,23 @@ artefact the backups produce, so this is a rewrite rather than a path fix.
 
 **Sequence deliberately inverted 2026-08-16: do the manual drill first.** Rewriting from
 the review note would replace one unverified procedure with another and leave no way to
-know the replacement works either. Drill 2b (`docs/BREAK-GLASS.md`) restores a snapshot by
-hand and produces the real command sequence, the flags that current Vault actually accepts,
-and the timings — then the playbook gets written from evidence.
+know the replacement works either.
+
+**Drill 2b ran 2026-08-17 and the evidence now exists** (`docs/BREAK-GLASS.md` → Results).
+The rewrite has four things the old play does not:
+
+1. `vault operator raft snapshot restore -force <snap>` against a running, unsealed Vault
+   — **not** stop-wipe-untar.
+2. **A Vault restart after the restore.** Until then `vault status` still reports the
+   pre-restore seal config, and unsealing against the wrong threshold fails confusingly.
+   Nothing in the current play does this, and no doc mentioned it before 2b.
+3. Newest `vault-snap-*.snap` from `/mnt/cold-8t/vault-snapshots/` on the H4, not a
+   hard-coded dated tarball, and not a controller-side `src`.
+4. Vault installed at or above the version that wrote the snapshot.
+
+The share ceremony stays human: the play should stop at "restored, restart done, now
+unseal" rather than handling shares. Note the drill took 11m40s by hand, so automation
+buys little here beyond removing the chance to mistype a path.
 
 Precedent from the same day: `create-vm.yml` yielded three real defects — missing base
 image, a bridged default that cannot get a lease on this LAN, and an IP check that could

@@ -349,7 +349,8 @@ snapshot"* — the second tells you what 2am looks like.
 the Postgres dumps. `BACKUP-RESTORE.md` lists three untested restores and they are
 independent, so they are three drills rather than one. Cheapest first.
 
-**Do these manually. Do not fix `vault-restore.yml` first** — see 2b.
+**Do these manually. Do not fix `vault-restore.yml` first** — see 2b. *(2a and 2b are done;
+only 2c remains.)*
 
 Each one proves a specific envelope item. After 2c, every item has been used at least
 once, which is the only honest definition of "the envelope works":
@@ -357,9 +358,9 @@ once, which is the only honest definition of "the envelope works":
 | Drill | Proves |
 |:--|:--|
 | 1 — offsite data restore | items 2, 3 — R2 restic password, R2 account ID + API keys. **PASSED 2026-08-16** |
-| 2a — Postgres dump loads | item 1 — local restic password |
-| 2b — Vault raft snapshot | **item 5 — the unseal shares** |
-| 2c — etcd onto scratch | item 4 — k3s server token |
+| 2a — Postgres dump loads | item 1 — local restic password. **PASSED 2026-08-17** |
+| 2b — Vault raft snapshot | item 5 — the unseal shares. **PASSED 2026-08-17** |
+| 2c — etcd onto scratch | item 4 — k3s server token. *Not yet run* |
 
 Item 6 (Ansible vault password) is exercised by any playbook run against encrypted
 `group_vars`, so it needs no drill of its own.
