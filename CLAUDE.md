@@ -16,6 +16,22 @@ Read this before acting. Full context is in `docs/` (start with `ARCHITECTURE.md
 - Always suggest a branch name.
 - Always use gh pr to create pull requests.
 
+## There are two checkouts — commit from one of them
+
+- The **Windows checkout is authoritative**. All edits, commits and PRs happen there.
+- The **H4 checkout (`~/lab/homelab/homelab`) is run-only** — Ansible, `kubectl`, restic,
+  the drills. Keep it pinned: `git fetch origin && git reset --hard origin/main`.
+- **Edits in one checkout are invisible to git in the other.** On 2026-08-17 an hour was
+  lost to this: doc changes were written in the Windows checkout while `git add` and
+  `git status` ran on the H4, which reported `nothing added to commit` — accurately, and
+  about a different set of files. A clean `git status` in one checkout says nothing about
+  work in progress in the other.
+- The same split produced two envelope scripts differing only by hyphen versus underscore
+  (`print-offline-envelope.sh` shipped; `print_offline_envelope.sh` sat unreferenced on
+  the H4's local `main` for two days). Before concluding work is missing, check
+  `git branch -r` — it may be on an unmerged branch someone pushed and never opened a PR
+  for.
+
 ## This box has two roles — keep them separate
 
 - The **cluster layer is yours to manage**. The **NAS services (`smbd`/`nfs`) and the data
