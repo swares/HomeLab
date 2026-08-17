@@ -338,15 +338,159 @@ Record the duration honestly, including time spent working out what to type. *"I
 is worth much less than *"it takes 40 minutes, and 25 of those were finding the right
 snapshot"* — the second tells you what 2am looks like.
 
-### Drill 2 — cluster state (do after drill 1 passes)
+### Drill 2 — cluster state, split into three
 
-`homelab-backup` holds etcd snapshots, Vault raft snapshots, the k3s server token
-and the Postgres dumps. Restoring those is the harder half and has its own known
-gap: `ansible/playbooks/vault-restore.yml` does not work as written
-(`docs/REVIEW-2026-07-24.md` H21).
+`homelab-backup` holds etcd snapshots, Vault raft snapshots, the k3s server token and
+the Postgres dumps. `BACKUP-RESTORE.md` lists three untested restores and they are
+independent, so they are three drills rather than one. Cheapest first.
 
-Do not attempt drill 2 until drill 1 has succeeded and the envelope has proven
-complete.
+**Do these manually. Do not fix `vault-restore.yml` first** — see 2b.
+
+Each one proves a specific envelope item. After 2c, every item has been used at least
+once, which is the only honest definition of "the envelope works":
+
+| Drill | Proves |
+|:--|:--|
+| 1 — offsite data restore | items 2, 3 — R2 restic password, R2 account ID + API keys. **PASSED 2026-08-16** |
+| 2a — Postgres dump loads | item 1 — local restic password |
+| 2b — Vault raft snapshot | **item 5 — the unseal shares** |
+| 2c — etcd onto scratch | item 4 — k3s server token |
+
+Item 6 (Ansible vault password) is exercised by any playbook run against encrypted
+`group_vars`, so it needs no drill of its own.
+
+---
+
+#### Drill 2a — a Postgres dump actually loads
+
+**Why this is first.** Drill 1 proved `immich-2026-08-15.sql.gz` was intact, gzip-valid
+and byte-identical to the original. It did **not** prove the dump *restores*. A valid
+gzip of a truncated `pg_dump` passes every check that drill ran. The lldap job already
+learned this the hard way — `gitops/workloads/lldap/backup-cronjob.yaml:69-78` asserts on
+size and greps for `CREATE TABLE` because **empty `pg_dump` output was found on
+2026-07-25**. A dump that exists is not a dump that works.
+
+Read from the **local** repo this time, so item 1 gets exercised rather than item 2:
+
+```bash
+export RESTIC_REPOSITORY=/mnt/cold-8t/restic
+export RESTIC_PASSWORD='<envelope item 1>'      # not from Vault — that is the point
+restic snapshots --tag nas --latest 1
+restic restore <snapshot> --target /tmp/drill2a \
+  --include /mnt/cold-8t/immich/backups/<file>.sql.gz
+```
+
+Then load it into a throwaway Postgres and count rows. Nothing here touches the live
+database:
+
+**Use the Immich Postgres image, not stock `postgres`.** The database is **Postgres 14**
+with **vectorchord** and **pgvecto.rs**
+(`ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0`, per
+`gitops/workloads/immich/postgres.yaml:23`). A stock image fails on `CREATE EXTENSION`,
+and a newer major version will not accept a 14 dump cleanly. Matching the image is also
+what the drill is meant to prove: that the dump is restorable **onto the server it came
+from**, not onto some hypothetical one.
+
+```bash
+IMG=ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0
+docker run --rm -d --name drill2a -p 55432:5432 \
+  -e POSTGRES_USER=immich -e POSTGRES_DB=immich -e POSTGRES_PASSWORD=drill "$IMG"
+sleep 20
+
+zcat /tmp/drill2a/mnt/cold-8t/immich/backups/<file>.sql.gz \
+  | PGPASSWORD=drill psql -h 127.0.0.1 -p 55432 -U immich -d immich -v ON_ERROR_STOP=1
+
+PGPASSWORD=drill psql -h 127.0.0.1 -p 55432 -U immich -d immich -c \
+  "select schemaname||'.'||relname, n_live_tup from pg_stat_user_tables order by n_live_tup desc limit 15;"
+docker rm -f drill2a
+```
+
+`POSTGRES_USER`/`POSTGRES_DB` must be `immich`: the dump is taken with
+`pg_dump -U immich -d immich --clean --if-exists`
+(`db-backup-cronjob.yaml:65`), so it expects that role and database to exist. `--clean`
+means the load opens with `DROP ... IF EXISTS`, which emits notices against a fresh
+database — notices are not errors and `ON_ERROR_STOP=1` will not trip on them.
+
+Pass criteria:
+
+1. `restic` opened the local repo with envelope item 1 alone — **not** a password read
+   from Vault
+2. `psql` completed with `ON_ERROR_STOP=1` and exited 0
+3. `pg_stat_user_tables` lists Immich's tables
+4. Row counts are plausible for an empty-but-initialised library (§1.10) — the point is
+   that tables and constraints exist, not that there is photo data
+
+---
+
+#### Drill 2b — Vault raft snapshot into a scratch Vault
+
+Restores `vault-snap-20260816-181204.snap` (the post-rekey one) into a throwaway Vault
+using the **new** shares. First real test of envelope item 5.
+
+**Do this before touching `vault-restore.yml`.** §4.6 records that playbook as broken,
+but it is worse than mis-pathed: it **wipes the data directory and unpacks a tarball**
+(`vault-backup-20260627.tar.gz`, in a directory nothing maintains), while your live
+backups are raft snapshots restored through the API. The method does not match the
+artefact. Rewriting it from the review note would replace one unverified procedure with
+another. **Run it by hand, record the real sequence, then write the playbook from that.**
+
+Throwaway VM, same pattern as Drill 1 (`create-vm.yml`, NAT network, destroyed after):
+
+```bash
+# in the VM
+sudo apt-get install -y vault          # HashiCorp apt repo
+# minimal config: raft storage, listener on 127.0.0.1, tls_disable
+sudo systemctl start vault
+export VAULT_ADDR=http://127.0.0.1:8200
+vault operator init -key-shares=1 -key-threshold=1   # throwaway keys, discarded
+vault operator unseal <throwaway key>
+
+vault operator raft snapshot restore -force /tmp/vault-snap-20260816-181204.snap
+```
+
+After the restore the scratch Vault carries the **snapshot's** barrier, so it seals and
+must be unsealed with the shares that were live when the snapshot was taken — envelope
+item 5 for a post-rekey snapshot, item 5b for anything older.
+
+Pass criteria:
+
+1. `raft snapshot restore` completes
+2. The scratch Vault unseals with **three of the five envelope shares**
+3. `vault kv get secret/lab/restic` returns a value — data survived, not just structure
+4. Record the elapsed time and the exact commands
+
+Then destroy the VM. It briefly held every secret in the lab.
+
+**Note `-force`.** Restoring a snapshot whose root key differs from the target cluster's
+requires it. Confirm the current flag against Vault 2.x docs before running — this lab
+crossed a major version on 2026-08-16 and flags have already moved once.
+
+---
+
+#### Drill 2c — etcd snapshot onto scratch
+
+Hardest, and the only drill needing envelope item 4. Do it last.
+
+Follow **[`BACKUP-RESTORE.md` §3.2](BACKUP-RESTORE.md#32-restore-cluster-state-etcd--3-server-ha)**,
+which is verified against current k3s docs. Do **not** use any older etcd procedure:
+`RUNBOOK.md:216-226` records that the one which used to live there invoked a
+`k3s etcd-snapshot restore` subcommand that does not exist, pointed at a directory that
+was never the real one, and gave single-node steps for a 3-server embedded-etcd cluster.
+
+Snapshots are at `/mnt/cold-8t/k3s-etcd-snapshots/` (30 retained). Restoring onto new
+hardware also needs the **k3s server token** — k3s derives the datastore encryption key
+from it, so without item 4 the snapshot is unusable no matter how intact it is.
+
+Pass criteria:
+
+1. A single-node k3s comes up from the snapshot on a throwaway VM
+2. `kubectl get nodes,ns` shows the restored objects
+3. Restoring with the token **absent or wrong** fails — worth proving once, because it is
+   the reason item 4 is in the envelope at all
+4. Elapsed time recorded
+
+A 3-server restore additionally requires wiping and rejoining the other two servers.
+The drill only needs to prove the snapshot plus token yields a working datastore.
 
 ### Results
 
@@ -356,6 +500,53 @@ worth more than a passed one nobody remembers.
 | Date | Drill | Restored | Duration | Outcome | Notes |
 |------|-------|----------|----------|---------|-------|
 | 2026-08-16 | 1 — offsite data restore | `immich-2026-08-15.sql.gz`, 16,662,251 B, from snapshot `23056e8d` in R2 `homelab-nas` | **9m23s** end to end (17:09:25Z→17:18:48Z); the `restic restore` itself was 3s | **PASS** — all five criteria | Details below |
+| 2026-08-17 | 2a — a Postgres dump actually loads | `immich-2026-08-17.sql.gz`, 16,662,246 B, from snapshot `a6c04a33` in the **local** repo `4154928a` | **3m45s** (20:06:45Z→20:10:30Z), most of it pulling the image | **PASS** — load and envelope item 1 | Details below |
+
+**Drill 2a, 2026-08-17 — the dump loads, and item 1 is current.**
+
+Loaded into a throwaway `ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0`
+container on the H4, via `docker exec -i … psql` so nothing was installed on the NAS core.
+
+    psql exit code           0, under -v ON_ERROR_STOP=1
+    extensions restored      vchord 0.4.3, vector 0.8.1, cube, earthdistance,
+                             pg_trgm, unaccent, uuid-ossp, plpgsql
+    rows                     geodata_places 224,210 · naturalearth_countries 4,274
+                             kysely_migrations 68 · session 6 · user 1
+
+The extensions are the result that matters. A stock `postgres` image would have failed on
+`CREATE EXTENSION vchord`, so these dumps are restorable **only onto an equivalently
+extended server** — worth knowing before a rebuild, not during one.
+
+**This corrects §1.10 in `BACKLOG.md`.** That entry characterises the dumps as "nightly
+dumps *of an empty photo library*". The photo library is empty; the database is not.
+`geodata_places` alone carries 224,210 rows of reverse-geocoding data, and the 16 MB is
+mostly that. The dumps have real content and it restores.
+
+**Item 1 verified.** Envelope item 1 opens repository `4154928a`, so the recorded value is
+current with respect to the 2026-08-07 rotation.
+
+It did not look that way at first, and the detour is the more useful lesson. The initial
+attempt returned `wrong password or no key found` while `--password-file
+/etc/restic/password` worked, which pointed straight at the unticked *"restic repository
+password rotated 2026-08-07"* row in the currency table above — a tidy, plausible story
+that was wrong. **`read -rs` echoes nothing, and one fumbled character produces an error
+message identical to a genuinely stale credential.**
+
+Before concluding the envelope is stale, discriminate — two commands, no secret displayed:
+
+```bash
+sudo sh -c "tr -d '\n' < /etc/restic/password | sha256sum"
+printf '%s' "$RESTIC_PASSWORD" | sha256sum
+```
+
+Same hash means your copy is right and your fingers were not. Different means the copy is
+stale and the envelope needs reprinting. Cheap, and it settles in seconds what otherwise
+becomes an afternoon of suspecting the wrong thing.
+
+**Item 1 alone is still insufficient**, which the drill did establish. `/mnt/cold-8t/restic`
+is root-only, so reading the local repo needs the credential **and** a privileged shell on
+the H4. Drill 1 never hit this because R2 is reached over the network with no local
+permissions involved. The envelope does not say so, and should.
 
 **Drill 1, 2026-08-16 — the first restore ever performed in this lab.**
 
