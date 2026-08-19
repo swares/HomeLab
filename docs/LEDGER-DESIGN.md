@@ -30,7 +30,7 @@ Today that question is unanswerable, and not for want of a search engine:
 
 | Source | What it knows | What is retained |
 |---|---|---|
-| Kubernetes Events | scheduling failures, probe failures, image pulls, OOM kills, Argo sync results | **~1 hour.** `--event-ttl` defaults to `1h0m0s`; then etcd garbage-collects |
+| Kubernetes Events | scheduling failures, probe failures, image pulls, OOM kills, **Argo sync results** | **~1 hour, plus a leak.** Measured 2026-08-19: 90 of 123 events were from that day. The other 33 are orphans spread over seven weeks that escaped TTL — see below |
 | Alloy → Loki | pod logs, systemd journal (`max_age = "12h"`) | 30 days — but **`loki.source.kubernetes_events` is not configured**, so no events at all |
 | Argo CD notifications | sync-failed, health-degraded | **nothing.** Fire-and-forget webhook to the M5Stack (`notifications-cm.yaml`); no store |
 | Alertmanager | alert firings | **no queryable history.** Three receivers — `m5stack` (catch-all default), `ntfy`, `watchdog`. Its 2Gi PVC holds nflog/silences, not an alert log |
@@ -41,9 +41,38 @@ So five of the six sources that would answer the question are discarding their o
 within the hour, or never producing a durable record at all. **The bottleneck is
 capture, not query.** Standing up a search engine first would index an absence.
 
-This is the single most important finding in this document. Every hour of delay is an
-hour of ledger that cannot be recovered later; by contrast, deferring the engine choice
-costs nothing, because a captured stream can be reindexed at any time.
+**Measured, 2026-08-19.** The claim above was originally asserted from the upstream
+`--event-ttl` default without checking. It was then "corrected" to ~7 weeks on the
+strength of a single old event, which was also wrong. The actual distribution, from
+`kubectl get events -A -o json` — 123 events total:
+
+    1   2026-06-30        2   2026-08-07
+    25  2026-07-02        2   2026-08-11
+    2   2026-07-27        1   2026-08-16
+                          90  2026-08-19
+
+**So retention behaves as ~1 hour, as originally stated** — 90 of 123 events are from
+the current day, which is roughly one hour of this cluster's event rate. The urgency
+argument holds: events really are destroyed within the hour and the history really is
+unrecoverable.
+
+**The 33 stragglers are a leak, not retention.** They are non-recurring events —
+`count: 1`, `firstTimestamp == lastTimestamp` — that simply never expired, and they
+cluster on dates when the control plane was disturbed: 2026-07-02 (n150-1/n150-2 joined
+as servers), 2026-07-27 (the wildcard change), 2026-08-07, 08-11, 08-16. The likely
+mechanism is etcd TTL leases lost across apiserver restarts or leader elections,
+leaving orphaned keys with no expiry. Worth its own backlog entry; irrelevant to the
+ledger except as a caution that **the API server's own retention cannot be reasoned
+about from documentation** — this took four wrong answers and one measurement.
+
+Two things do change, both improvements:
+
+1. **Argo CD events are already in the stream.** `ResourceUpdated`, `OperationStarted`
+   and `OperationCompleted` events from `argocd` appear in the capture, so Phase 2's
+   Argo source (§3.2) is largely delivered by Phase 1 rather than needing a webhook shim.
+2. **The one-time backfill was worth taking but is small** — 33 pre-existing events, not
+   seven weeks of history. By accident it is a rough index of the lab's disruption days,
+   which is mildly useful and entirely a side effect.
 
 ---
 
@@ -78,6 +107,7 @@ Ordered by value per unit of effort.
 |---|---|---|
 | Kubernetes Events (all namespaces) | a second, singleton Alloy release — `gitops/apps/alloy-events.yaml` | **Not** a block added to the existing `alloy` release: that one is a DaemonSet, and the component watches the API server rather than the local node, so all five pods would ship a duplicate copy of every event. A singleton `Deployment` avoids that without enabling clustering on a healthy log pipeline. The chart's default RBAC already grants `events` watch. `log_format = "json"` so structure survives into the eventual ledger |
 | Git commits | CronJob or CI step walking `git log` since last indexed SHA | ~730 commits at time of writing. Fields: SHA, timestamp, author, subject, files changed, PR number. Backfillable in full — this is the one source with complete history already |
+| Event backlog rescue | one-time `kubectl get events -A -o json` | **Done 2026-08-19** — 123 events, of which 33 predate capture. Small, but the only artifact of the pre-capture era. Replay once a store exists |
 
 Phase 1 is deliberately shippable without choosing an engine: events land in Loki
 (30d) as a holding pen while the ledger design settles. Losing older events during
@@ -87,7 +117,7 @@ that window is acceptable; losing them *forever* starting now is not.
 
 | Source | Mechanism | Notes |
 |---|---|---|
-| Argo CD sync/health | add a second `service.webhook` receiver alongside the M5Stack one | The triggers already exist (`on-sync-failed`, `on-health-degraded`). Consider adding `on-sync-succeeded` — the ledger wants successes too, since "what changed" is mostly successful changes |
+| ~~Argo CD sync/health~~ | **mostly delivered by Phase 1** | Argo emits native Kubernetes Events (`ResourceUpdated`, `OperationStarted`, `OperationCompleted`) which `alloy-events` already captures — verified 2026-08-19, retained back to 2026-07-02. A webhook receiver is only worth adding if the notification *templates* carry something the raw events do not; check before building it |
 | Alertmanager firings | add a fourth receiver to the existing route tree | Read `monitoring.yaml:279` first: the tree already has three live receivers plus `null`, `m5stack` is the catch-all default, and **Alertmanager stops at the first matching route**. The ledger receiver needs `continue: true` or it will silently steal alerts from the notification path |
 | Backup outcomes | `backup-verify.sh` already prints structured `ok:` / `FAIL:` lines weekly | Emit as JSON alongside the human-readable output rather than parsing prose |
 | Ansible runs | Semaphore keeps task history in its own DB | Lowest priority; export on a schedule |
@@ -199,13 +229,27 @@ have not restored is a hypothesis — currently tells a reader to delete the one
 tier that has actually demonstrated a restore. **This should be corrected by hand
 regardless of whether the ledger is ever built.**
 
-What makes it the ideal specimen is that the file **contradicts itself**, and the
-contradiction has been sitting there unnoticed. Line 356 of that same document records
-the successful 2026-08-16 restore from `homelab-nas` — sixteen lines before the table
-that calls the mechanism fake. Nobody had to cross-reference two files or reason about
-prose; the disagreement is on one page. It survived because no check exists that reads
-a document against its own dated claims, which is a smaller and much more tractable
-problem than general fact-checking.
+What makes it the ideal specimen is that the file **contradicts itself**. Line 356 of
+that same document records the successful 2026-08-16 restore from `homelab-nas` —
+sixteen lines before the table that calls the mechanism fake. Nobody has to
+cross-reference two files or reason about prose; the disagreement is on one page.
+
+**An earlier draft of this section claimed the contradiction had gone unnoticed. That
+was wrong, and the correction sharpens the argument rather than weakening it.**
+`BACKLOG.md` §6.7 already logs it — *"`docs/BACKUP-RESTORE.md:360-372` — two stale
+rows: `backup-offsite is a no-op` (fixed)"*. The lab detected this by hand and wrote it
+down. What it has not done is close it: §6.7 has been open long enough for the stale
+text to still be misleading a reader today, and the `:30-32` prose instance is not
+covered by that entry at all, only the table rows.
+
+So the gap is narrower and more honest than "nobody notices." This lab notices
+extremely well — but episodically and expensively, via dated review documents like
+`REVIEW-2026-07-24.md` produced by a human reading everything at once. The argument for
+mechanising it is not that detection is absent; it is that detection is **manual,
+bursty, and unrepeatable**, so the interval between a claim going stale and someone
+noticing is bounded only by the next review. A weekly automated pass converts that from
+an event into a floor. It also closes the second half, which manual review is worst at:
+noticing that a *previously filed* discrepancy is still open.
 
 `BACKLOG.md` §1.3 makes the same point independently. It carries a note about a
 *different* stale marker in that section being misread on 2026-08-15 as evidence the

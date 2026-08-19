@@ -715,6 +715,42 @@ cannot reach the LAN.
 ### 3.7 Alloy restart recency filter
 `TODO-2026-08-03.md:335` — benign historical restarts keep surfacing.
 
+### 3.8 `PolicyViolation` events fire continuously against dead ReplicaSets
+
+**Found 2026-08-19** in the first Kubernetes Event capture. Kyverno emits a stream of
+
+    policy require-resource-limits/autogen-require-limits fail: validation error:
+    Container must specify resources.limits.cpu and resources.limits.memory
+
+against **ten different `m5stack-adapter-*` ReplicaSets** in `ai-gateway`, all within
+the same second, repeatedly.
+
+**Nothing is broken.** The live manifest
+(`gitops/workloads/ai-gateway/m5stack-adapter/deployment.yaml`) declares
+`cpu: 500m` / `memory: 256Mi`. The objects being flagged are the Deployment's
+scaled-to-zero revision history from before those limits were added, retained by the
+default `revisionHistoryLimit: 10`. The policy runs `background: true`, so every scan
+re-evaluates the corpses and re-emits a violation for each.
+
+**The cost is signal, not availability.** In Enforce mode a `PolicyViolation` event
+should mean *something was just blocked from starting*. Here it almost always means
+*an old ReplicaSet still exists*, so the one event class that indicates an admission
+failure is now background hum. That is how a real block gets missed.
+
+**It also falsifies a comment in the policy itself.**
+`gitops/workloads/kyverno/policies/require-resource-limits.yaml` states
+*"Mode: Enforce — zero violations confirmed in audit baseline."* Whenever that was
+true, it is not true now. Same drift class as §6.
+
+**To do:**
+
+- [ ] Decide the fix: exclude ReplicaSets with `spec.replicas: 0` from the policy
+      match, or drop `revisionHistoryLimit` on the affected Deployments so the dead
+      revisions age out. The first is general; the second is narrower and reversible.
+- [ ] Check whether other namespaces carry the same backlog of pre-policy ReplicaSets.
+      Only `ai-gateway` appeared in the first capture, but capture is hours old.
+- [ ] Correct the "zero violations" comment once the count is actually zero.
+
 ---
 
 ## 4. Broken or blocked, live
@@ -1102,6 +1138,109 @@ and DHCP config, not this ConfigMap — and wants a decision of its own.
 Found 2026-08-15 while fixing the documentation half of §6.1. **Flagged, not changed** —
 this is a cluster change and DNS is the lab's most load-bearing dependency. Rollback is
 `git revert` plus one cache TTL (30s).
+
+### 4.12 Every x86 node exceeds the kubelet nameserver limit — and the H4's DNS redundancy is fake
+
+**Found 2026-08-19**, in the first query run after Kubernetes Event capture went live
+(PR `feat/ledger-capture-k8s-events`). The kubelet caps a pod's `resolv.conf` at
+**three** nameservers (a glibc limit it does not work around). Every x86 node supplies
+more than three, so one is silently discarded. DNS still resolves, which is why this
+never surfaced — `type` is `Warning`, nothing is failing, and the first specimen found
+carried `"count":26090`.
+
+**Three different resolver sets are live across five nodes:**
+
+| Applied nameserver line | Nodes | Distinct physical hosts |
+|---|---|---|
+| `.148 .184 .217` | n150-1, n150-2 | 3 — but **no Pi-hole secondary** |
+| `.148 .116 .152` | **odroid-nas (H4)** | **2** — octopi counted twice |
+| *(no event)* | opi5pro-1, opi5pro-2 | list is ≤3; not truncated |
+
+**`192.168.1.152` is octopi's second interface, and this repo already says not to use
+it.** `docs/HARDWARE.md:22` lists RPi 3B #2 as `192.168.1.148` / `192.168.1.152
+(avoid)`. So on the H4 — the NAS, a k3s server, and per `CLAUDE.md` the core of the
+lab — two of three resolvers are the *same 1 GB Raspberry Pi 3B*, one of them via the
+address the hardware doc flags. The H4 believes it has three-way DNS redundancy and
+has two-way. Lose octopi and it drops two resolvers in the same instant, leaving only
+`.116`.
+
+**The N150s have the opposite defect.** Three distinct hosts, but the dropped resolver
+is `192.168.1.116` — the rpi4b Pi-hole secondary. Both control-plane N150s therefore
+run one Pi-hole and two plain dnsmasq fallbacks, so anything failing over past `.148`
+loses ad/telemetry filtering entirely.
+
+**The ARM nodes are the only ones configured correctly**, which suggests the x86 hosts
+share a provisioning path the OPis do not.
+
+**Not an outage. A redundancy and precedence bug**, in the lab's most load-bearing
+dependency, on the node whose loss is least survivable.
+
+**To do:**
+
+- [ ] Fix the H4 first — it is the only node whose resolver duplication makes its
+      redundancy illusory. Remove `.152` before anything else.
+- [ ] Decide the intended three, then apply the *same* three everywhere. Two Pi-holes
+      plus one dnsmasq (`.148 .116 .184`) is what the fleet table implies; no node
+      currently has it.
+- [ ] Fix at the host layer via Ansible (`ansible/playbooks/dns.yml` or the netplan /
+      systemd-resolved config feeding it), `--check` first. Not a cluster change.
+- [ ] Resolve the docs disagreement found alongside this: `CLAUDE.md` calls
+      opi-zero2w-1 (`.184`) "secondary DNS", while `README.md` lists `.184` as the
+      *tertiary* dnsmasq fallback and rpi4b (`.116`) as the Pi-hole secondary. One is
+      wrong and it is load-bearing for the decision above.
+- [ ] Decide whether `.152` should exist at all. An address documented as "avoid" that
+      is nonetheless in a production resolver list is worse than an undocumented one.
+
+**A fourth set (`.148 .184 .152`) appeared under `node-exporter-tqxdl`** — a pod that
+no longer exists, so that one is history rather than live config. See §4.13 for why a
+deleted pod's event was still queryable.
+
+**This has been firing since at least 2026-07-27 — the day of the wildcard outage.**
+The event backfill taken on 2026-08-19 retained exactly two events from 2026-07-27,
+and both are this one: `DNSConfigForming` on `kube-vip-ds-6gf7c` (n150-1) and
+`kube-vip-ds-7tzlg` (n150-2), at 20:41:40 and 20:41:41. On the day DNS took down every
+service URL in the lab, the cluster was concurrently reporting a *second, unrelated*
+DNS defect — resolver truncation — and it went unread, because nothing was capturing
+events. It is still unfixed twenty-three days later. This is not the cause of that
+outage (§4.11 and the `.160` wildcard were), and it should not be conflated with it.
+It is the clearest available answer to "what else was wrong that day."
+
+Related: §3.3 (nothing verifies DNS actually resolves) and §4.11 (the CoreDNS wildcard).
+This is a third, separate DNS defect — host resolver config, not cluster config.
+
+### 4.13 Events leak past `--event-ttl` and never expire
+
+**Found 2026-08-19** while measuring event retention for `docs/LEDGER-DESIGN.md`. Full
+distribution of `kubectl get events -A -o json`, 123 objects:
+
+    1   2026-06-30        2   2026-08-07
+    25  2026-07-02        2   2026-08-11
+    2   2026-07-27        1   2026-08-16
+                          90  2026-08-19
+
+Retention behaves normally: 90 of 123 are from the current day, consistent with the
+`1h0m0s` upstream `--event-ttl` default. **The other 33 never expired.** They are
+non-recurring — `count: 1`, `firstTimestamp == lastTimestamp` — so nothing is
+refreshing them; they simply have no expiry.
+
+The dates are not random. They cluster on days the control plane was disturbed:
+2026-07-02 (n150-1/n150-2 joined as k3s servers), 2026-07-27 (the wildcard change),
+08-07, 08-11, 08-16. The likely mechanism is **etcd TTL leases lost across apiserver
+restarts or leader elections**, orphaning the keys they were attached to.
+
+**Low severity, and not urgent.** 33 objects is nothing next to etcd's working set,
+and the leak rate is a handful per control-plane disruption. It is filed because it is
+a real, understood defect that will accumulate slowly and forever, and because it cost
+four wrong answers before anyone measured it.
+
+**To do:**
+
+- [ ] Confirm no `--event-ttl` override exists (`kube-apiserver-arg` in
+      `/etc/rancher/k3s/config.yaml`). If one does, this entry's premise changes.
+- [ ] Re-measure after the next k3s upgrade or server reboot to confirm the leak
+      correlates with control-plane restarts rather than something else.
+- [ ] Decide whether to care. Doing nothing is defensible; the entry exists so the
+      next person to find an impossibly old event does not spend an afternoon on it.
 
 ---
 
