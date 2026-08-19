@@ -242,21 +242,81 @@ snapshots, Postgres dumps, the lldap DB, and OpenTofu state. Rebuild order:
 > **Untested.** No one has performed this end to end. Until someone does, treat the
 > timings and the ordering as informed guesses. See §5.
 
-### 3.4 Restore Vault
+### 3.4 Restore Vault — raft snapshot onto new hardware
 
-Live backups are raft snapshots in `/mnt/cold-8t/vault-snapshots/vault-snap-*.snap`
-(30-day retention).
+**Verified end to end 2026-08-17 (Drill 2b).** Live backups are raft snapshots in
+`/mnt/cold-8t/vault-snapshots/vault-snap-*.snap` (30-day retention), also in R2
+`homelab-backup`. Full drill record in [`BREAK-GLASS.md`](BREAK-GLASS.md) → Results.
+
+There is deliberately **no restore playbook** — see the note at the end of this section.
 
 ```bash
+# 0. Pick a snapshot. Confirm it is real (~70 KB, and newer than your last rekey).
 ls -lt /mnt/cold-8t/vault-snapshots/ | head
-vault operator raft snapshot restore /path/to/vault-snap-<TS>.snap
-# then unseal with the keys from the envelope
+
+# 1. Install Vault AT OR ABOVE the version that wrote the snapshot.
+#    Restoring into an older binary is the one version direction that can fail.
+#    (HashiCorp apt repo; check `vault status` on the source for its Version.)
+
+# 2. Minimal single-node config, bound to loopback — this host is about to hold
+#    every secret in the lab.
+sudo tee /etc/vault.d/vault.hcl >/dev/null <<'EOF'
+ui = false
+storage "raft" { path = "/opt/vault/data"  node_id = "<hostname>" }
+listener "tcp" { address = "127.0.0.1:8200"  tls_disable = true }
+api_addr     = "http://127.0.0.1:8200"
+cluster_addr = "http://127.0.0.1:8201"
+disable_mlock = true
+EOF
+sudo mkdir -p /opt/vault/data && sudo chown -R vault:vault /opt/vault
+sudo systemctl enable --now vault
+export VAULT_ADDR=http://127.0.0.1:8200
+
+# 3. Initialise with THROWAWAY keys. They are replaced by the snapshot's barrier
+#    moments later and only need to survive step 4.
+vault operator init -key-shares=1 -key-threshold=1
+vault operator unseal <throwaway key>
+export VAULT_TOKEN=<throwaway root token>
+
+# 4. Restore. -force is required: the snapshot's root key differs from this cluster's.
+vault operator raft snapshot restore -force /path/to/vault-snap-<TS>.snap
+
+# 5. RESTART. This step is not optional and is easy to miss.
+sudo systemctl restart vault
+vault status        # must now read Total Shares 5, Threshold 3 — the SNAPSHOT's config
+
+# 6. Unseal with three of the five shares from the offline envelope (item 5, or
+#    item 5b for a snapshot predating the last rekey).
+vault operator unseal      # x3
+vault status               # Sealed false
+
+# 7. Prove the data, not just the structure. token-admin lives inside the snapshot.
+export VAULT_TOKEN=<token-admin>
+vault kv list secret/lab
+vault kv get -field=password secret/lab/restic | sha256sum
 ```
 
-> `ansible/playbooks/vault-restore.yml` is **broken** — it hardcodes a dated tarball
-> (`vault-backup-20260627.tar.gz`) in a directory nothing maintains, and uses a
-> controller-side `src` for a file that lives on the H4. Do not use it until fixed.
-> See REVIEW-2026-07-24.md H21.
+> **Step 5 is the trap.** Immediately after the restore, `vault status` still reports the
+> *pre-restore* seal configuration — the running core loaded its parameters at startup and
+> does not pick up the restored ones. Feeding it three real shares against a threshold of 1
+> fails confusingly. Restart first, confirm `5 / 3`, then unseal.
+
+> **Restore somewhere that cannot reach the production Vault.** A restored node briefly
+> advertises the source's active node address (`HA Mode standby, Active Node Address
+> http://192.168.1.128:8200` during Drill 2b). Its raft peer set was local-only so nothing
+> was contacted — but the equivalent k3s restore in Drill 2c *did* open tunnels to the live
+> cluster and was accepted. Libvirt's `default` NAT masquerades outbound to the LAN, so a
+> separate VM is not isolation.
+
+> **There is no `vault-restore.yml`, and that is deliberate.** One existed and was broken
+> from at least 2026-07-24 (`REVIEW-2026-07-24.md` H21) until deleted on 2026-08-19: it
+> stopped Vault, wiped `/opt/vault/data` and unpacked a dated tarball, a method that never
+> matched the raft snapshots the backups actually produce. Nobody noticed for weeks because
+> nobody ran it — which is the argument against replacing it. The automatable part is three
+> commands; everything that goes wrong is judgement (which snapshot, is this host isolated,
+> is the version right) followed by a key ceremony that must be human. The equivalent k3s
+> restore in §3.2 has never had a playbook and is the better-tested of the two. Drill 2b
+> took **11m40s** by hand.
 
 ### 3.5 Restore a Postgres database
 
@@ -388,9 +448,9 @@ Honest list. Tracked in [REVIEW-2026-07-24.md](REVIEW-2026-07-24.md).
 
 | Gap | Impact | Ref |
 |---|---|---|
-| **No restore has ever been performed** | The entire chain above is untested. This is the single largest risk in the lab. | C2 |
+| ~~**No restore has ever been performed**~~ | Closed 2026-08-19. Four drills passed: offsite data (08-16), Postgres dump load (08-17), Vault raft snapshot (08-17), etcd onto scratch (08-19). All six break-glass credentials proven by use | C2 closed |
 | Vault ↔ restic circular dependency | Total-loss recovery depends on the offline envelope existing and being current | H7 |
-| `vault-restore.yml` is broken | No working automated Vault restore | H21 |
+| ~~`vault-restore.yml` is broken~~ | Deleted 2026-08-19. Vault restore is a verified manual procedure (§3.4), matching how etcd restore has always worked (§3.2). Both drilled 2026-08-17 / 08-19 | H21 closed |
 | `backup-offsite` is a no-op competing with `backup-cloud` | Two offsite mechanisms, one fake | H20 |
 | restic 0.12.1 (2021) | Upgrading past 0.14 silently reverses the cold-sec copy direction unless the version guard in `backup-nas-copy.sh` catches it | M-new-2 |
 | cold-8t is one box | Cold tier does not survive loss of the H4; only R2 does | C5 |
