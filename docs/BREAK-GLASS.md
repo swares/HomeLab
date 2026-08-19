@@ -360,7 +360,11 @@ once, which is the only honest definition of "the envelope works":
 | 1 — offsite data restore | items 2, 3 — R2 restic password, R2 account ID + API keys. **PASSED 2026-08-16** |
 | 2a — Postgres dump loads | item 1 — local restic password. **PASSED 2026-08-17** |
 | 2b — Vault raft snapshot | item 5 — the unseal shares. **PASSED 2026-08-17** |
-| 2c — etcd onto scratch | item 4 — k3s server token. *Not yet run* |
+| 2c — etcd onto scratch | item 4 — k3s server token. **PASSED 2026-08-19** |
+
+**All six envelope items are now proven by drill rather than assumed** — items 1–5 above,
+and item 6 (Ansible vault password) by every playbook run against encrypted `group_vars`.
+That was the goal set on 2026-08-15, when no restore had ever been performed in this lab.
 
 Item 6 (Ansible vault password) is exercised by any playbook run against encrypted
 `group_vars`, so it needs no drill of its own.
@@ -508,6 +512,75 @@ worth more than a passed one nobody remembers.
 | 2026-08-16 | 1 — offsite data restore | `immich-2026-08-15.sql.gz`, 16,662,251 B, from snapshot `23056e8d` in R2 `homelab-nas` | **9m23s** end to end (17:09:25Z→17:18:48Z); the `restic restore` itself was 3s | **PASS** — all five criteria | Details below |
 | 2026-08-17 | 2a — a Postgres dump actually loads | `immich-2026-08-17.sql.gz`, 16,662,246 B, from snapshot `a6c04a33` in the **local** repo `4154928a` | **3m45s** (20:06:45Z→20:10:30Z), most of it pulling the image | **PASS** — load and envelope item 1 | Details below |
 | 2026-08-17 | 2b — Vault raft snapshot into a scratch Vault | `vault-snap-20260816-181204.snap`, 69,898 B, onto throwaway VM `drill-2b` | **11m40s** (20:57:50Z→21:09:30Z) restore to unsealed | **PASS** — restore, envelope item 5, and data | Details below |
+| 2026-08-19 | 2c — etcd snapshot onto scratch | `etcd-snapshot-odroid-nas-1787097604`, 38 MB, onto throwaway VM `drill-2c` | **~14m** of successful path (20:06:42Z restore → 20:20:16Z cluster up); **~37m including four failed attempts** | **PASS** — cluster state and envelope item 4 | Details below |
+
+**Drill 2c, 2026-08-19 — a cluster rebuilt from a 38 MB file and a credential.**
+
+Throwaway VM on n150-2 (4 GB, libvirt NAT), k3s v1.36.2+k3s1 pinned to match production,
+installed with `INSTALL_K3S_SKIP_START=true`, run with `--disable-agent` throughout.
+
+    restore            k3s server --disable-agent --cluster-reset \
+                         --cluster-reset-restore-path=<snap> --token=<envelope item 4>
+    bootstrap          "Reconciling bootstrap data between datastore and disk"
+                       "Updating bootstrap data on disk from datastore"
+                       certs signed by k3s-client-ca@1782402149 — the June production CA
+    then               k3s server --disable-agent          (no --cluster-reset)
+    result             "k3s is up and running"
+    nodes              odroid-nas 55d · n150-1 47d · n150-2 25d · opi5pro-1 42d · opi5pro-2 54d
+    namespaces         21, including argocd, immich, authelia, lldap, monitoring, kyverno
+    deployments        argocd x6, cert-manager x3, ai-gateway x4, authelia x2, and more
+
+All nodes `NotReady` and every webhook reporting "no endpoints" is the **correct** result:
+`--disable-agent` means no kubelet, so nothing schedules. `traefik-vip` logging *"There are
+no available nodes for LoadBalancer"* confirms kube-vip never started, which was the point.
+
+**Envelope item 4 is correct.** The successful run used the value read off the printed page.
+
+#### The finding: `--token=` and the token file are not interchangeable
+
+Four attempts failed with:
+
+    FATA bootstrap data already found and encrypted with different token
+
+…while using the **right** token. The cause was placing it at
+`/var/lib/rancher/k3s/server/token` before the restore instead of passing `--token=`.
+Pre-seeding that file makes k3s treat local disk state as established: it generates its own
+self-signed CAs at startup and writes its own bootstrap data, then finds the snapshot's and
+refuses to reconcile. With `--token=` and no pre-seeded file, it takes the snapshot's CAs
+instead — which is what `Updating bootstrap data on disk from datastore` means.
+
+The error names the token, so it sends you hunting a credential that is fine. Diagnosing it
+cost four runs and two false accusations against the envelope.
+
+**Do not inspect `/var/lib/rancher/k3s/server/token` to diagnose a failed restore.** k3s
+rewrites it during startup (`Server node token is available at …`), so after any run it
+holds what k3s generated, not what you supplied. Hash it *before* starting k3s or not at all.
+
+#### Serious: a restored cluster dials production
+
+    Started tunnel to 192.168.1.160:6443 / 192.168.1.21:6443 / 192.168.1.42:6443
+    Connected to proxy  url="wss://192.168.1.160:6443/v1-k3s/connect"
+    Remotedialer connected to proxy
+
+The drill VM **connected to the live cluster's API servers and was accepted**, because the
+restored bootstrap data gave it certificates signed by the production CA. Nothing was
+damaged — endpoint writes went to its own datastore and the tunnels dropped — but this is
+the 2b advisory firing for real rather than in theory.
+
+**Run restores where they cannot reach production.** Libvirt's `default` NAT masquerades
+outbound to the LAN, so "a separate VM" is not isolation. A restricted-forward network is.
+
+#### Also worth knowing
+
+- **`--disable-agent` is doing real work.** Without it the restored datastore would start
+  kube-vip, which is configured to claim `192.168.1.200` and `.201` — from a drill VM that
+  demonstrably can reach the LAN.
+- **Stale files in the snapshot directory.** `/mnt/cold-8t/k3s-etcd-snapshots/` holds
+  `state-2026-06-25_1645.db` (19 MB), `state-2026-06-28_0300.db` (421 MB) and
+  `etcd-2026-06-24_1739-…`, none of which match the `etcd-snapshot-*` glob the retention
+  script prunes on. ~440 MB of pre-migration files, never cleaned.
+- The negative test was obtained free: four runs demonstrated exactly what a wrong token
+  looks like, so no deliberate no-token attempt was needed.
 
 **Drill 2b, 2026-08-17 — a Vault snapshot restores and the printed shares open it.**
 
