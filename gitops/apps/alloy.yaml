@@ -12,7 +12,14 @@ spec:
     targetRevision: 1.10.0
     helm:
       valuesObject:
-        # DaemonSet — one pod per node to collect logs and journal
+        # DaemonSet — one pod per node to collect logs and journal.
+        #
+        # Kubernetes Events are deliberately NOT collected here. This is a
+        # DaemonSet and loki.source.kubernetes_events watches the API server
+        # rather than the local node, so each of the five pods would ship its own
+        # copy of every event. Events are handled by the singleton `alloy-events`
+        # release instead — see gitops/apps/alloy-events.yaml for the full
+        # reasoning, and docs/LEDGER-DESIGN.md for why they are captured at all.
         controller:
           type: daemonset
           tolerations:

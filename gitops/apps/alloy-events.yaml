@@ -1,0 +1,130 @@
+# Alloy (events) — a second, singleton Alloy release whose only job is to tail
+# Kubernetes Events to Loki.
+#
+# WHY THIS IS A SEPARATE RELEASE AND NOT A BLOCK IN alloy.yaml
+#
+# Kubernetes Events live in etcd under the apiserver's --event-ttl, which defaults
+# to 1h0m0s. After that they are garbage-collected and gone. Nothing in this lab
+# captures them today, so every Argo sync result, failed scheduling decision, probe
+# failure, image pull error and OOM kill is destroyed within the hour. See
+# docs/LEDGER-DESIGN.md §1.
+#
+# The obvious fix — add loki.source.kubernetes_events to the existing `alloy`
+# release — is wrong here. That release is a DaemonSet (one pod per node, five
+# nodes). The component watches the API server, not the local node, so every pod
+# would collect every event and Loki would receive five identical copies of each.
+#
+# Two ways out:
+#
+#   1. Enable Alloy clustering on the existing release and set clustering.enabled
+#      in the component. Events then land on exactly one node. This works, but it
+#      turns on clustering for the log pipeline too, changing how targets are
+#      distributed in a DaemonSet that is currently healthy and load-bearing.
+#   2. Run a separate singleton release. Costs one small pod; the log pipeline is
+#      not touched at all.
+#
+# (2) is chosen. Event volume in a five-node homelab does not need distributing,
+# and the blast radius of this change is a pod that did not exist before.
+#
+# NOTES ON THINGS THAT LOOK MISSING
+#
+# - No RBAC block. The chart's default `rbac.rules` (values.yaml, chart 1.10.0)
+#   already carries `apiGroups: [""] / resources: ["events"] / verbs: [get,list,
+#   watch]`, commented in-chart as "Rules required for the
+#   loki.source.kubernetes_events component". Because `rbac.namespaces` is empty
+#   the chart creates a ClusterRole + ClusterRoleBinding, which is what watching
+#   all namespaces requires.
+# - No stabilityLevel override. loki.source.kubernetes_events is GA, so it loads
+#   under the chart's default "generally-available".
+# - crds.create is false: the existing `alloy` release already owns the
+#   monitoring.grafana.com CRDs. Two releases installing the same cluster-scoped
+#   CRDs collide.
+# - No nodeSelector. This is deliberately unpinned — it holds no state and no PV,
+#   so it should be free to reschedule. Compare gitops/workloads/lldap/postgres.yaml,
+#   where a node-bound local-path PV turned one wedged node into an SSO outage.
+#
+# THIS IS PHASE 1 ONLY
+#
+# Loki is a 30-day holding pen, not the ledger. It is here because capture is
+# urgent and irreversible-if-skipped, while the choice of long-term store is not
+# yet made (docs/LEDGER-DESIGN.md §8) and can reindex a captured stream later.
+# Do not let this become the permanent answer.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: alloy-events
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: alloy
+    # renovate: datasource=helm registryUrl=https://grafana.github.io/helm-charts depName=alloy
+    targetRevision: 1.10.0
+    helm:
+      valuesObject:
+        # Singleton. Exactly one watcher, or events arrive duplicated.
+        controller:
+          type: deployment
+          replicas: 1
+          # No tolerations: unlike the log DaemonSet this does not need to run on
+          # the inference nodes. It talks to the API server from wherever it lands.
+
+        # The `alloy` release already installs these cluster-scoped CRDs.
+        crds:
+          create: false
+
+        alloy:
+          # Modest and explicit. The `monitoring` namespace is excluded from the
+          # require-resource-limits Kyverno policy, so nothing forces this — which
+          # is exactly why it is worth writing down rather than inheriting {}.
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+
+          configMap:
+            content: |
+              // ── Kubernetes Events ────────────────────────────────────────
+              // All namespaces (the `namespaces` argument is left unset).
+              //
+              // log_format = "json" matters more than it looks. logfmt is the
+              // default and is lossy for the multi-word, punctuation-heavy
+              // messages Kubernetes puts in event `message` fields. JSON keeps
+              // the structure intact so `| json` works in LogQL now, and so the
+              // stream can be replayed into the real ledger later without
+              // having been flattened to prose first.
+              loki.source.kubernetes_events "events" {
+                job_name   = "kubernetes-events"
+                log_format = "json"
+                forward_to = [loki.write.gateway.receiver]
+              }
+
+              // ── Forward to Loki gateway ──────────────────────────────────
+              // Same endpoint the log DaemonSet uses.
+              loki.write "gateway" {
+                endpoint {
+                  url = "http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push"
+                }
+              }
+
+        # Scrape this collector's own metrics. Not decoration: a ledger that
+        # silently stops collecting reports false absence, which is the failure
+        # mode the ledger exists to detect, one level up (LEDGER-DESIGN.md §9).
+        # Follow-up: an alert on this target going down belongs in
+        # gitops/workloads/monitoring/lab-alerts.yaml.
+        serviceMonitor:
+          enabled: true
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
