@@ -221,6 +221,27 @@ working backup tier. It was caught by checking the code and the dated records. T
 precisely the failure this design exists to prevent, and it happened while writing the
 design.
 
+### The recurring shape: success reported, nothing done
+
+Every specimen above is the same bug wearing different clothes. `backup-offsite`
+exiting 0 having copied zero bytes. `backup-etcd` snapshotting a file deleted a month
+earlier and pinging healthchecks.io green for a month. `backup-cloud` retention
+deleting nothing because a random staging path put every snapshot in its own group.
+A CI job that could not report failure because its loop ran in a subshell. In each
+case the mechanism emitted its success signal correctly; the *outcome* was absent.
+
+**A third instance appeared while this branch was being pushed, on 2026-08-19.** A
+stale zero-byte `.git/index.lock`, ~22 hours old from a crashed process, made
+`git add` and `git commit` fail. The subsequent `git push` then succeeded — creating
+the remote branch, printing a "Create a pull request" URL, and reporting
+`Total 0 (delta 0), reused 0`. The branch was pushed pointing at the same SHA as
+`main`, containing none of the work. Every signal git normally emits on success was
+emitted. The only evidence was the object count.
+
+This generalises the design's premise: **the check must be on the outcome, never on
+the exit code.** `backup-verify.sh` already applies that rule to backups; §6 applies
+it to documents; the list below applies it to everything else.
+
 ### Checks worth running weekly
 
 - Claimed-DONE backlog items with no supporting ledger event
@@ -228,6 +249,8 @@ design.
 - Timers that report success but whose duration or byte count is implausible
 - Ingress hostnames in docs with no corresponding sync event
 - Documents whose last edit predates the last change to the thing they describe
+- **Branch refs created or updated with no new commit SHA** — a push that moved a ref while transferring zero objects. Cheap to detect once git is a ledger source: the ref event exists, no corresponding commit event does
+- **Stale lock files** older than a few hours anywhere git or a backup repo is used (`.git/index.lock`, restic locks). These do not announce themselves; they turn later commands into no-ops that still exit 0
 
 ---
 
