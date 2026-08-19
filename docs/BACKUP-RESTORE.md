@@ -187,6 +187,28 @@ sudo k3s server \
   --token=<TOKEN-FROM-ENVELOPE-OR-R2>
 ```
 
+> **Pass `--token=`. Do not pre-create `/var/lib/rancher/k3s/server/token`,** and do not
+> use `--token-file` — it is silently ignored on this path and fails complaining the *file*
+> does not exist. Verified 2026-08-19 (Drill 2c).
+>
+> Pre-seeding the token file makes k3s treat local disk state as established: it generates
+> its own self-signed CAs at startup, writes its own bootstrap data, then finds the
+> snapshot's and aborts with
+> `FATA bootstrap data already found and encrypted with different token`. **That message
+> names the token, and the token is fine** — it cost four runs to work out. With `--token=`
+> and a clean `/var/lib/rancher/k3s`, the log instead reads
+> `Updating bootstrap data on disk from datastore` and the production CAs come out of the
+> snapshot.
+>
+> Nor should you inspect that file afterwards to diagnose: k3s rewrites it on startup, so
+> post-run it holds what k3s generated rather than what you supplied.
+>
+> Add `--disable-agent` when restoring anywhere other than the real cluster. The restored
+> datastore contains kube-vip, configured to claim `192.168.1.200` and `.201`.
+> **And restore somewhere that cannot reach production** — the restored node holds
+> certificates signed by the production CA, and on 2026-08-19 a drill VM on libvirt NAT
+> opened remotedialer tunnels to all three live servers and was accepted.
+
 Node objects are inside the snapshot, so after restoring to new machines you must
 `kubectl delete node <old-name>` for hosts that no longer exist.
 
@@ -356,7 +378,7 @@ Record the date, duration, and anything surprising in the log below.
 | 2026-08-16 | Test 4 — decrypt and restore one R2 snapshot **using only the offline envelope**, on a throwaway VM, no Vault and no H4 | **PASS** | 9m23s (restore itself 3s) | `immich-2026-08-15.sql.gz`, 16,662,251 B, snapshot `23056e8d`, sha256 identical to the H4 original. Full record in [`BREAK-GLASS.md`](BREAK-GLASS.md) → Results |
 | 2026-08-17 | Test 3 — Postgres dump into a scratch database, count rows (Drill 2a) | **PASS** — load and envelope item 1 | 3m45s | `immich-2026-08-17.sql.gz` from the local repo `4154928a`. `psql` exit 0 under `ON_ERROR_STOP=1`; `vchord 0.4.3` and `vector 0.8.1` restored; `geodata_places` 224,210 rows. Item 1 opens the repo, so it is current with the 2026-08-07 rotation. Full record in [`BREAK-GLASS.md`](BREAK-GLASS.md) → Results |
 | 2026-08-17 | Test 2 — Vault raft snapshot into a scratch Vault (Drill 2b) | **PASS** — restore, envelope item 5, and data | 11m40s | `vault-snap-20260816-181204.snap` onto a throwaway VM running Vault 2.0.4. Unsealed with 3 of the 5 printed shares; cluster ID matches production; `secret/lab` lists 23 paths; `secret/lab/restic` hashes identically to the live file and the envelope. **Requires a Vault restart after `raft snapshot restore`** before the seal config is readable. Full record in [`BREAK-GLASS.md`](BREAK-GLASS.md) → Results |
-| — | Test 1 (etcd into scratch) | *not yet tested* | — | Drill 2c; needs envelope item 4, the k3s server token |
+| 2026-08-19 | Test 1 — etcd snapshot onto scratch hardware (Drill 2c) | **PASS** — cluster state and envelope item 4 | ~14m on the successful path; ~37m including four failed attempts | `etcd-snapshot-odroid-nas-1787097604` (38 MB) onto a throwaway VM. All 5 node objects, 21 namespaces, deployments intact; CAs restored from the snapshot (`k3s-client-ca@1782402149`). **Pass `--token=` — do not pre-create `/var/lib/rancher/k3s/server/token`**, which makes k3s generate its own CAs and fail with a message blaming the token. Full record in [`BREAK-GLASS.md`](BREAK-GLASS.md) → Results |
 
 ---
 

@@ -110,11 +110,15 @@ It exists. Printed 08-17 carrying the five post-rekey unseal shares, the five su
 shares as item 5b (destroy after 2026-11-16), and current values for items 1–4 and 6. All
 five currency rows in `docs/BREAK-GLASS.md` are ticked.
 
-**Four of the six items are proven** rather than assumed, which is the part that took the
-drills: items 2 and 3 opened the R2 repo from a machine with nothing else on it (Drill 1),
-item 1 opened the local repo (Drill 2a), and item 5 unsealed a Vault barrier restored from
-a snapshot onto a machine that had never seen this Vault (Drill 2b, 2026-08-17). Item 4 is
-Drill 2c. Item 6 is exercised by any playbook run against encrypted `group_vars`.
+**All six items are proven** rather than assumed, which is the part that took the drills:
+items 2 and 3 opened the R2 repo from a machine with nothing else on it (Drill 1), item 1
+opened the local repo (Drill 2a), item 5 unsealed a Vault barrier restored from a snapshot
+onto a machine that had never seen this Vault (Drill 2b), and item 4 rebuilt the cluster's
+entire datastore from a 38 MB etcd snapshot (Drill 2c, 2026-08-19). Item 6 is exercised by
+every playbook run against encrypted `group_vars`.
+
+On 2026-08-15 no restore had ever been performed in this lab. Four days later every
+credential in the envelope has been used to recover something.
 
 Drill 2b also produced a three-way agreement worth recording: `secret/lab/restic` inside
 the restored snapshot hashes identically to `/etc/restic/password` on the H4 and to the
@@ -646,6 +650,35 @@ Recorded rather than done, because "can seal Vault" deserves a deliberate decisi
 
 Not blocking: rekey verification uses `systemctl restart vault` instead, since Vault
 always starts sealed and that needs no token at all.
+
+### 2.13 k3s server token was exposed during Drill 2c — **decide: rotate or accept**
+`docs/BREAK-GLASS.md` item 4, `ansible/playbooks/backup-cloud.yml:217`
+
+On 2026-08-19 the k3s server token was passed as `--token='K10…'` on a command line and
+the full invocation was pasted into a chat transcript. It is therefore in: that transcript,
+the H4's shell history, and the (now destroyed) drill VM's history.
+
+`CLAUDE.md` lists it as never-echo. `docs/BACKUP-RESTORE.md:65` is blunter — snapshot plus
+token is total compromise, because the token is the key k3s derives to encrypt CA private
+keys inside the datastore.
+
+**Severity: real but bounded.** The token alone grants nothing without either a snapshot or
+network access to the cluster. Snapshots live on the H4 and in R2, the latter encrypted
+under a different credential.
+
+**If rotating** (`k3s token rotate`, verify syntax first — it requires restarting all five
+nodes), it cascades exactly as the Vault rekey did: **snapshots taken before the rotation
+need the old token.** Those persist 30 days on `/mnt/cold-8t/k3s-etcd-snapshots` and ~3
+months in R2. The envelope would need an **item 4b** — old k3s token, labelled, destroy
+after the same window. Same shape and same reasoning as item 5b.
+
+**If accepting**, record that decision here rather than leaving it unstated.
+
+Process note worth keeping: this happened while pasting command output for diagnosis, in a
+session that had twice explicitly said not to paste the value. Reading a rule and applying
+it under debugging pressure are different things — the durable fix is not typing secrets on
+command lines at all, which is why `--token-file` was reached for in the first place. That
+it is unsupported on the restore path (§ Drill 2c) is an upstream gap worth knowing.
 
 ### 2.12 Vault is seven weeks behind its installed binary — **found 08-16**
 `ansible/playbooks/update-non-apt.yml:213-221,248`, `docs/UPDATES.md` §5
@@ -1368,6 +1401,13 @@ break-glass work is for. Revisit only if the RPi5 stops being trusted.
 ---
 
 ## 9. Small, live, cheap
+
+- **~440 MB of pre-migration files in the etcd snapshot directory** — found during Drill 2c.
+  `/mnt/cold-8t/k3s-etcd-snapshots/` holds `state-2026-06-25_1645.db` (19 MB),
+  `state-2026-06-28_0300.db` (421 MB) and `etcd-2026-06-24_1739-odroid-nas-…`. None match
+  the `etcd-snapshot-*` glob that `backup-etcd.sh.j2:98` prunes on, so they have sat there
+  since June and will sit there forever. Confirm they are the pre-embedded-etcd sqlite
+  state (`backup-etcd.sh.j2:14` mentions the `state.db` rename) and delete.
 
 - `lldap-backup` init container failed once and self-healed; a retry loop around
   `pg_dump` would make it deterministic (`TODO-2026-08-03.md:447-452`).
