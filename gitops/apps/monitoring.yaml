@@ -70,6 +70,21 @@ spec:
               mountPath: /etc/grafana/secrets
               readOnly: true
               defaultMode: 0440
+          # OIDC role mapping. Here rather than in grafana.ini because the ini parser
+          # strips the quotes this expression needs — full reasoning at
+          # auth.generic_oauth.allow_sign_up below.
+          #
+          # "'Admin'" is a JMESPath string literal: it evaluates to Admin for every
+          # authenticated user, which is the current (single-operator) intent. When a
+          # second account exists this should become group-driven, e.g.
+          #   contains(groups[*], 'grafana-admins') && 'Admin' || 'Viewer'
+          # which needs the group to exist in lldap and Authelia to emit it in the
+          # `groups` claim that groups_attribute_path already reads. Do that as a
+          # separate change — prove the mechanism with the literal first, or you are
+          # debugging the claim and the parser at the same time.
+          env:
+            GF_AUTH_GENERIC_OAUTH_ROLE_ATTRIBUTE_PATH: "'Admin'"
+
           grafana.ini:
             server:
               root_url: "https://grafana.apps.lab.home.arpa"
@@ -89,7 +104,27 @@ spec:
               name_attribute_path: name
               use_pkce: "false"
               auto_login: "false"
-              role_attribute_path: "'Admin'"
+              # role_attribute_path is deliberately NOT set here. It lived on this
+              # line from 2026-07-20 (ee76f66, #249) until 2026-08-19 and never once
+              # worked: every OIDC user landed as Viewer.
+              #
+              # The value has to reach Grafana as the JMESPath expression 'Admin' —
+              # a quoted string literal. Written in grafana.ini it does not: the ini
+              # parser strips the surrounding single quotes, so JMESPath receives a
+              # bare `Admin` and reads it as a *field lookup* against the OIDC claims.
+              # No such claim exists, the expression yields null, no role is resolved,
+              # and Grafana falls back to the default org role — Viewer.
+              #
+              # Nothing about this fails loudly. The rendered grafana.ini reads
+              # `role_attribute_path = 'Admin'`, which looks correct on inspection;
+              # the login succeeds; the user is simply assigned the wrong role.
+              # Confirmed 2026-08-19 against a live account (created 2026-07-21, one
+              # day AFTER the mapping landed, isExternallySynced=true, role=Viewer).
+              #
+              # Set via env var instead — see `env:` below. Environment variables are
+              # not ini-parsed, so the quotes survive. Grafana env vars also take
+              # precedence over grafana.ini, so leaving a stale copy here would be a
+              # second source of truth that silently loses.
               allow_sign_up: "true"
               tls_client_ca: /etc/grafana/certs/lab-ca.crt
 
