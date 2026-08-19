@@ -43,14 +43,15 @@ Full record and criteria in `docs/BREAK-GLASS.md` → Results.
 **The backup chain is no longer a belief.** Three repos, retention, verification,
 alerting and an offsite tier — one leg of which has now demonstrably restored something.
 
-Still open, and deliberately not claimed:
+Written after Drill 1, when only items 2 and 3 had been used:
 
-- **Envelope items 1, 4, 5 and 6 are untested.** The local restic password, k3s server
-  token, Vault unseal shares and Ansible vault password were never used. That is Drill 2,
-  which is the harder half and carries its own known blocker (§4.6, `vault-restore.yml`
-  does not work as written).
+- ~~**Envelope items 1, 4, 5 and 6 are untested.**~~ **All now tested.** Item 1 by Drill 2a
+  (08-17), item 5 by Drill 2b (08-17), item 4 by Drill 2c (08-19), item 6 by every playbook
+  run against encrypted `group_vars`. The blocker named here — §4.6, `vault-restore.yml` —
+  was resolved by deleting the playbook rather than fixing it; Vault restore is now a
+  verified manual procedure in `docs/BACKUP-RESTORE.md` §3.4.
 - **The timing does not extrapolate.** 3 seconds moved 15.9 MiB. Real content is ~250 MiB
-  today and ~1.5 TB once Immich is populated (§1.10).
+  today and ~1.5 TB once Immich is populated (§1.10). Still true.
 - **§1.9's `cold-sec` re-init is now unblocked** — it was gated on this.
 
 *Original entry below, retained for the reasoning.*
@@ -511,7 +512,8 @@ standing credential that grants full Vault access. **Not** recommended is making
 (§2.6) with no host firewall (§2.9), so that would leave the DoS vector open permanently
 rather than for the length of a ceremony.
 
-Related: §2.11 (cannot seal), §2.12 (version lag), §4.6 (`vault-restore.yml` broken).
+Related: §2.11 (cannot seal), §2.12 (version lag), §4.6 (Vault restore, now a verified
+manual procedure in `docs/BACKUP-RESTORE.md` §3.4).
 
 ### 1.4 `storage.yml` can `mkfs` a cold mirror by unstable device name
 `docs/REVIEW-2026-07-24.md:291` (H15)
@@ -892,7 +894,41 @@ channel if the pinned var isn't in scope. An unattended run could upgrade the cl
 `tofu/dns/terraform.tf:6-11` — no Pi-hole v6 provider. The ingress VIP is now
 maintained by hand in three places (`main.tf:43`, `hosts.yml`, `verify-lab.py:46`).
 
-### 4.6 `vault-restore.yml` cannot work as written — **Drill 2b done 08-17; ready to rewrite from evidence**
+### 4.6 ~~`vault-restore.yml` cannot work as written~~ — **DELETED 2026-08-19, not rewritten**
+
+**Resolution: the playbook is gone and Vault restore is now a verified manual procedure**
+in `docs/BACKUP-RESTORE.md` §3.4, matching how etcd restore has always been handled in
+§3.2. One document, two restores, same shape, both drilled.
+
+**Why deletion rather than a rewrite**, which is what this entry expected as recently as
+08-17:
+
+- Drill 2c (08-19) restored the **entire cluster datastore** with no playbook at all,
+  following §3.2. The harder of the two restores has never needed automation and is the
+  better-tested of the pair.
+- The automatable part of both is three commands — install at the right version, fetch the
+  newest snapshot, run one restore. Everything that actually goes wrong is judgement:
+  *which* snapshot, *is this host isolated from production*, *is the version right* —
+  followed by a key ceremony that has to be human.
+- `vault-restore.yml` was broken from at least 2026-07-24 (H21) and nobody noticed **because
+  nobody ran it**. A rewrite rots the same way. The only thing that would keep it honest is
+  drilling it, and drilling it means running it by hand.
+- Drill 2b took **11m40s** by hand. Automation would have saved minutes on an operation
+  performed roughly never, while adding something that silently goes wrong between uses.
+
+§3.4 carries the four findings from 2b — `-force`, the mandatory restart before the seal
+config is readable, newest `vault-snap-*.snap` from the H4 rather than a dated tarball, and
+Vault installed at or above the snapshot's version — plus the isolation warning that
+Drill 2c turned from theory into an observed fact.
+
+References updated: `docs/TROUBLESHOOTING.md` rpi5 recovery now points at §3.4, and
+`docs/BACKUP-RESTORE.md` §5 records H21 closed.
+
+*Original entry below.*
+
+---
+
+#### Original finding — `vault-restore.yml` cannot work as written
 `docs/REVIEW-2026-07-24.md:296` (H21), `ansible/playbooks/vault-restore.yml:26,65-68`
 
 H21 records a hard-coded dated tarball (`vault-backup-20260627.tar.gz`) in

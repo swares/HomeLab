@@ -393,36 +393,47 @@ chmod 600 /mnt/cold-8t/backups/vault-*.json
 1. Flash Raspberry Pi OS Bookworm Lite 64-bit with Pi Imager
    - Pre-configure: hostname `RPI-5--01`, user `swares`, SSH key, no WiFi
 2. Boot, confirm SSH: `ssh swares@192.168.1.128`
-3. Bootstrap then restore:
+3. Bootstrap the host:
    ```bash
    cd ~/lab/homelab/homelab/ansible
 
    ansible-playbook -i inventory/hosts.yml playbooks/bootstrap.yml \
      --limit rpi5 -k -K --vault-password-file .vault_pass
-
-   ansible-playbook -i inventory/hosts.yml playbooks/vault-restore.yml \
-     --vault-password-file .vault_pass
    ```
-4. Unseal Vault (3 key shares):
+4. **Restore Vault by hand** — follow
+   [`BACKUP-RESTORE.md` §3.4](BACKUP-RESTORE.md#34-restore-vault--raft-snapshot-onto-new-hardware),
+   which covers installing Vault at or above the snapshot's version, the throwaway init,
+   `raft snapshot restore -force`, and the restart that step 5 below depends on.
+
+   There is no `vault-restore.yml`. It was deleted 2026-08-19 — it stopped Vault, wiped
+   the data dir and unpacked a dated tarball, a method that never matched the raft
+   snapshots the backups produce, and had been broken since July without anyone noticing.
+   The manual path is verified: Drill 2b, 11m40s.
+5. Unseal Vault (3 key shares from the offline envelope):
    ```bash
    ssh swares@192.168.1.128
    export VAULT_ADDR=http://127.0.0.1:8200
+   vault status            # confirm Total Shares 5, Threshold 3 BEFORE unsealing
    vault operator unseal   # 1/3
    vault operator unseal   # 2/3
    vault operator unseal   # 3/3
    ```
-5. Populate auto-unseal keys file:
+   If `vault status` still shows the throwaway `1 / 1` config, Vault was not restarted
+   after the restore. Restart it, then unseal.
+6. Populate auto-unseal keys file — **all five shares**, keys only, no comments:
    ```bash
-   sudo nano /etc/vault.d/unseal-keys   # one key share per line, 3 lines
+   sudo nano /etc/vault.d/unseal-keys   # one key share per line
    sudo chmod 400 /etc/vault.d/unseal-keys
    sudo systemctl start vault-unseal
    ```
-6. Delete plaintext backups from cold storage:
+   `vault-unseal.sh` skips blank lines and nothing else; any other non-key line is passed
+   to `vault operator unseal`, fails, and aborts the unit under `set -euo pipefail`.
+7. Delete plaintext backups from cold storage:
    ```bash
    rm /mnt/cold-8t/backups/vault-*.json
    # Keep the tar — it's encrypted raft data, not plaintext
    ```
-7. Verify ESO recovered on H4:
+8. Verify ESO recovered on H4:
    ```bash
    kubectl get externalsecret -A
    kubectl get applications -n argocd

@@ -349,8 +349,14 @@ snapshot"* — the second tells you what 2am looks like.
 the Postgres dumps. `BACKUP-RESTORE.md` lists three untested restores and they are
 independent, so they are three drills rather than one. Cheapest first.
 
-**Do these manually. Do not fix `vault-restore.yml` first** — see 2b. *(2a and 2b are done;
-only 2c remains.)*
+**Do these manually.** *(All three are done — 2a and 2b on 08-17, 2c on 08-19. Kept as the
+procedure to re-run, not as outstanding work.)*
+
+The instruction here used to read "do not fix `vault-restore.yml` first". That playbook was
+**deleted** on 08-19 rather than rewritten: Drill 2c restored an entire cluster datastore
+with no automation at all, and the broken Vault playbook had gone unnoticed for weeks
+precisely because nobody ran it. Vault restore now lives beside etcd restore as a verified
+procedure — `BACKUP-RESTORE.md` §3.4 and §3.2. See `BACKLOG.md` §4.6.
 
 Each one proves a specific envelope item. After 2c, every item has been used at least
 once, which is the only honest definition of "the envelope works":
