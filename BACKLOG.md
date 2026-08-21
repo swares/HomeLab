@@ -818,8 +818,33 @@ journals by machine ID, so the reader searched for a journal belonging to no mac
 found zero entries, and returned successfully. Finding nothing is not an error. A second
 mount of `/etc/machine-id` (`type: File`) was required, added 2026-08-21.
 
-Three separate silent failures stacked in one config: a wrong key, a second wrong key,
-and a missing mount whose absence produces an empty result rather than an error.
+**And that was still not the last one.** With the mount working and machine-id in place,
+the H4 was demonstrably reading — `loki_source_journal_target_lines_total 6800` on its
+own `:12345/metrics` — yet Loki showed no `hostname` and no `unit`, only
+`{job="node-journal"}`. The tell was `loki_relabel_cache_size 1`: **one distinct label
+set across 6800 entries**.
+
+The relabel was chained *downstream* of the journal source. Upstream docs, verbatim:
+*"All messages read from the journal include internal labels following the pattern of
+`__journal_FIELDNAME` and Alloy drops them before sending to the list of receivers
+specified in `forward_to`. To keep these labels, use the `relabel_rules` argument."*
+So both rules matched nothing and every journal line from every node landed in one
+undifferentiated stream. The field names were correct throughout — only the wiring was
+wrong. Fixed 2026-08-21 by passing `relabel_rules = loki.relabel.journal.rules` into
+the source and setting the relabel component's `forward_to = []`.
+
+**Four separate silent failures stacked in one config:** a wrong key, a second wrong
+key, a missing mount whose absence yields an empty result rather than an error, and a
+relabel wired to a stage where its inputs no longer exist. Not one of the four produced
+an error, a warning, or an unhealthy component. Each was individually invisible and
+each masked the next — every fix looked like it had failed, because the layer beneath
+it was broken too.
+
+**This also means the earlier `hostname` label values were never evidence of anything.**
+`n150-1`, `n150-2` and the Pis appeared in Loki because *promtail* labels correctly.
+Alloy has never contributed a hostname label from any node. The 2-vs-3 "split" that
+framed this entire investigation was an artifact of which hosts happened to run a
+second, unmanaged log shipper.
 
 **Why two nodes appeared to work.** n150-1 and n150-2 have host logs in Loki because
 they are running a **stray promtail systemd service** — `active` and `enabled`,
