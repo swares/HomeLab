@@ -106,21 +106,41 @@ Ordered by value per unit of effort.
 | Source | Mechanism | Notes |
 |---|---|---|
 | Kubernetes Events (all namespaces) | a second, singleton Alloy release — `gitops/apps/alloy-events.yaml` | **Not** a block added to the existing `alloy` release: that one is a DaemonSet, and the component watches the API server rather than the local node, so all five pods would ship a duplicate copy of every event. A singleton `Deployment` avoids that without enabling clustering on a healthy log pipeline. The chart's default RBAC already grants `events` watch. `log_format = "json"` so structure survives into the eventual ledger |
-| Git commits | CronJob or CI step walking `git log` since last indexed SHA | ~730 commits at time of writing. Fields: SHA, timestamp, author, subject, files changed, PR number. Backfillable in full — this is the one source with complete history already |
+| ~~Git commits~~ | **moved out of Phase 1 — see below** | Listed here originally, which was a category error |
 | Event backlog rescue | one-time `kubectl get events -A -o json` | **Done 2026-08-19** — 123 events, of which 33 predate capture. Small, but the only artifact of the pre-capture era. Replay once a store exists |
 
 Phase 1 is deliberately shippable without choosing an engine: events land in Loki
 (30d) as a holding pen while the ledger design settles. Losing older events during
 that window is acceptable; losing them *forever* starting now is not.
 
+**Git commits do not belong in this phase, and putting them here was a category error.**
+Phase 1 exists to rescue data that is being destroyed. Git is durable storage — the
+history is not going anywhere, and the full ~730 commits can be indexed whenever an
+engine exists. Building a collector to push commits into a 30-day Loki would *lose*
+them at day 31 while the authoritative copy sat untouched in the repo. Git is an
+indexing task at engine-selection time (§8), not a capture task now. The distinction
+that matters for every source is not "how valuable is it" but **"is anything currently
+deleting it."**
+
 ### 3.2 Phase 2 — sources needing a small shim
 
 | Source | Mechanism | Notes |
 |---|---|---|
-| ~~Argo CD sync/health~~ | **mostly delivered by Phase 1** | Argo emits native Kubernetes Events (`ResourceUpdated`, `OperationStarted`, `OperationCompleted`) which `alloy-events` already captures — verified 2026-08-19, retained back to 2026-07-02. A webhook receiver is only worth adding if the notification *templates* carry something the raw events do not; check before building it |
-| Alertmanager firings | add a fourth receiver to the existing route tree | Read `monitoring.yaml:279` first: the tree already has three live receivers plus `null`, `m5stack` is the catch-all default, and **Alertmanager stops at the first matching route**. The ledger receiver needs `continue: true` or it will silently steal alerts from the notification path |
-| Backup outcomes | `backup-verify.sh` already prints structured `ok:` / `FAIL:` lines weekly | Emit as JSON alongside the human-readable output rather than parsing prose |
-| Ansible runs | Semaphore keeps task history in its own DB | Lowest priority; export on a schedule |
+| ~~Argo CD sync/health~~ | **CLOSED — delivered by Phase 1, no shim needed** | Argo's native Kubernetes Events carry the revision in the message text: `Sync operation to 6efe375c…succeeded`. Verified 2026-08-19. The notification templates carry strictly *less* (a short string POSTed to the M5Stack), so a webhook receiver would be a downgrade. Two caveats below |
+| Alertmanager firings | add a fourth receiver to the existing route tree | **The only confirmed gap.** Read `monitoring.yaml:279` first: the tree already has three live receivers plus `null`, `m5stack` is the catch-all default, and **Alertmanager stops at the first matching route**. The ledger receiver needs `continue: true` or it will silently steal alerts from the notification path |
+| Backup outcomes | **blocked on a broken pipeline, not a parsing task** | Checked 2026-08-19: `backup-verify.service` is absent from Loki entirely. Alloy's `loki.source.journal` works on n150-1/n150-2 and on no other cluster node — `odroid-nas`, `opi5pro-1` and `opi5pro-2` ship no host logs at all. Every backup unit runs on the H4, so none of them are captured. Fix `BACKLOG.md` §3.9 before treating this as a ledger source |
+| Ansible runs | Semaphore keeps task history in its own DB | Lowest priority. Skip until something needs it |
+
+**Two caveats on the Argo revision**, both of which land on the schema (§4):
+
+- **It is prose, not a field.** `Sync operation to <rev> succeeded` must be regex-extracted
+  at index time into `refs[]`. Also seen: `Partial sync operation to <rev> succeeded`,
+  which is a distinct outcome and should not be flattened into the same `action`.
+- **The revision is not always a git SHA.** Chart-sourced Applications report a chart
+  version (`Sync operation to 72.6.2 succeeded`), git-sourced ones report a commit. So
+  `refs[]` carries two kinds of join key: SHAs join directly to the git commit source,
+  chart versions join one hop later via `targetRevision` in `gitops/apps/*.yaml` and the
+  Renovate PR that bumped it. Do not assume a 40-hex string.
 
 ### 3.3 Explicitly out of scope
 
@@ -148,10 +168,20 @@ refs[]         identifiers mentioned           — see below
 `refs[]` is the field that makes this lab's data work. Extract identifiers at write
 time: IPs (`192.168.1.201`), hostnames (`n150-1`), systemd units
 (`backup-offsite.timer`), k8s resources (`vg_microshift`, `local-path`), file paths,
-PR numbers. These are terrible embeddings — `192.168.1.160` and `192.168.1.201` sit
-almost on top of each other in vector space, which is precisely the confusion that
-caused the outage — but they are perfect exact-match tokens. **Any engine chosen must
-support exact-token retrieval over `refs[]`, not dense vectors alone.**
+PR numbers, and Argo revisions parsed out of sync-event prose (§3.2). These are
+terrible embeddings — `192.168.1.160` and `192.168.1.201` sit almost on top of each
+other in vector space, which is precisely the confusion that caused the outage — but
+they are perfect exact-match tokens. **Any engine chosen must support exact-token
+retrieval over `refs[]`, not dense vectors alone.**
+
+**Hostname is not currently a usable join key**, which is inconvenient because it is
+the obvious one for tying a journal line to a node event. Real hostnames in this fleet
+use four naming conventions, match the Ansible inventory in only two cases, and
+include one machine that appears under two names because it was renamed while both
+labels still hold chunks in Loki. See `BACKLOG.md` §3.10. Until §4.14 fixes the
+hostnames, the ledger needs an explicit alias table mapping observed hostname →
+inventory name, and `refs[]` should carry the canonical inventory name rather than
+whatever the host called itself.
 
 Retention: no expiry on the ledger indices. Revisit if it ever exceeds a gigabyte,
 which on current projections is roughly never.
