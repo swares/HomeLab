@@ -556,10 +556,11 @@ on the hot tier (`/dev/vg_microshift/lv_nas`) — a stable LVM path, deliberatel
       `cold_secondary_fs_uuid: 2b91e96d-…` (~5.45 TB, `/mnt/cold-sec`).
       `cold_primary_device` / `cold_secondary_device` deleted — no code references
       either name anywhere in the repo.
-- [ ] **Run it and confirm the mounts do not churn.** `--check` should report `ok` on
-      both mounts, since `UUID=` and the current device resolve to the same filesystem.
-      One `changed` is expected the first real run as fstab is rewritten from a device
-      path to `UUID=`; anything beyond that wants looking at rather than assuming.
+- [x] **Applied 2026-08-21 18:38 UTC.** `/etc/fstab` now reads
+      `UUID=9880ec9a-… /mnt/cold-8t xfs defaults,noatime 0 0` and
+      `UUID=2b91e96d-… /mnt/cold-sec xfs …`. Both UUIDs resolved to their expected
+      arrays (`/dev/md1`, `/dev/md0`), so the numbering had not drifted yet — the fix
+      landed before the risk materialised rather than after.
 - [ ] Consider pinning array assembly as well, with `ARRAY` lines carrying UUIDs in
       `/etc/mdadm/mdadm.conf`. Not required now that nothing depends on the numbering,
       but it would stop the numbers moving in the first place. Deliberately not
@@ -987,6 +988,45 @@ This lands directly on `docs/LEDGER-DESIGN.md` §4, which proposes joining sourc
 extracted identifiers. Hostname is the obvious key for tying a journal line to a node
 event and **is not usable as one in this lab** without a mapping. Either fix the
 hostnames (§4.14) or carry an explicit alias table in the ledger schema.
+
+### 3.11 Nothing reconciles Ansible, and nothing reports the drift
+
+**Found 2026-08-21**, incidentally, while applying §1.4. Running `storage.yml` produced
+an unrelated diff:
+
+    -Docs=file:///.../ARCHITECTURE.md
+    +Documentation=file:///.../ARCHITECTURE.md
+    +Before=lvm2-monitor.service microshift.service
+
+The deployed `microshift-lvm-loop.service` on the H4 was **older than the template in
+git**. Commit `68d6320` ("idempotent loop device service") fixed two things — `Docs=`
+is not a valid systemd directive and does nothing, and the missing `Before=` meant LVM
+could begin scanning before `/dev/loop100` was attached — and the fix sat merged and
+unapplied for an unknown period.
+
+**This is structural, not a one-off.** Argo CD reconciles the cluster continuously with
+`selfHeal`, so a merged manifest reaches the cluster within ~30 seconds whether anyone
+is watching or not. **Ansible reconciles nothing.** A merged host-layer change takes
+effect only when a human remembers to run the playbook, and no check anywhere reports
+the gap. The repo's whole mental model — "change it in git and it happens" — is true of
+one layer and false of the other, with no marker at the boundary.
+
+The boot-ordering fix is the illustrative case rather than the worst case: it is
+invisible until a reboot, and the H4 has a reboot pending from §4.12.
+
+**To do:**
+
+- [ ] **Run every playbook in `--check` on a schedule** and report non-zero changed
+      counts. Weekly is probably right. This is the same "detect the disagreement"
+      pattern as `docs/LEDGER-DESIGN.md` §6 — except the two records disagreeing are
+      git and a machine, rather than git and a document.
+- [ ] Note the prerequisite: several playbooks are not honest under `--check` (they
+      skip their verification `command` tasks and print success anyway). `node-dns.yml`,
+      `promtail-remove-cluster.yml` and `h4-dns-resolvers.yml` were fixed on 2026-08-21;
+      the rest have not been audited. A scheduled `--check` that lies is worse than none.
+- [ ] Decide what the report does. Emailing a diff nobody reads recreates the problem
+      one level up; failing loudly through `LabBackupUnitFailed`-style alerting is the
+      pattern that has actually worked in this lab.
 
 ---
 
