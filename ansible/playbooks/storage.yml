@@ -10,10 +10,15 @@
 # (rebuild, no restore). The NVMe hot tier is the remaining single point of failure for LIVE
 # data — which is why it is backed up to the (mirrored) cold tiers, and ideally offsite.
 #
-# NOTE: this playbook MOUNTS pre-existing arrays and never reformats a populated device. It does
-# NOT create the RAID (mdadm --create is destructive and the arrays already exist). The 8 TB
-# mirror may be DEGRADED until the UDMA-CRC/link issue is resolved — see RUNBOOK "UDMA CRC".
-# cold_primary_device=/dev/md1 (8 TB), cold_secondary_device=/dev/md0 (~5.45 TB, post-rebuild).
+# NOTE: this playbook MOUNTS pre-existing arrays and CONTAINS NO TASK THAT CAN FORMAT A COLD
+# TIER. It does not create the RAID (mdadm --create is destructive and the arrays already
+# exist), and as of 2026-08-21 it does not create filesystems on them either — if one is
+# missing the play fails and says so. The 8 TB mirror may be DEGRADED until the UDMA-CRC/link
+# issue is resolved — see RUNBOOK "UDMA CRC".
+#
+# Cold tiers are addressed by FILESYSTEM UUID (cold_primary_fs_uuid / cold_secondary_fs_uuid
+# in inventory), never by /dev/mdX — those are assembly-order names the kernel can reassign.
+# BACKLOG.md §1.4.
 - name: Configure storage tiers on the H4 core
   hosts: microshift
   become: true
@@ -43,26 +48,92 @@
         create: true
       notify: restart mdmonitor
 
-    # ---- Cold tiers: two mdadm RAID 1 mirrors (8 TB md1 primary, ~5.45 TB md0 secondary) ----
-    - name: Filesystem on the cold mirrors (never reformats a populated array)
-      community.general.filesystem:
-        fstype: xfs
-        dev: "{{ item }}"
-        force: false
-      loop:
-        - "{{ cold_primary_device }}"     # /dev/md1 — 8 TB mirror (primary)
-        - "{{ cold_secondary_device }}"   # /dev/md0 — ~5.45 TB mirror (rebuilt secondary)
+    # ---- Cold tiers: identified by FILESYSTEM UUID, never by device name ----
+    #
+    # BACKLOG §1.4. `/dev/md0` and `/dev/md1` are assembly-order names, not identities.
+    # mdadm numbers arrays as it finds them, so a reboot, a degraded member, a disk
+    # replacement or an added controller can renumber them. The previous version of
+    # this section formatted and mounted by `{{ cold_primary_device }}` — meaning the
+    # 8 TB copy-of-record and the 5.45 TB copy were distinguished by a number that the
+    # kernel is free to reassign.
+    #
+    # Two consequences, in ascending order of how bad they are:
+    #   - Mounting the wrong array at the wrong path. Not destructive, but restic then
+    #     writes the primary repo onto the secondary mirror and the retention policies
+    #     are applied to the wrong data.
+    #   - `community.general.filesystem` with force:false will not overwrite an
+    #     existing filesystem, but it WILL create one on a blank device. A replacement
+    #     disk that inherits a free mdX number is exactly such a device.
+    #
+    # So: no device names below this line. Filesystem UUIDs are properties of the
+    # filesystem itself and survive every renumbering. CLAUDE.md's rule is "never
+    # mkfs/wipefs the cold disks"; the way to honour that in code is to make it
+    # impossible to name them by accident.
+    #
+    # ONE-TIME SETUP — capture the UUIDs into inventory:
+    #     blkid -s UUID -o value /dev/md1   # -> cold_primary_fs_uuid
+    #     blkid -s UUID -o value /dev/md0   # -> cold_secondary_fs_uuid
+    - name: Require the cold filesystem UUIDs to be defined
+      ansible.builtin.assert:
+        that:
+          - cold_primary_fs_uuid is defined
+          - cold_secondary_fs_uuid is defined
+        fail_msg: >-
+          cold_primary_fs_uuid / cold_secondary_fs_uuid are not set in inventory.
+          Capture them on the H4 with `blkid -s UUID -o value /dev/md1` and
+          `/dev/md0`, add them under h4-core, then re-run. This playbook will not
+          fall back to device names — see BACKLOG.md §1.4.
 
-    - name: Mount the cold mirrors
+    # Read-only, and check_mode:false so a --check run reports the TRUE state rather
+    # than skipping and letting the summary imply everything is fine (CLAUDE.md).
+    - name: Resolve each cold filesystem UUID to the device currently holding it
+      ansible.builtin.command: "blkid -U {{ item.uuid }}"
+      register: _cold_devices
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      loop:
+        - { name: primary,   uuid: "{{ cold_primary_fs_uuid }}" }
+        - { name: secondary, uuid: "{{ cold_secondary_fs_uuid }}" }
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Refuse to continue if either cold filesystem is missing
+      ansible.builtin.assert:
+        that: item.rc == 0
+        fail_msg: >-
+          No filesystem with UUID {{ item.item.uuid }} ({{ item.item.name }} cold tier)
+          is present on this host. That means the array is not assembled, or the disks
+          are not attached — NOT that a filesystem needs creating. Do not "fix" this by
+          formatting anything. Check `cat /proc/mdstat` and `mdadm --detail --scan`
+          first. Creating a cold tier from scratch is a deliberate, separate act, not
+          something this playbook does.
+      loop: "{{ _cold_devices.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Show which device each cold tier currently occupies
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.item.name }} cold tier: UUID {{ item.item.uuid }}
+          is currently {{ item.stdout | default('UNRESOLVED') }}
+          (informational — the mount below uses the UUID, not this path)
+      loop: "{{ _cold_devices.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Mount the cold mirrors by UUID
       ansible.posix.mount:
         path: "{{ item.path }}"
-        src: "{{ item.src }}"
+        src: "UUID={{ item.uuid }}"
         fstype: xfs
         opts: defaults,noatime
         state: mounted
       loop:
-        - { path: "{{ cold_primary_mount }}",   src: "{{ cold_primary_device }}" }
-        - { path: "{{ cold_secondary_mount }}", src: "{{ cold_secondary_device }}" }
+        - { path: "{{ cold_primary_mount }}",   uuid: "{{ cold_primary_fs_uuid }}" }
+        - { path: "{{ cold_secondary_mount }}", uuid: "{{ cold_secondary_fs_uuid }}" }
+      loop_control:
+        label: "{{ item.path }}"
 
     - name: Create cold-tier subdirectories
       ansible.builtin.file:

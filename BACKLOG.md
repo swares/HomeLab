@@ -515,11 +515,55 @@ rather than for the length of a ceremony.
 Related: §2.11 (cannot seal), §2.12 (version lag), §4.6 (Vault restore, now a verified
 manual procedure in `docs/BACKUP-RESTORE.md` §3.4).
 
-### 1.4 `storage.yml` can `mkfs` a cold mirror by unstable device name
+### 1.4 ~~`storage.yml` can `mkfs` a cold mirror by unstable device name~~ — **FIXED 2026-08-21, one step left**
 `docs/REVIEW-2026-07-24.md:291` (H15)
 
 The cold disks are the copy-of-record. Device-name-based formatting is how a reboot
 that reorders `/dev/sdX` destroys them.
+
+**What the exposure actually was.** `community.general.filesystem` ran with
+`force: false`, so it would not overwrite an existing filesystem — the original finding
+slightly overstated the destruction. The real risks were subtler and still serious:
+
+- **Mounting the wrong array.** `/dev/md0` and `/dev/md1` are assembly-order names, not
+  identities. A reboot, a degraded member, a disk replacement or an added controller can
+  renumber them. Restic would then write the primary repo onto the secondary mirror and
+  apply each tier's retention policy to the other tier's data.
+- **Formatting a blank device that inherits a free `mdX` number.** `force: false` stops
+  overwrites but not creation, and a replacement disk is exactly a blank device.
+
+**The fix: no device names anywhere in the cold-tier path.** Filesystem UUIDs are
+properties of the filesystem and survive every renumbering. `storage.yml` now:
+
+1. Asserts `cold_primary_fs_uuid` / `cold_secondary_fs_uuid` are defined, refusing to
+   fall back to device names.
+2. Resolves each UUID with `blkid -U` (read-only, `check_mode: false` so `--check`
+   reports true state) and prints which device it currently occupies — informational
+   only.
+3. **Fails loudly if either filesystem is absent**, with a message saying explicitly
+   that this means the array is not assembled, *not* that a filesystem needs creating.
+   Creating a cold tier is a deliberate separate act, and the playbook no longer
+   contains a task that could do it by accident.
+4. Mounts by `UUID=`, so `/etc/fstab` is renumber-proof too.
+
+The `community.general.filesystem` task that remains applies to the NAS logical volume
+on the hot tier (`/dev/vg_microshift/lv_nas`) — a stable LVM path, deliberately kept.
+
+**To do:**
+
+- [x] **UUIDs captured into inventory** 2026-08-21 under `h4-core`:
+      `cold_primary_fs_uuid: 9880ec9a-…` (8 TB, `/mnt/cold-8t`) and
+      `cold_secondary_fs_uuid: 2b91e96d-…` (~5.45 TB, `/mnt/cold-sec`).
+      `cold_primary_device` / `cold_secondary_device` deleted — no code references
+      either name anywhere in the repo.
+- [ ] **Run it and confirm the mounts do not churn.** `--check` should report `ok` on
+      both mounts, since `UUID=` and the current device resolve to the same filesystem.
+      One `changed` is expected the first real run as fstab is rewritten from a device
+      path to `UUID=`; anything beyond that wants looking at rather than assuming.
+- [ ] Consider pinning array assembly as well, with `ARRAY` lines carrying UUIDs in
+      `/etc/mdadm/mdadm.conf`. Not required now that nothing depends on the numbering,
+      but it would stop the numbers moving in the first place. Deliberately not
+      auto-generated here: writing wrong `ARRAY` lines is its own way to lose an array.
 
 ### 1.5 Nothing ever trims the cold-sec copy repo
 `docs/REVIEW-2026-07-24.md` (M-new-1) — *possibly fixed 07-25 via `backup-nas-copy.sh`
@@ -1684,6 +1728,50 @@ syncing secrets with nothing visibly broken until something needs a refresh. Nei
 alert. Do them at a time of your choosing rather than theirs — and note that since §1.11,
 letting `token-admin` lapse means a `generate-root` ceremony to get back in, so it costs
 more than it used to.
+
+#### ESO — drafted 2026-08-21, three steps, deadline removed rather than moved
+
+Kubernetes auth has no expiry: ESO presents its own ServiceAccount token and Vault
+issues a short-lived token per request. This replaces the recurring deadline instead of
+pushing it out another 768 hours.
+
+1. `gitops/workloads/external-secrets/vault-auth-sa.yaml` — reviewer ServiceAccount,
+   `system:auth-delegator` binding, and an explicit token Secret (SAs stopped
+   auto-creating these in k8s 1.24). **Inert on its own**; changes nothing about how
+   ESO authenticates.
+2. `ansible/playbooks/vault-eso-k8s-auth.yml` — configures `auth/kubernetes/config` and
+   the `eso` role on the rpi5 Vault, then **performs a real login and says whether it
+   worked**. Also inert: ESO is still on the static token throughout.
+3. Swap the auth stanza in `gitops/workloads/immich/external-secret.yaml` — the
+   replacement is written there, commented, ready to uncomment. **Only do this once
+   step 2 reports a successful login.**
+
+The split is deliberate: steps 1 and 2 are reversible and provably correct before
+anything depends on them. Step 3 is the only one that can break ESO, and its failure is
+quiet — Secrets keep their last values, so nothing appears wrong. Check
+`kubectl get externalsecrets -A` for `SecretSynced` on every row, not the pod's health.
+
+#### `token-admin` — renew, but fix the silence first
+
+The renewal itself is one command on rpi5:
+
+    vault token create -orphan -policy=admin -ttl=720h -display-name=token-admin
+
+Note **`-orphan`** — matching how it was created (`TODO-2026-08-03.md:720`). A child
+token would die with its parent and reintroduce the problem being solved. `renew` is
+the wrong verb here: the token is non-periodic, so renewal is capped at the mount's max
+TTL and buys days rather than a month.
+
+**The renewal is not the real work.** A token that expires on a known date with no
+alert is a scheduled outage that depends on someone remembering. This lab already has
+the right pattern — `LabBackupUnitFailed` covers every `backup-*.service` on every
+host, and `backup-verify` proves outcomes rather than exit codes. The equivalent here
+is a timer that checks `vault token lookup` and fails loudly below a threshold:
+
+- [ ] **Add a `vault-token-expiry` check** — systemd timer on rpi5, weekly, exiting
+      non-zero when any tracked token has under 14 days left, so `LabBackupUnitFailed`
+      picks it up. Without it this entry recurs every 30 days forever and eventually
+      gets missed. Not written yet.
 
 The November item is the opposite shape: nothing breaks if it is missed, but a superseded
 set of unseal shares with no expiry quietly becomes a permanent second copy of full Vault
