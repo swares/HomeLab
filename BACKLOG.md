@@ -1785,6 +1785,16 @@ model is worth running · Home Assistant and LiteLLM SSO (not worth the complexi
 Zot OIDC (blocked on upstream provider naming) · Windows Update automation ·
 `externalTrafficPolicy: Local` on the Traefik VIP until Traefik runs 2+ replicas.
 
+**If remote access is ever un-deferred, read §4.12 and §4.16 first.** Tailscale's
+MagicDNS installs itself as a resolver and rewrites systemd-resolved state — the exact
+layer that produced three separate merge bugs on 2026-08-21 (netplan merging nameserver
+lists across files, resolved merging across links, resolved merging across config
+files). On a cluster node it would become a fourth contributor to a list the kubelet
+already truncates at three, and it would do so at Tailscale's discretion rather than
+git's. Use `--accept-dns=false` on anything running k3s, and decide §4.16 before
+installing rather than after — adding a resolver to an unresolved ownership question is
+how the `.152` entry survived for months.
+
 **Vault transit / cloud-KMS auto-unseal** — the only real escape from the trade in §2.5,
 where auto-unseal requires a threshold of shares on the RPi5 and therefore makes root
 there equivalent to full Vault access. Rejected because it introduces an external
