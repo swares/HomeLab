@@ -1442,10 +1442,18 @@ apply it** — the apply step is `netplan try`, by hand, deliberately.
 
 - [x] **Find what sets the H4's resolver list** — done 2026-08-21. Two default-route
       NICs, `enp2s0` carrying four servers led by `.152`, from a cloud-init netplan.
-- [x] **H4 APPLIED 2026-08-21** via `netplan try`. Both links now read
-      `192.168.1.148 192.168.1.116 192.168.1.184` — exactly three, identical, `.152`
-      gone. `enp2s0` retained `.160`, `.200` and `.201` throughout and all five nodes
-      stayed `Ready`.
+- [x] **H4 — `.152` removed 2026-08-21** via `netplan try`. `enp2s0` retained `.160`,
+      `.200` and `.201` throughout and all five nodes stayed `Ready`.
+- [ ] **The warning still fires, for a third reason.** Putting the same three servers
+      on *both* links produced **six** entries in
+      `/run/systemd/resolve/resolv.conf` — **systemd-resolved aggregates per-link DNS
+      without deduplicating across links**, and says so in the file:
+      `# Too many DNS servers configured, the following entries may be ignored.`
+      The kubelet reads that file, counts six, keeps three and warns. The event at
+      16:02:34 carried the *correct* three in its applied line: right servers, wrong
+      count. Fix drafted — the resolver list moves to `enp2s0` only
+      (`h4_dns_link` in the playbook), leaving `enp1s0` with `use-dns: false` and no
+      nameservers. Not yet applied.
 
       Two things were learned the hard way and are worth keeping:
 

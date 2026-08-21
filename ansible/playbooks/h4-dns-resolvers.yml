@@ -74,12 +74,32 @@
       - 192.168.1.116    # rpi4b         — Pi-hole secondary
       - 192.168.1.184    # opi-zero2w-1  — dnsmasq fallback
     h4_search: lab.home.arpa
-    # Both default-route links must stop supplying DNS, or the union exceeds three
-    # again. Confirm these names on the host before running — they are read from
-    # `resolvectl status`, not guessed.
+
+    # Both links must stop taking DNS from DHCP...
     h4_links:
       - enp1s0
       - enp2s0
+
+    # ...but ONLY ONE may carry the resolver list.
+    #
+    # systemd-resolved aggregates per-link DNS into /run/systemd/resolve/resolv.conf
+    # WITHOUT DEDUPLICATING ACROSS LINKS. Putting the same three servers on both links
+    # produced six entries and resolved said so in the file itself:
+    #
+    #     nameserver 192.168.1.148
+    #     nameserver 192.168.1.116
+    #     nameserver 192.168.1.184
+    #     # Too many DNS servers configured, the following entries may be ignored.
+    #     nameserver 192.168.1.148
+    #     nameserver 192.168.1.116
+    #     nameserver 192.168.1.184
+    #
+    # The kubelet reads that file, counts six, keeps three and warns — which is why
+    # DNSConfigForming kept firing on odroid-nas at 16:02 with the *correct* three in
+    # its applied line. Right servers, wrong count.
+    #
+    # enp2s0 is the primary: it carries 192.168.1.160 and the kube-vip VIPs .200/.201.
+    h4_dns_link: enp2s0
 
   tasks:
     - name: Confirm the expected links exist before touching anything
@@ -189,6 +209,10 @@
                 dhcp4: true
                 dhcp4-overrides:
                   use-dns: false
+          {% if link == h4_dns_link %}
+                # Resolver list lives on this link only. Repeating it on the other
+                # link doubles the entries in resolv.conf — resolved does not dedupe
+                # across links. See the h4_dns_link comment in this playbook.
                 nameservers:
                   addresses:
           {% for ns in h4_nameservers %}
@@ -196,6 +220,7 @@
           {% endfor %}
                   search:
                     - {{ h4_search }}
+          {% endif %}
           {% endfor %}
       register: _netplan_written
 
