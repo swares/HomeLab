@@ -1442,23 +1442,48 @@ apply it** — the apply step is `netplan try`, by hand, deliberately.
 
 - [x] **Find what sets the H4's resolver list** — done 2026-08-21. Two default-route
       NICs, `enp2s0` carrying four servers led by `.152`, from a cloud-init netplan.
-- [ ] Apply the override with **`sudo netplan try`, never `netplan apply`**. `try`
-      auto-reverts after 120 s unless confirmed at the prompt, which is the only safe
-      way to change resolvers on a box you are connected to over the network. If DNS
-      breaks, do nothing and wait — it comes back.
-- [ ] Verify by content afterwards: `resolvectl status` shows three servers total, and
-      `kubectl get events -A --field-selector reason=DNSConfigForming` stops producing
-      new entries for `odroid-nas`. The event is now retained, so absence is checkable.
+- [x] **H4 APPLIED 2026-08-21** via `netplan try`. Both links now read
+      `192.168.1.148 192.168.1.116 192.168.1.184` — exactly three, identical, `.152`
+      gone. `enp2s0` retained `.160`, `.200` and `.201` throughout and all five nodes
+      stayed `Ready`.
+
+      Two things were learned the hard way and are worth keeping:
+
+      - **Netplan merges lists across files; it does not replace them.** A 99- override
+        can add a nameserver but can never remove one. Proven with
+        `netplan get ethernets.enp2s0`, which returned the union of cloud-init's
+        `[.152, .184]` and the override's `[.148, .116, .184]`. `.152` had to be
+        deleted from `50-cloud-init.yaml` itself.
+      - **The two links failed for different reasons.** `enp1s0` took its DNS from
+        DHCP, so `use-dns: false` fixed it. `enp2s0`'s was hard-coded in the netplan
+        file, so `use-dns: false` did nothing there. One assumption, two mechanisms,
+        and the first fix worked on exactly half the problem — which looked like a
+        partial success and was actually two separate bugs.
+
+      Also established: **`enp2s0` is the primary interface**, carrying `.160` and both
+      kube-vip VIPs. It is not a spare, and changes to it risk the cluster API and every
+      ingress at once.
+- [ ] **Reboot the H4 at a quiet moment.** Cloud-init network regeneration is now
+      disabled, so boot-time networking rests entirely on the two netplan files.
+      `netplan try` cannot test that path. Backup is at
+      `/etc/netplan/50-cloud-init.yaml.bak-2026-08-21`.
+- [ ] Confirm no *new* `DNSConfigForming` events for `odroid-nas`. Existing pods keep
+      their old `resolv.conf`, so this only shows as pods are recreated. Checkable now
+      only because events are retained (§3.9).
 - [ ] Decide whether the H4 should join `node-dns.yml` rather than staying unmanaged.
       Being the only unmanaged node is how this happened.
-- [ ] Reconsider `lab_dns_servers` in `node-dns.yml`. It picks `.148 .184 .217` — one
-      Pi-hole and *two* dnsmasq — while the fleet table implies two Pi-holes and one
-      dnsmasq (`.148 .116 .184`). Anything failing over past `.148` currently loses
-      ad/telemetry filtering entirely. Changing this affects all four managed nodes, so
-      it is a separate change from the H4 fix and wants its own `--check`.
-- [ ] Reduce the total below the kubelet's limit of three, or accept the truncation
-      knowingly. Fixing *which* three are chosen without reducing the count leaves the
-      warning firing and the omission arbitrary.
+- [x] **`lab_dns_servers` in `node-dns.yml` corrected** 2026-08-21, from
+      `.148 .184 .217` (one Pi-hole, two dnsmasq) to `.148 .116 .184` (two Pi-holes,
+      one dnsmasq). **Not yet applied** — it touches all four managed nodes and wants
+      its own `--check`.
+- [ ] **The N150 warning will persist after that change**, and this is the part worth
+      understanding. `node-dns.yml` writes a *routing-only* drop-in
+      (`Domains=~lab.home.arpa`), so its three servers apply to lab queries while the
+      nodes' global resolvers still come from DHCP. The union is what the kubelet
+      truncates. Correcting the list fixes *which* three get used; it does not reduce
+      the count. Suppressing the DHCP-supplied global DNS on those nodes is a netplan
+      change (`dhcp4-overrides: use-dns: false`), the same mechanism that worked on the
+      H4's `enp1s0` — and a separate piece of work from this list.
 - [ ] Resolve the docs disagreement found alongside this: `CLAUDE.md` calls
       opi-zero2w-1 (`.184`) "secondary DNS", while `README.md` lists `.184` as the
       *tertiary* dnsmasq fallback and rpi4b (`.116`) as the Pi-hole secondary. One is

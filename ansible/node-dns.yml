@@ -22,10 +22,23 @@
   become: true
 
   vars:
+    # Two Pi-holes first, then one plain dnsmasq. Order matters: systemd-resolved
+    # prefers the first responsive server, so anything failing past the primary
+    # should still hit a filtering resolver rather than dropping straight to a
+    # plain forwarder.
+    #
+    # Changed 2026-08-21 (BACKLOG §4.12). This list previously read
+    # [.148, .184, .217] — ONE Pi-hole and TWO dnsmasq — so every failover past
+    # .148 silently lost ad/telemetry filtering on all four managed nodes. The
+    # rpi4b Pi-hole secondary (.116) was absent entirely, despite README's fleet
+    # table presenting it as the second line of defence.
+    #
+    # Exactly three, deliberately: the kubelet caps a pod's resolv.conf at three
+    # nameservers and silently omits the rest.
     lab_dns_servers:
-      - 192.168.1.148   # dns-1 (octopi — Pi-hole v6 primary)
-      - 192.168.1.184   # dns-2 (opi-zero2w-1 — dnsmasq secondary)
-      - 192.168.1.217   # dns-4 (opi-zero2w-3 — dnsmasq secondary)
+      - 192.168.1.148   # dns-1 (octopi       — Pi-hole v6 primary)
+      - 192.168.1.116   # dns-3 (rpi4b        — Pi-hole v6 secondary)
+      - 192.168.1.184   # dns-2 (opi-zero2w-1 — dnsmasq fallback)
     lab_domain: lab.home.arpa
 
   tasks:
