@@ -348,7 +348,7 @@ hang into a ~30-second failure. Weigh that against changing a backup path that h
 reliably since the deadline was added — the deadline already converts an indefinite
 hang into a bounded, alerted failure, which was the actual damage.
 
-### 1.9 The offsite seed starved `backup-nas` for four nights — **fix pending**
+### 1.9 Backup lock contention between `backup-nas` and `backup-offsite` — **both directions now handled**
 
 `backup-nas` failed outright on **08, 09, 10 and 11 Aug**. Not the copy step — the
 whole unit. Four consecutive nights with no new backup of `/srv/nas`,
@@ -387,6 +387,37 @@ starve the nightly job silently for days; a bounded one fails, and a failed unit
 **Procedure for any future re-seed:** raise the timeout deliberately *and* stop
 `backup-nas.timer` for the duration, then re-enable it. The nightly being paused
 knowingly is very different from it failing unnoticed.
+
+**The reverse direction was still unguarded — fixed 2026-08-21 by chaining.**
+
+Bounding the copy protected the nightly job from a long offsite run. Nothing protected
+the offsite run from a long nightly job. `backup-nas` normally takes ~10 s, but
+`docs/BACKUP-RESTORE.md` records that a large Immich import can push it to hours, and a
+run still holding the primary repo lock at 02:30 fails the offsite copy with the
+identical error. **Scheduling cannot fix this**, because neither job knows in advance
+how long the other will take — an hour of clock separation is a guess, not a guarantee.
+
+`backup-offsite.service.j2:4` carried `After=backup-nas.service`, which reads like
+protection and was not: ordering directives apply only within a single systemd
+transaction, and two independent timer activations never share one. The file's own
+comment admitted this.
+
+`backup-nas.service` now carries **`OnSuccess=backup-offsite.service`**. The two run in
+one transaction, so the `After=` finally means what it appears to mean and the offsite
+copy waits for the lock to be released however long that takes. Requires systemd >= 249
+(22.04 ships 249).
+
+**Accepted trade-off:** the offsite copy no longer runs when `backup-nas` fails.
+Correct in principle — copying a repository that just failed to update has little value
+— but one root cause now raises two alarms: the failed unit, and the offsite
+healthchecks.io check going silent at 25h/3h. Two alerts beat a silent gap.
+
+- [ ] **Remove `backup-offsite.timer` once the chain has a week of evidence.** It is
+      deliberately retained for now as a fallback; a duplicate run is cheap because
+      `restic copy` finds nothing new and exits in seconds. Verify first with
+      `systemctl show backup-nas.service -p OnSuccess` and by confirming
+      `backup-offsite` starts within seconds of `backup-nas` finishing, rather than at
+      02:30. Do not remove it on the strength of the config alone — CLAUDE.md.
 
 - [ ] **Optional, later: re-init `cold-sec` with `--copy-chunker-params`** to match
       the primary. It would align all three repos, improve dedup between primary and

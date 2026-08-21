@@ -2,6 +2,34 @@
 Description=restic backup of live NAS data (8TB primary) + copy to 6TB secondary
 RequiresMountsFor={{ cold_primary_mount }} {{ cold_secondary_mount }} {{ nas_mount }}
 
+# Trigger the offsite copy as soon as THIS unit succeeds, instead of hoping an hour
+# of clock separation is enough. BACKLOG §1.9.
+#
+# Both jobs need the primary repo's lock. restic holds it for the whole operation, so
+# whichever starts second fails outright with:
+#     unable to create lock in backend: repository is already locked by PID …
+# That is what cost four consecutive nights of backups on 08–11 Aug, when a three-day
+# offsite seed starved the nightly run.
+#
+# Bounding the offsite copy to 4h fixed that direction. The REVERSE was still
+# unguarded: this unit normally finishes in ~10s, but docs/BACKUP-RESTORE.md notes a
+# large Immich import can push it to hours — and a run still holding the lock at 02:30
+# fails the offsite copy with the identical error. Scheduling cannot fix that, because
+# neither job knows how long the other will take.
+#
+# OnSuccess= puts them in one transaction, which is also what finally makes
+# backup-offsite.service's `After=backup-nas.service` mean something: ordering
+# directives only apply within a transaction, so until now that line was decorative.
+#
+# Consequence, deliberately accepted: the offsite copy no longer runs when this unit
+# FAILS. That is correct — copying a repository that just failed to update has little
+# value — but it means one root cause raises two alarms, this unit's and the offsite
+# healthchecks.io check going silent. Two alerts for one cause beats a silent gap.
+#
+# Requires systemd >= 249 (Ubuntu 22.04 ships 249). Verify with `systemd --version`
+# and `systemctl show backup-nas.service -p OnSuccess` before trusting the chain.
+OnSuccess=backup-offsite.service
+
 [Service]
 Type=oneshot
 # restic caches pack and index metadata under $RESTIC_CACHE_DIR. Without one it
