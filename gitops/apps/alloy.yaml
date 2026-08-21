@@ -26,24 +26,59 @@ spec:
             - operator: Exists    # run on all nodes including inference nodes
 
         alloy:
+          # Node name for the discovery.kubernetes field selector below. Must come
+          # from the downward API — HOSTNAME inside a pod is the pod name.
+          extraEnv:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+
           configMap:
             content: |
               // ── Kubernetes pod logs ──────────────────────────────────────
+              // NODE-SCOPED, and it must stay that way.
+              //
+              // Without the field selector below, discovery.kubernetes returns every
+              // pod in the CLUSTER, and loki.source.kubernetes tails them through the
+              // API rather than off local disk. Every one of the five DaemonSet pods
+              // therefore collected every node's logs, and each line reached Loki
+              // five times. Confirmed 2026-08-20: alloy-thttf on odroid-nas was
+              // opening log streams for pods on n150-1, n150-2, opi5pro-1 and
+              // opi5pro-2. See BACKLOG.md §3.9.
+              //
+              // The previous config set __host__ from the node name, which looks like
+              // node filtering but is not — __host__ is a Promtail file-scraping
+              // convention and is inert for loki.source.kubernetes. It was removed
+              // rather than left to imply a filter that never existed.
+              //
+              // NODE_NAME comes from alloy.extraEnv below (fieldRef spec.nodeName).
+              // Do NOT substitute HOSTNAME: inside a pod that is the pod name, not
+              // the node name, and the selector would silently match nothing.
               discovery.kubernetes "pods" {
                 role = "pod"
+                selectors {
+                  role  = "pod"
+                  field = "spec.nodeName=" + sys.env("NODE_NAME")
+                }
               }
 
               discovery.relabel "pods" {
                 targets = discovery.kubernetes.pods.targets
 
-                rule {
-                  source_labels = ["__meta_kubernetes_pod_node_name"]
-                  target_label  = "__host__"
-                }
-                rule {
-                  action = "labelmap"
-                  regex  = "__meta_kubernetes_pod_label_(.+)"
-                }
+                // There is deliberately NO blanket labelmap here. Until 2026-08-20
+                // this block carried:
+                //   rule { action = "labelmap"
+                //          regex  = "__meta_kubernetes_pod_label_(.+)" }
+                // which promoted every Kubernetes pod label into a Loki stream label.
+                // kube-prometheus-stack's operator pod carries enough labels to reach
+                // 16, over Loki's max_label_names_per_series default of 15, so Loki
+                // answered 400 and Alloy logged:
+                //   "final error sending batch, no retries left, dropping data"
+                // 400 is not retryable, so the entire batch was discarded — including
+                // entries from unrelated streams that happened to be pushed alongside
+                // it. Raising the Loki limit would have hidden this; the labels were
+                // never worth having.
                 rule {
                   source_labels = ["__meta_kubernetes_namespace"]
                   target_label  = "namespace"

@@ -786,6 +786,117 @@ true, it is not true now. Same drift class as §6.
       Only `ai-gateway` appeared in the first capture, but capture is hours old.
 - [ ] Correct the "zero violations" comment once the count is actually zero.
 
+### 3.9 Alloy shipped every pod's logs five times, dropped batches, and never sent the H4's journal
+
+**Found 2026-08-19.** `backup-verify` ran on 2026-08-16 and wrote eighteen lines to
+journald on the H4, ending `backup-verify: all checks passed`. **None of them are in
+Loki.** The unit does not exist there at all:
+
+    curl -sS .../loki/api/v1/label/unit/values | jq -r '.data[]' | grep backup
+    backup-vault.service          ← and nothing else
+
+`backup-vault` runs on **rpi5, a non-cluster host**, which ships via
+`ansible/playbooks/promtail.yml`. Every backup unit that runs on the H4 —
+`backup-verify`, `backup-nas`, `backup-etcd`, `backup-cloud`, `backup-offsite` — is
+missing.
+
+**Scope is wider than backups.** The `hostname` label values in Loki are:
+
+    RPI-3B-2   RPI-4B   RPI-5--01   n150-1   n150-2
+    opi-zero2w-4   opizero2w-1   opizero2w-4   orangepizero2w
+
+`odroid-nas`, `opi5pro-1` and `opi5pro-2` are absent. So Alloy's
+`loki.source.journal` works on n150-1 and n150-2 and on no other cluster node — the
+NAS core and both inference nodes ship **no host logs at all**. Pod logs are
+unaffected; this is the journal half only.
+
+**Ruled out along the way:** volatile journal storage (`/var/log/journal` exists on the
+H4 and is persistent); a stale DaemonSet rollout (generation 1, 5/5 available, and the
+H4's pod's rendered config contains the journal block).
+
+**What the H4's Alloy logs actually showed — two defects, both bigger than the missing
+journal.**
+
+**(a) Every Alloy pod was tailing every pod in the cluster.**
+`discovery.kubernetes "pods" { role = "pod" }` had no field selector, and
+`loki.source.kubernetes` reads through the API rather than off local disk, so
+node-locality was never enforced. `alloy-thttf` on `odroid-nas` was observed opening
+log streams for pods on n150-1, n150-2, opi5pro-1 and opi5pro-2. Five DaemonSet pods ×
+every pod in the cluster = **every log line ingested five times** — 5× storage, 5× the
+rate against a 16 MB/s `ingestion_rate_mb` cap, and duplicate lines in every query
+result. The old config set `__host__` from the node name, which resembles node
+filtering but is a Promtail file-scraping convention and is inert here.
+
+**(b) Loki was rejecting whole batches and Alloy was discarding them.**
+
+    status=400 ... entry for stream '{...}' has 16 label names; limit 15
+    "final error sending batch, no retries left, dropping data"
+
+The blanket `labelmap` of `__meta_kubernetes_pod_label_(.+)` promoted every pod label
+to a Loki stream label. `kube-prometheus-stack`'s operator pod carries enough to reach
+16, over Loki's `max_label_names_per_series` default of 15. 400 is not retryable, so
+the **entire batch** was dropped — including entries from unrelated streams pushed
+alongside it. This is the most plausible mechanism for journal lines disappearing, and
+it is deliberately stated as plausible rather than proven.
+
+**Fixed 2026-08-20** in `gitops/apps/alloy.yaml`: a `spec.nodeName` field selector
+driven by a downward-API `NODE_NAME` env var, and the blanket `labelmap` removed in
+favour of the three explicit labels (`namespace`, `pod`, `container`). No LogQL in this
+repo selected on pod labels, so nothing depended on them. Raising Loki's label limit
+was rejected as a fix — it would have hidden the rejection rather than removed the
+cause.
+
+**Why the journal half matters.** `backup-verify.sh` exists specifically because three
+mechanisms in this lab once reported success while doing nothing; it is the lab's
+single best "did it actually work" signal. Its output is not in the log store anyone
+would query. Nothing is lost permanently — journald holds it locally and the
+healthchecks.io ping still fires — but any alert or dashboard built on those lines
+would find nothing and read as healthy.
+
+**To do:**
+
+- [ ] **Verify by content after the fix syncs.** `{unit="backup-verify.service"}` over
+      7 days must return the `ok:` lines. Component health and a green Argo sync are
+      not evidence — that combination is what hid this for 48 days.
+- [ ] Confirm the duplication is gone: a single known log line should appear once, not
+      five times. `hostname` label values should gain `odroid-nas`, `opi5pro-1`,
+      `opi5pro-2`.
+- [ ] If the journal is *still* absent once (a) and (b) are fixed, the batch-poisoning
+      theory was wrong and the cause is per-node. Check the opi5pro nodes separately —
+      different distro and systemd — and consider whether the H4's storage layout
+      (OS on eMMC, loop-backed LVM VG) makes the `/var/log/journal` hostPath resolve
+      differently inside the container.
+- [ ] Consider what 5× ingestion did to the 20Gi Loki PV and 30d retention. Effective
+      retention may have been well under 30 days, silently.
+
+### 3.10 Fleet hostnames are inconsistent and do not match the Ansible inventory
+
+**Found 2026-08-19** while investigating §3.9. The `hostname` label values Loki holds
+use at least four conventions and match the inventory names in almost no case:
+
+| In Loki | In `ansible/inventory/hosts.yml` |
+|---|---|
+| `RPI-3B-2` | `octopi` |
+| `RPI-4B` | `rpi4b` |
+| `RPI-5--01` | `rpi5` |
+| `opi-zero2w-4` **and** `opizero2w-4` | `opi-zero2w-4` — one host, two names |
+| `opizero2w-1` | `opi-zero2w-1` |
+| `orangepizero2w` | unidentified — vendor default, never set |
+
+`n150-1` and `n150-2` are the only hosts whose real hostname matches their inventory
+name.
+
+**The practical cost is correlation.** Joining a journal line to a host requires a
+mental lookup table that exists nowhere. `opi-zero2w-4` and `opizero2w-4` both persist
+in Loki's index because the host was renamed at some point and both labels still have
+chunks in retention — so one machine reads as two. `orangepizero2w` cannot be
+attributed to a host at all without going and looking.
+
+This lands directly on `docs/LEDGER-DESIGN.md` §4, which proposes joining sources on
+extracted identifiers. Hostname is the obvious key for tying a journal line to a node
+event and **is not usable as one in this lab** without a mapping. Either fix the
+hostnames (§4.14) or carry an explicit alias table in the ledger schema.
+
 ---
 
 ## 4. Broken or blocked, live
@@ -1310,6 +1421,48 @@ four wrong answers before anyone measured it.
       correlates with control-plane restarts rather than something else.
 - [ ] Decide whether to care. Doing nothing is defensible; the entry exists so the
       next person to find an impossibly old event does not spend an afternoon on it.
+
+### 4.14 Nothing in Ansible owns hostnames — they were set by hand and drifted
+
+The consequence side of §3.10. Every host's hostname was set once, manually, at flash
+time, and nothing has enforced it since. `ansible/inventory/hosts.yml` is the naming
+source of truth for humans and for `--limit`, but no play makes the machines agree
+with it. Result: four naming conventions, one host answering to two names, and one
+still on a vendor default.
+
+The fix is a small play using `ansible.builtin.hostname` driven from
+`inventory_hostname`, plus the matching `/etc/hosts` 127.0.1.1 line, run against the
+whole fleet. It is a handful of tasks.
+
+**It is also the most dangerous small change on this list, and must not be run
+fleet-wide.**
+
+**k3s derives its Kubernetes node name from the host's hostname.** Renaming a cluster
+node does not rename its `Node` object: the old one lingers `NotReady` and a new one
+registers empty. Worse, this repo pins workloads to node names in eighteen places via
+`kubernetes.io/hostname` selectors — `odroid-nas` (6), `n150-1` (12), `opi5pro-1`,
+`opi5pro-2`. Every one of those becomes unschedulable the moment the underlying node
+answers to a different name, and several of them own `local-path` PVs that cannot
+follow. That is the `lldap`/n150-2 outage pattern from
+`gitops/workloads/lldap/postgres.yaml:6`, executed deliberately across the fleet.
+
+**Scope it accordingly:**
+
+- [ ] **Non-cluster hosts only, to begin with** — the Pis and Zero 2Ws. They are the
+      ones that are actually inconsistent, they carry no `kubernetes.io/hostname`
+      selectors, and the blast radius is a reboot.
+- [ ] Identify `orangepizero2w` before touching it. An unattributed host on the
+      network is its own small finding.
+- [ ] Resolve the `opi-zero2w-4` / `opizero2w-4` duplicate — confirm it is one machine
+      renamed, not two.
+- [ ] **Cluster nodes: flag, do not perform.** `odroid-nas`, `n150-1`, `n150-2`,
+      `opi5pro-1`, `opi5pro-2` already match their inventory names, so there is
+      nothing to fix and every reason not to touch them. If a rename is ever genuinely
+      needed it is a drain → delete Node → rejoin operation with the nodeSelectors
+      updated in the same PR, not a hostname play.
+- [ ] Add the play to CI's `--check` path so drift is caught rather than assumed.
+
+Related: §3.10 (the correlation cost), §3.9 (found while chasing the same thread).
 
 ---
 
