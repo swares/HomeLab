@@ -122,14 +122,35 @@ spec:
               // Relabeling extracts unit and hostname from journal metadata so
               // Loki queries can filter by systemd unit or source host — matching
               // the labels Promtail produced before it was removed.
-              loki.source.journal "systemd" {
-                max_age    = "12h"
-                labels     = { job = "node-journal" }
-                forward_to = [loki.relabel.journal.receiver]
-              }
-
+              // The relabel rules must be passed to the journal source via
+              // relabel_rules — NOT chained downstream of it.
+              //
+              // Upstream docs, verbatim: "All messages read from the journal include
+              // internal labels following the pattern of __journal_FIELDNAME and Alloy
+              // drops them before sending to the list of receivers specified in
+              // forward_to. To keep these labels, use the relabel_rules argument."
+              //
+              // Until 2026-08-21 this was wired source -> loki.relabel -> loki.write,
+              // so every __journal_* label was stripped before the relabel component
+              // ever saw it. Both rules matched nothing and every journal line from
+              // every node landed in one undifferentiated {job="node-journal"} stream
+              // with no unit and no hostname. Nothing errored: dropping labels is
+              // normal behaviour, and a relabel rule that matches nothing is not a
+              // fault.
+              //
+              // Diagnosis that found it (on the H4's pod, :12345/metrics):
+              //   loki_source_journal_target_lines_total 6800   <- reading fine
+              //   loki_relabel_entries_processed        6800   <- forwarding fine
+              //   loki_relabel_cache_size                  1   <- ONE label set for
+              //                                                   6800 entries
+              // That cache size is the tell: identical input labels every time.
+              //
+              // The field names were always correct. Journald fields mostly begin with
+              // an underscore, so _SYSTEMD_UNIT becomes __journal__systemd_unit — two
+              // underscores between __journal and systemd_unit. Only the wiring was
+              // wrong.
               loki.relabel "journal" {
-                forward_to = [loki.write.gateway.receiver]
+                forward_to = []          // rules are consumed via .rules, not piped
 
                 rule {
                   source_labels = ["__journal__systemd_unit"]
@@ -139,6 +160,13 @@ spec:
                   source_labels = ["__journal__hostname"]
                   target_label  = "hostname"
                 }
+              }
+
+              loki.source.journal "systemd" {
+                max_age       = "12h"
+                labels        = { job = "node-journal" }
+                relabel_rules = loki.relabel.journal.rules
+                forward_to    = [loki.write.gateway.receiver]
               }
 
               // ── Forward to Loki gateway ──────────────────────────────────
