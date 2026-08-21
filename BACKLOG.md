@@ -617,16 +617,45 @@ on the hot tier (`/dev/vg_microshift/lv_nas`) — a stable LVM path, deliberatel
       but it would stop the numbers moving in the first place. Deliberately not
       auto-generated here: writing wrong `ARRAY` lines is its own way to lose an array.
 
-### 1.5 Nothing ever trims the cold-sec copy repo
+### 1.5 ~~Nothing ever trims the cold-sec copy repo~~ — **FIXED, confirmed 2026-08-21**
+
+Verified in code, not inferred from another document. `ansible/templates/backup-nas-copy.sh.j2:98-101`
+runs `restic -r "$DST" … forget --prune --keep-daily/--keep-weekly/--keep-monthly` against
+`{{ restic_copy_repo }}` = `/mnt/cold-sec/restic`, and it is wired in un-swallowed at
+`backup-nas.service.j2:71` (`ExecStartPost`, no `-` prefix, so a failure fails the unit).
+Retention values 14/8/12 at `ansible/playbooks/backup.yml:31-33`.
+
+The heading claimed "Nothing ever trims" while the body already said "possibly fixed 07-25".
+The body was right.
 `docs/REVIEW-2026-07-24.md` (M-new-1) — *possibly fixed 07-25 via `backup-nas-copy.sh`
 retention; verify against the live repo rather than the doc.*
 
-### 1.6 R2 retention has never deleted a snapshot and cannot
+### 1.6 ~~R2 retention has never deleted a snapshot and cannot~~ — **FIXED, confirmed 2026-08-21**
+
+Both halves of the mechanism are gone. Stable staging path: `backup-cloud.yml:204`
+`STAGE=/var/tmp/backup-cloud-stage`, with `:200-203` explaining it is deliberately NOT
+`mktemp` because "a varying name broke retention grouping". Grouping: `:304-305`
+`restic forget --prune --group-by host,tags`. `grep -rn TMPDIR ansible/` returns nothing.
+
+**Proven live, not just in code.** `backup-verify` reported `R2 holds 11 cloud snapshots`
+on 2026-08-16 and `R2 holds 10 cloud snapshots` on 2026-08-21. The count went *down*:
+retention is deleting.
 `docs/REVIEW-2026-07-24.md` (M-new-4) — `TMPDIR` in `SOURCES` means the staging path
 varies per run, so `--group-by` never matches an existing series. Every cloud snapshot
 is kept forever, and the 10 GB free tier is the ceiling.
 
-### 1.7 Hold restic at 0.12.x
+### 1.7 Nothing pins restic, so an unattended upgrade can change copy semantics
+**Reframed 2026-08-21 — the original heading described a requirement, not the risk.**
+
+The version guard the entry asks for **already exists** in both copy paths:
+`backup-nas-copy.sh.j2:50-67` parses the version, refuses a non-numeric result
+("Refusing to guess which copy syntax is safe"), and branches at `:84-90`; the same logic is
+at `backup-offsite.sh.j2:64-78`. So the copy syntax is handled.
+
+**What is actually open is the pin.** `ansible/playbooks/backup.yml:45-48` installs restic with
+a bare `state: present` — no version, and there is no `apt-mark hold`, `dpkg_selections`, or
+`/etc/apt/preferences.d` entry anywhere in the repo. An unattended `apt upgrade` can move
+restic under the backup path at any time.
 `docs/BACKUP-RESTORE.md:360-372` (M-new-2), `ansible/templates/backup-nas-copy.sh.j2:9-19`
 
 Upgrading past 0.14 reverses `copy` argument semantics. The version guard catches it,
@@ -694,6 +723,43 @@ the threshold, and `vault-unseal.sh` reads only the first three. See §1.2.
 Fine on a trusted LAN, flagged in three places as "before exposing beyond LAN".
 Worth deciding whether that day is ever coming.
 
+**Scoped 2026-08-21.** Verified still true: `ansible/templates/vault.hcl.j2:9`
+`tls_disable = true`, listening on `0.0.0.0:8200`, and §2.9 confirms no host firewall
+anywhere — so every device on the LAN can reach it. Two of the entry's three citations
+are now stale (`README.md` and `docs/OVERVIEW.md` no longer flag it; only the template
+does).
+
+**Blast radius: 19 files reference `http://192.168.1.128:8200`** — 7 Ansible playbooks,
+3 scripts, the ESO `ClusterSecretStore` (`gitops/workloads/immich/external-secret.yaml:20`),
+and 8 documents. Everything in the lab transits in clear: the Immich DB password, Grafana
+admin, five Authelia OIDC secrets, restic repository passwords, R2 credentials, the ArgoCD
+deploy key — and the tokens themselves.
+
+The point is not that it is likely exploited. It is that **one compromised LAN device
+converts directly into total lab compromise with no second step required.**
+
+**Do it staged — Vault supports multiple listeners.** Flipping TLS on in place would
+simultaneously break ESO, `backup-cloud`, `backup-offsite` (both fetch R2 credentials from
+Vault), `healthchecks.yml` and the break-glass path, and it would surface at 02:30.
+
+1. Add a TLS listener on `:8210` beside the existing plaintext `:8200`. Nothing moves.
+2. Distribute the CA to hosts via Ansible.
+3. Migrate consumers **one at a time**, verifying each — ESO first (most visible:
+   `kubectl get externalsecrets -A` should stay `SecretSynced`), then the backup
+   playbooks, then scripts, then docs.
+4. Remove the plaintext listener last, once nothing references it.
+
+Every step is independently reversible and there is no flag day.
+
+**Open decision:** whether Vault's certificate is signed by the existing `lab-ca` root —
+which means extracting that root's private key from the `lab-root-ca` secret so Ansible can
+sign outside the cluster, putting the root key in a second place — or by a separate CA used
+only for Vault, which avoids that but gives every client a second root to trust.
+
+See **§6b.1** for the larger idea this scoping produced: Vault as an intermediate CA
+issuing certificates for the whole lab. That is a different, bigger project; this entry
+should be closed on its own first.
+
 ### 2.7 Committed argon2id hashes for five OIDC client secrets
 `gitops/workloads/authelia/configmap.yaml:72,86,98,111,125`
 
@@ -713,6 +779,17 @@ If the trade stops being acceptable: scope `sys/policies/acl/*` to read/list, dr
 
 ### 2.9 No host firewall anywhere
 `docs/REVIEW-2026-07-24.md` (Medium)
+
+**Verified still true 2026-08-21.** Nothing in the repo installs or enables a firewall.
+The only matches are conditional and would no-op on a host without ufw already present
+(`node-exporter.yml:79-88`, `promtail.yml:197-206`, both gated on
+`'ufw' in ansible_facts.services`), plus dead MicroShift-era `firewalld` at
+`microshift.yml:47-60` and `iptables` appearing merely as a package dependency.
+
+This is what makes §2.6 sharp rather than theoretical: Vault listens on `0.0.0.0:8200`
+in clear, and nothing stands between it and any device on the LAN.
+
+See **§6b.2** for the design and the reason not to start by writing rules.
 
 ### 2.10 `.claude/settings.json` is a MicroShift-era artifact
 `docs/REVIEW-2026-07-24.md:310` (H30)
@@ -817,7 +894,12 @@ it under debugging pressure are different things — the durable fix is not typi
 command lines at all, which is why `--token-file` was reached for in the first place. That
 it is unsupported on the restore path (§ Drill 2c) is an upstream gap worth knowing.
 
-### 2.12 Vault is seven weeks behind its installed binary — **found 08-16**
+### 2.12 Vault is never restarted, so it silently runs an old binary — **mechanism open; the seven-week instance was resolved 08-16**
+**Heading corrected 2026-08-21** — it described an instance that the entry's own first sentence
+says is fixed. The mechanism is what remains, and both defects are intact:
+`update-non-apt.yml:221` `when: vault_svc.status.ActiveState != "active"` means a *running*
+Vault is never restarted, and `:248` reports the version from `vault version` (the CLI, captured
+at `:205`) rather than `vault status`, so the report cannot detect the drift it exists to catch.
 `ansible/playbooks/update-non-apt.yml:213-221,248`, `docs/UPDATES.md` §5
 
 Restarting Vault during the 08-16 rekey moved it from **2.0.3 (built 2026-06-17)** to
@@ -870,7 +952,15 @@ the non-existent `..._last_trigger_time_seconds`.
 `api.lab.home.arpa` and `*.apps.lab.home.arpa` failing to resolve is invisible.
 DNS is the lab's most load-bearing dependency.
 
-### 3.4 `LabBackupEtcdSilent` may fire permanently against a weekly timer
+### 3.4 ~~`LabBackupEtcdSilent` may fire permanently against a weekly timer~~ — **FIXED, confirmed 2026-08-21**
+
+`ansible/templates/backup-etcd.timer.j2:11` is `OnCalendar=*-*-* 00:30:00` — daily, with an
+inline note that the old Sun 03:00 slot collided with `backup-cloud`. The alert threshold is
+90000s (25h) at `lab-alerts.yaml:129-137`, so daily plus `Persistent=true` clears it with an
+hour of margin. Corroborated by `healthchecks.yml:12`.
+
+The entry said "possibly fixed; verify" for weeks. Resolving that ambiguity took one look at
+the timer.
 `docs/REVIEW-2026-07-24.md:306` (H27) — *possibly fixed; verify the timer cadence
 against the 25h threshold.*
 
@@ -1122,7 +1212,14 @@ invisible until a reboot, and the H4 has a reboot pending from §4.12.
 
 ## 4. Broken or blocked, live
 
-### 4.1 CI depends on an image with no build definition — **verified**
+### 4.1 CI depends on an image with no build definition — **verified; two broken refs, not one**
+
+**Found 2026-08-21 during the backlog sweep:** there are *two* references to the nonexistent
+image, at **different registry hosts that disagree with each other** —
+`.gitlab-ci.yml:24` uses `registry.apps.lab.home.arpa/tools/homelab-ci:latest` and
+`ansible/.gitlab-ci.yml:17` uses `registry.lab.home.arpa/tools/homelab-ci:latest` (no `apps.`).
+Only one of those hostnames resolves in this lab. Fixing one and not the other leaves CI
+broken in a way that looks fixed.
 `.gitlab-ci.yml:22-24`
 
 ```
@@ -1218,7 +1315,15 @@ fixed:
 `ansible/templates/orchestrator.service.j2:14` — falls back to the whole LAN, while
 line 2 claims the unit is "fail-closed".
 
-### 4.4 `k3s_version` silently floats
+### 4.4 k3s version — pinned for servers, but agents hardcode a five-minor-old downgrade
+**Reframed 2026-08-21.** The `default('stable')` fallbacks at `k3s-h4.yml:16` and
+`k3s-ha-join.yml:29` are real but unreachable for the standard inventory:
+`ansible/inventory/group_vars/all/k3s.yml:7` has pinned `k3s_version: "v1.36.2+k3s1"` for all
+hosts since 2026-06-23, which this entry never mentioned.
+
+**The live defect is the opposite of a float.** `ansible/playbooks/k3s-agent.yml:17` falls back to
+a hardcoded `v1.31.4+k3s1` — five minor versions behind the pin. That is a silent *downgrade*
+path on the two inference nodes, which is worse than drifting forward and was unrecorded.
 `ansible/playbooks/k3s-h4.yml:16`, `k3s-ha-join.yml:29` — defaults to the `stable`
 channel if the pinned var isn't in scope. An unattended run could upgrade the cluster.
 
@@ -1301,18 +1406,43 @@ twenty minutes.
 Still compounds §1.1 in the sense that no automated Vault restore exists. It no longer
 blocks anything: the drill does not need it.
 
-### 4.7 PDBs block node drains
+### 4.7 ~~PDBs block node drains~~ — **FIXED 2026-07-26 (`ccfb9b3`, PR #308) — recorded 2026-08-21**
+
+All three PDBs use `maxUnavailable: 1`: `lldap/pdb.yaml:18`, `authelia/pdb.yaml:11`,
+`immich/pdb.yaml:9`, each carrying a comment on why `minAvailable` was wrong for a
+single-replica workload. `grep -rn minAvailable gitops/` returns nothing.
+
+**This sat under "Broken or blocked, live" for 26 days after it was fixed**, and was nearly
+picked as the top priority on 2026-08-21 because the entry still read as open. That is the
+cost of the backlog drifting, paid in the currency it is supposed to save.
 `docs/REVIEW-2026-07-24.md:271` (H7) — three PDBs with `minAvailable: 1` against
 `replicas: 1`. Any drain hangs forever.
 
-### 4.8 OVMS disabled, crash-looping
+### 4.8 OVMS is disabled and its config is invalid — **1 of 3 blockers cleared**
+**Heading corrected 2026-08-21**: a service that `ai-nodes.yml:199-206` stops and disables is
+not crash-looping.
+
+Cleared: the GPU runtime is now installed (`ai-nodes.yml:300-308` — `intel-opencl-icd`,
+`intel-level-zero-gpu`, `level-zero`), though both tasks carry `ignore_errors: true` and can
+therefore no-op silently.
+
+**Not cleared, and worse than the entry states:** the invalid `config.json` is no longer merely
+deployed, it is **generated from git**. `ai-nodes.yml:327-340` writes
+`/opt/ovms/models/config.json` with `// TODO: download and convert bge-small …` appended
+*after* the closing brace — JSON with a comment after the document ends. `force: false`, so it
+never self-corrects. Model IR conversion is still absent.
 `ansible/playbooks/ai-nodes.yml:191-198` — needs `intel-opencl-icd` + level-zero, model
 IR conversion, and a valid `config.json` (the deployed one contains `//` comments).
 
 ### 4.9 Kyverno `cleanupJobs` block is a confirmed no-op
 `gitops/apps/kyverno.yaml:55-66` — creates nothing as of chart 3.3.4.
 
-### 4.10 Kyverno `require-resource-limits` skips initContainers
+### 4.10 Kyverno `require-resource-limits` skips initContainers — **a live workload is exploiting the hole**
+
+**Found 2026-08-21:** this is not hypothetical. `gitops/workloads/home-assistant/deployment.yaml:51-53`
+runs an initContainer `seed-config` on `busybox:1.38` with **no `resources` block at all**, while
+the main container at `:44-50` has limits. The policy is `validationFailureAction: Enforce`, so
+this is an enforced rule with a hole that something is already through — not an audit gap.
 `docs/REVIEW-2026-07-24.md` (Medium) — live gap at
 `gitops/workloads/home-assistant/deployment.yaml:51-53`.
 
@@ -1911,6 +2041,13 @@ access, which is the reverse of what the rekey was for.
 
 ## 6. Documentation drift — statements that are now false
 
+> **Cite quoted text, not line numbers.** Swept 2026-08-21: of the 18 file:line citations in
+> this section, **5 still landed** on the text they claimed, and only **2 of 10 entries** had
+> every citation intact. `CLAUDE.md` references had drifted 35 lines, `BACKUP-RESTORE.md` ~94.
+> Line numbers into a living document decay faster than the drift they track, so the index
+> rots before the problem does. New entries should anchor on a short quoted phrase or a
+> stable heading; a `grep` for the phrase survives edits that renumber everything.
+
 *These matter because they will be read during an incident.*
 
 ### 6.1 ~~`CLAUDE.md:49-51` gives the wrong ingress IP~~ — **FIXED 08-07**
@@ -1930,7 +2067,14 @@ governs how work is done in this repo, so this line will mislead during exactly 
 incident where it matters — someone "fixing" DNS back to `.160` would undo the change
 that stopped a single A record taking down every service URL in the lab.
 
-### 6.2 Offsite backup claimed DONE in three places
+### 6.2 ~~Offsite backup claimed DONE in three places~~ — **FIXED, confirmed 2026-08-21**
+
+All three corrected: `README.md:184-187` now states it plainly and carries its own retraction;
+`docs/services.md:122-126` likewise; `docs/STANDUP.md:180-185` splits Track 1 (done) from
+Track 2 (deferred). None of the cited lines still contains a DONE claim.
+
+- [ ] **One uncorrected instance the entry never cited:** `docs/services.md:21` still says
+      "offsite via `backup-offsite.timer`".
 `README.md:186`, `docs/services.md:119`, `docs/STANDUP.md:183-185` —
 all written while `backup-offsite` had never copied a byte. Now nearly true; will be
 true when the timer is enabled.
@@ -1971,9 +2115,161 @@ Resolve before doing the upgrade.
 Not implemented (H12). `:52-54` describes `kubectl` permission tiers that don't exist
 in `.claude/settings.json` (D8/H30).
 
-### 6.12 An "unresolved H4 CRC fault" appears only in `docs/STANDUP.md:213-215`
+### 6.12 ~~An "unresolved H4 CRC fault" appears only in `docs/STANDUP.md:213-215`~~ — **THE ENTRY ITSELF WAS WRONG, corrected 2026-08-21**
+
+The citation lands — `docs/STANDUP.md:213-215` does say "the unresolved H4 CRC fault is the one
+thing that can undermine the storage tier, so clear it first". **But "appears only there" is
+false.** It also appears at `docs/STANDUP.md:27-32` (full triage instruction), `:75`, `:201`, in
+a dedicated procedure at `docs/RUNBOOK.md:235-287` ("UDMA CRC errors (SMART 199) — triage
+BEFORE replacing a disk"), and is tracked in `docs/DOC-CONSOLIDATION-PLAN.md:232,380`.
+
+It is a documented open thread, not an orphaned claim. Note the shape of the failure: the line
+numbers were right and the prose was wrong — the reverse of every other entry in this section,
+and a reminder that a citation landing does not make the sentence around it true.
+
+- [ ] The actual hardware question is still open and is not a documentation issue:
+      `for d in sda sdb; do sudo smartctl -a /dev/$d | grep UDMA_CRC; done`
 Called the critical path, referenced nowhere else. Either resolved and undocumented,
 or a lost thread.
+
+---
+
+## 6b. Design proposals — captured, not committed to
+
+Ideas worth building, written down while the reasoning is fresh. Nothing here is
+scheduled; each records what it would buy, what it would cost, and what would have to
+be true first.
+
+### 6b.1 Vault as an intermediate CA issuing certificates for the whole lab
+
+**Proposed 2026-08-21**, while scoping §2.6 (Vault on plaintext HTTP).
+
+**The shape.** `lab-ca` (the cert-manager self-signed root) stays the root. Vault's PKI
+secrets engine gets an intermediate signed by it, and issues certs for lab devices —
+Vault itself, the bare hosts that have no TLS today (rpi5, the Pis, the N150s), and
+potentially in-cluster workloads via cert-manager's first-class `Vault` issuer.
+
+**What it buys**
+
+- One trust root, distributed once, instead of a self-signed cert per service and a
+  growing set of exceptions.
+- Short-lived certs with real rotation, rather than long-lived certs nobody tracks.
+- TLS for the ~14 hosts that currently have none. Only cluster workloads get certs today.
+- It is squarely the kind of thing `docs/LAB-DESIGN.md` says this lab exists to practise.
+
+**Break the circular dependency permanently, not just at bootstrap.** Vault cannot issue
+its own first certificate: no cert means no HTTPS means no API to call. The common fix is
+to bootstrap once over the plaintext listener, which leaves the circularity in place for
+every future rebuild. Better: **Vault's own certificate is signed directly by the root,
+once, by Ansible; Vault's intermediate issues everything else.** Vault then never depends
+on itself, and a bare-metal Vault rebuild does not require a working Vault.
+
+**The cost that is easy to miss: renewal machinery on bare hosts.** Short-lived certs are
+the point, and they need automated renewal. cert-manager covers the cluster. Outside it
+that means `vault-agent` or cron+script on each host — including three OPi Zero 2Ws and
+an RPi 3B. A renewal that silently stops is exactly the failure class this document is
+full of, and it would be spread across fourteen machines instead of one.
+
+**The objection to weigh heaviest.** This makes Vault a hard dependency for identity
+everywhere. Today a Vault outage is *degraded*: ESO stops syncing but existing Secrets
+persist, and backups cannot fetch R2 credentials. With Vault as CA, certificates stop
+renewing, and when they expire services stop trusting each other.
+
+And Vault is, by this document's own accounting, the least robust component in the lab:
+§2.11 it cannot be sealed deliberately, §2.12 it is never restarted so it silently runs
+an old binary, §1.11 regaining admin needs a `generate-root` ceremony, §5 its admin token
+expires 2026-09-06. Single node, raft, `disable_mlock = true`, on a Raspberry Pi 5.
+
+> **Do not make Vault the root of trust for the lab while Vault is the component with the
+> most open reliability items against it.**
+
+**Prerequisites, in order**
+
+1. **§2.6 fixed minimally first** — one root-signed cert for Vault, staged behind a second
+   TLS listener so nothing has a flag day. Closes the actual hole in ~1 day and forecloses
+   nothing here.
+2. **§5, §2.11, §2.12 cleared.** Deadline, sealing, and restart/version reporting. These
+   are cheap and they are what "trusting Vault with more" actually rests on.
+3. **A decision on renewal scope** — which hosts get automated short-lived certs, and which
+   get long-lived certs and a calendar entry. Doing all fourteen is not obviously right.
+
+**Related:** §2.6 (the immediate hole), §1.11 and §2.11-2.12 (Vault fragility), §8 (if
+remote access is ever un-deferred, this becomes considerably more attractive, because
+LAN-only plaintext stops being defensible at all).
+
+---
+
+### 6b.2 Host firewalls — discover the flows before writing any rules
+
+**Proposed 2026-08-21.** §2.9 is the finding; this is how to act on it without taking the
+lab down.
+
+**Why not just write rules.** A naive default-deny breaks this cluster immediately. k3s
+needs 6443 (API), 10250 (kubelet), 2379-2380 (embedded etcd, server-to-server), 8472/udp
+(flannel VXLAN); kube-vip needs ARP/VRRP on the VIP subnet; the H4 additionally serves
+SMB and NFS to the LAN, and NFS in particular negotiates ports that are not obvious from
+a config file. Getting one of those wrong on the H4 means losing the NAS, the API server
+and the ingress VIP simultaneously — from a machine you are connected to over SSH.
+
+**The lesson from `netplan try` applies directly.** Any firewall change on the H4 needs a
+timed auto-revert, not an apply-and-hope. `ufw`/`nft` have no equivalent, so the pattern
+is a systemd timer that flushes the ruleset after N minutes unless cancelled.
+
+**Do it in the right order — and note this only became possible this week.**
+
+1. **Log-only first.** An `nftables` ruleset that matches what a deny rule *would* match
+   and logs instead of dropping. Run it for a week.
+2. **Read the logs.** Journal shipping to Loki now works on all five cluster nodes
+   (§3.9, fixed 2026-08-21) and Kubernetes Events are captured (`alloy-events`), so the
+   actual flows are observable for the first time. A week ago this step was impossible —
+   the H4 shipped no host logs at all.
+3. **Then enforce**, per role rather than uniformly: the H4 (NAS + server), the N150s
+   (servers + KVM), the OPi5s (agents), and the standalone Pis have genuinely different
+   surfaces.
+4. Codify in Ansible with a revert timer, `--check` first, H4 last.
+
+**What it buys.** It is the control that makes every other "fine on a trusted LAN"
+acceptance in §2 honest — §2.6, §2.1, and the §2.13 token decision all rest on the LAN
+being trusted, and nothing currently enforces even the weak version of that.
+
+**Related:** §2.9 (the finding), §2.6, §6b.3 (which subsumes this if pursued).
+
+---
+
+### 6b.3 Zero trust — and the acceptances it would invalidate
+
+**Proposed 2026-08-21.** The idea: stop granting trust on the basis of network location.
+Vault is already the natural centre of it, and §6b.1 is the substrate.
+
+**What it would concretely mean here**
+
+- **mTLS between services**, which needs the PKI in §6b.1 — this is why that comes first.
+- **Identity-based access rather than IP-based.** Authelia and lldap already exist and
+  cover the web tier; the gap is everything non-HTTP.
+- **Short-lived, dynamically issued credentials.** Vault's database secrets engine could
+  replace the static Postgres passwords for Immich, Authelia and Semaphore that currently
+  sit in Vault as long-lived KV entries — a meaningfully better use of Vault than as a
+  password box.
+- **Per-service authorisation**, not "on the LAN therefore allowed".
+
+**The part worth stating plainly.** Zero trust is the position that the LAN is not
+trusted. **Adopting it as a goal invalidates the reasoning behind several current
+acceptances** — §2.6 (plaintext Vault is "fine on a trusted LAN"), §2.9 (no firewall),
+§2.1 (unauthenticated Pi-hole admin), and the §2.13 decision to accept the k3s token
+exposure, which rests explicitly on the threat model being "someone already on my LAN".
+
+Those acceptances are defensible today. They are not defensible under a zero-trust goal.
+So this is not an additive project — picking it up means re-opening decisions already
+made, and that should be a conscious choice rather than a discovery halfway through.
+
+**Realistic scope for a lab this size.** The full doctrine is not the goal; the parts with
+the best ratio are. In rough order of value per unit of pain: Vault dynamic database
+credentials, mTLS on the highest-value paths only, extending SSO coverage to what it does
+not yet reach, then network policy. `NetworkPolicy` resources already exist for
+`ai-gateway`, `authelia` and `lldap`, so the cluster half has a starting point.
+
+**Prerequisites:** §6b.1 (PKI), and the same Vault-fragility items — §5, §2.11, §2.12 —
+that gate everything else built on Vault.
 
 ---
 
