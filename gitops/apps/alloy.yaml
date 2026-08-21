@@ -25,6 +25,22 @@ spec:
           tolerations:
             - operator: Exists    # run on all nodes including inference nodes
 
+          # Host journal, paired with alloy.mounts.extra above. The volume lives
+          # under controller.volumes.extra and the mount under alloy.mounts.extra —
+          # two different blocks, which is how the previous (invented) key names
+          # went unnoticed.
+          #
+          # type: Directory is deliberate. Without it, Kubernetes CREATES an empty
+          # directory when the host path is missing and the mount succeeds silently,
+          # which is exactly the failure mode this whole entry is about. With it, a
+          # node lacking a persistent journal fails to start its pod and says so.
+          volumes:
+            extra:
+              - name: journal
+                hostPath:
+                  path: /var/log/journal
+                  type: Directory
+
         alloy:
           # Node name for the discovery.kubernetes field selector below. Must come
           # from the downward API — HOSTNAME inside a pod is the pod name.
@@ -128,16 +144,25 @@ spec:
                 }
               }
 
-          # Journal mount for systemd log collection
-          extraVolumes:
-            - name: journal
-              hostPath:
-                path: /var/log/journal
-
-          extraVolumeMounts:
-            - name: journal
-              mountPath: /var/log/journal
-              readOnly: true
+          # Journal mount for systemd log collection.
+          #
+          # THE KEY NAMES MATTER. Until 2026-08-21 this was written as
+          #   alloy.extraVolumes / alloy.extraVolumeMounts
+          # which are NOT keys in this chart. Helm discards unrecognised values
+          # without warning, so no volume was ever created and no mount ever
+          # existed — on any node. `kubectl exec ... -- ls /var/log/journal`
+          # returned "No such file or directory" while loki.source.journal sat
+          # there reporting healthy against an empty path, for seven weeks, in an
+          # Application that Argo showed as Synced with the correct-looking config
+          # visible in git. Nothing anywhere said no.
+          #
+          # The chart's real keys are alloy.mounts.extra (here) and
+          # controller.volumes.extra (further down, a different block).
+          mounts:
+            extra:
+              - name: journal
+                mountPath: /var/log/journal
+                readOnly: true
 
         serviceMonitor:
           enabled: true    # scrape Alloy metrics via existing Prometheus

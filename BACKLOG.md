@@ -786,88 +786,74 @@ true, it is not true now. Same drift class as §6.
       Only `ai-gateway` appeared in the first capture, but capture is hours old.
 - [ ] Correct the "zero violations" comment once the count is actually zero.
 
-### 3.9 Alloy shipped every pod's logs five times, dropped batches, and never sent the H4's journal
+### 3.9 Alloy's journal mount never existed — two Helm keys that aren't in the chart
 
-**Found 2026-08-19.** `backup-verify` ran on 2026-08-16 and wrote eighteen lines to
-journald on the H4, ending `backup-verify: all checks passed`. **None of them are in
-Loki.** The unit does not exist there at all:
+**Found 2026-08-19, root-caused 2026-08-21.** `backup-verify` ran on 2026-08-16 and
+wrote eighteen lines to journald on the H4, ending `backup-verify: all checks passed`.
+None of them reached Loki. The unit does not exist there at all.
 
-    curl -sS .../loki/api/v1/label/unit/values | jq -r '.data[]' | grep backup
-    backup-vault.service          ← and nothing else
+**The cause is two invented value keys.** `gitops/apps/alloy.yaml` carried:
 
-`backup-vault` runs on **rpi5, a non-cluster host**, which ships via
-`ansible/playbooks/promtail.yml`. Every backup unit that runs on the H4 —
-`backup-verify`, `backup-nas`, `backup-etcd`, `backup-cloud`, `backup-offsite` — is
-missing.
+    alloy:
+      extraVolumes:      [...]
+      extraVolumeMounts: [...]
 
-**Scope is wider than backups.** The `hostname` label values in Loki are:
+Neither is a key in the Alloy chart. The real ones are `alloy.mounts.extra` and
+`controller.volumes.extra` — different names, and in two different blocks. **Helm
+discards unrecognised values without warning**, so no volume was ever created and no
+mount ever existed, on any node. Proven directly:
 
-    RPI-3B-2   RPI-4B   RPI-5--01   n150-1   n150-2
-    opi-zero2w-4   opizero2w-1   opizero2w-4   orangepizero2w
+    kubectl -n monitoring exec <alloy-pod> -c alloy -- ls /var/log/journal
+    ls: cannot access '/var/log/journal': No such file or directory
 
-`odroid-nas`, `opi5pro-1` and `opi5pro-2` are absent. So Alloy's
-`loki.source.journal` works on n150-1 and n150-2 and on no other cluster node — the
-NAS core and both inference nodes ship **no host logs at all**. Pod logs are
-unaffected; this is the journal half only.
+`loki.source.journal` had been running against a non-existent path since `cbed946`
+("remove Promtail, add journal unit/hostname labels to Alloy") — seven weeks —
+reporting healthy the entire time.
 
-**Ruled out along the way:** volatile journal storage (`/var/log/journal` exists on the
-H4 and is persistent); a stale DaemonSet rollout (generation 1, 5/5 available, and the
-H4's pod's rendered config contains the journal block).
+**Why two nodes appeared to work.** n150-1 and n150-2 have host logs in Loki because
+they are running a **stray promtail systemd service** — `active` and `enabled`,
+confirmed 2026-08-21, and targeted by no current playbook.
+`ansible/playbooks/promtail.yml` runs against `node_exporter:rpi5`, a group of
+`octopi-dns, rpi4b, opi-zero2w-1..4, rpi5` that does not include the N150s — while the
+playbook's own header comment claims *"This playbook covers: n150-1/2, octopi-dns,
+opi-zero2w-*, rpi4b, rpi5."* Comment and code disagree; the service is a leftover from
+when they matched. So host-log coverage in this lab currently depends on an accident,
+and `odroid-nas`, `opi5pro-1` and `opi5pro-2` — having neither promtail nor a working
+mount — ship nothing.
 
-**What the H4's Alloy logs actually showed — two defects, both bigger than the missing
-journal.**
+**Two defects found in the same investigation and fixed 2026-08-20** (they were real,
+just not the cause):
 
-**(a) Every Alloy pod was tailing every pod in the cluster.**
-`discovery.kubernetes "pods" { role = "pod" }` had no field selector, and
-`loki.source.kubernetes` reads through the API rather than off local disk, so
-node-locality was never enforced. `alloy-thttf` on `odroid-nas` was observed opening
-log streams for pods on n150-1, n150-2, opi5pro-1 and opi5pro-2. Five DaemonSet pods ×
-every pod in the cluster = **every log line ingested five times** — 5× storage, 5× the
-rate against a 16 MB/s `ingestion_rate_mb` cap, and duplicate lines in every query
-result. The old config set `__host__` from the node name, which resembles node
-filtering but is a Promtail file-scraping convention and is inert here.
+- **5x duplicate ingestion.** `discovery.kubernetes` had no node selector, so all five
+  DaemonSet pods tailed every pod in the cluster through the API. Fixed with a
+  `spec.nodeName` field selector driven by a downward-API `NODE_NAME`.
+- **Dropped batches.** A blanket `labelmap` of pod labels produced a 16-label stream,
+  over Loki's `max_label_names_per_series` limit of 15; Loki answered 400 and Alloy
+  discarded the whole batch. Fixed by removing the labelmap. Confirmed zero across all
+  five pods afterwards.
 
-**(b) Loki was rejecting whole batches and Alloy was discarding them.**
-
-    status=400 ... entry for stream '{...}' has 16 label names; limit 15
-    "final error sending batch, no retries left, dropping data"
-
-The blanket `labelmap` of `__meta_kubernetes_pod_label_(.+)` promoted every pod label
-to a Loki stream label. `kube-prometheus-stack`'s operator pod carries enough to reach
-16, over Loki's `max_label_names_per_series` default of 15. 400 is not retryable, so
-the **entire batch** was dropped — including entries from unrelated streams pushed
-alongside it. This is the most plausible mechanism for journal lines disappearing, and
-it is deliberately stated as plausible rather than proven.
-
-**Fixed 2026-08-20** in `gitops/apps/alloy.yaml`: a `spec.nodeName` field selector
-driven by a downward-API `NODE_NAME` env var, and the blanket `labelmap` removed in
-favour of the three explicit labels (`namespace`, `pod`, `container`). No LogQL in this
-repo selected on pod labels, so nothing depended on them. Raising Loki's label limit
-was rejected as a fix — it would have hidden the rejection rather than removed the
-cause.
-
-**Why the journal half matters.** `backup-verify.sh` exists specifically because three
-mechanisms in this lab once reported success while doing nothing; it is the lab's
-single best "did it actually work" signal. Its output is not in the log store anyone
-would query. Nothing is lost permanently — journald holds it locally and the
-healthchecks.io ping still fires — but any alert or dashboard built on those lines
-would find nothing and read as healthy.
+**What makes this entry worth reading twice.** Every layer reported success. Argo:
+Synced and Healthy. The pod: 2/2 Running. The Alloy component: healthy. The config in
+git: correct-looking, reviewed, merged. The rendered ConfigMap: contained the journal
+block. And the mount did not exist. There was no error to find because nothing
+considered it an error — Helm treats unknown keys as nothing at all.
 
 **To do:**
 
-- [ ] **Verify by content after the fix syncs.** `{unit="backup-verify.service"}` over
-      7 days must return the `ok:` lines. Component health and a green Argo sync are
-      not evidence — that combination is what hid this for 48 days.
-- [ ] Confirm the duplication is gone: a single known log line should appear once, not
-      five times. `hostname` label values should gain `odroid-nas`, `opi5pro-1`,
-      `opi5pro-2`.
-- [ ] If the journal is *still* absent once (a) and (b) are fixed, the batch-poisoning
-      theory was wrong and the cause is per-node. Check the opi5pro nodes separately —
-      different distro and systemd — and consider whether the H4's storage layout
-      (OS on eMMC, loop-backed LVM VG) makes the `/var/log/journal` hostPath resolve
-      differently inside the container.
-- [ ] Consider what 5× ingestion did to the 20Gi Loki PV and 30d retention. Effective
-      retention may have been well under 30 days, silently.
+- [ ] **Verify by content after the mount fix syncs.** Not component health, not sync
+      status — both were green throughout. `{job="node-journal", hostname="odroid-nas"}`
+      over the last hour must return lines.
+- [ ] **Remove the stray promtail from n150-1 and n150-2** once Alloy's journal works,
+      or those two nodes will ship their journal twice. Decide whether promtail remains
+      the mechanism for non-cluster hosts (it must — they have no Alloy) and fix the
+      playbook comment to match its actual target group either way.
+- [ ] `backup-verify` will not appear until it next runs (weekly, Sun 04:00) because
+      `max_age = "12h"` bounds the startup backfill. Trigger it by hand to test — the
+      script is read-only by design and never writes to, forgets from, or prunes any
+      repository.
+- [ ] Consider whether any other Helm `valuesObject` in `gitops/apps/` contains
+      invented keys. This failure is silent by construction and nothing in CI would
+      catch it; `helm template` with `--validate` against the real chart would.
 
 ### 3.10 Fleet hostnames are inconsistent and do not match the Ansible inventory
 
@@ -1463,6 +1449,38 @@ follow. That is the `lldap`/n150-2 outage pattern from
 - [ ] Add the play to CI's `--check` path so drift is caught rather than assumed.
 
 Related: §3.10 (the correlation cost), §3.9 (found while chasing the same thread).
+
+### 4.15 Alloy keeps no position state, so every restart re-ingests and is partly rejected
+
+**Found 2026-08-21**, immediately after the §3.9 pod rollout. Fresh Alloy pods emitted
+a wall of:
+
+    has timestamp too old: 2026-07-31T10:30:05Z,
+    oldest acceptable timestamp is: 2026-08-14T02:12:10Z
+
+The chart's default `storagePath` is `/tmp/alloy` — ephemeral, gone with the pod. With
+no persisted read positions, a restarted Alloy re-reads container log files from the
+beginning for long-running pods (`traefik`, `metrics-server`,
+`argocd-applicationset-controller`, and the log files of the long-deleted
+`promtail-2vvp7`) and tries to push July entries into Loki's rejection window.
+
+Two costs. The obvious one is churn: every restart re-ingests weeks of logs and burns
+ingestion budget against a 16 MB/s cap. The subtler one is that these are **batch-level
+rejections** — a batch containing one too-old entry is dropped whole, so current
+entries pushed alongside it are lost too. Same failure shape as the label-limit
+rejections in §3.9, different trigger.
+
+It self-corrects once Alloy catches up to the present, so this is chronic rather than
+urgent.
+
+**To do:**
+
+- [ ] Give Alloy a persistent `storagePath` on a volume that survives restarts. This
+      means adding a volume to a DaemonSet, so it wants its own PR and its own
+      verification — deliberately not bundled with the §3.9 mount fix.
+- [ ] Decide whether Loki's `reject_old_samples_max_age` should be raised. Probably
+      not: the rejection is correct behaviour and raising it would let stale replays
+      land silently, which is worse than the noise.
 
 ---
 
