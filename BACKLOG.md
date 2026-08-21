@@ -786,7 +786,7 @@ true, it is not true now. Same drift class as §6.
       Only `ai-gateway` appeared in the first capture, but capture is hours old.
 - [ ] Correct the "zero violations" comment once the count is actually zero.
 
-### 3.9 Alloy's journal mount never existed — two Helm keys that aren't in the chart
+### 3.9 ~~Alloy never shipped the journal — four stacked silent failures~~ — **FIXED AND VERIFIED 2026-08-21**
 
 **Found 2026-08-19, root-caused 2026-08-21.** `backup-verify` ran on 2026-08-16 and
 wrote eighteen lines to journald on the H4, ending `backup-verify: all checks passed`.
@@ -874,22 +874,47 @@ git: correct-looking, reviewed, merged. The rendered ConfigMap: contained the jo
 block. And the mount did not exist. There was no error to find because nothing
 considered it an error — Helm treats unknown keys as nothing at all.
 
-**To do:**
+**RESOLVED 2026-08-21.** Verified by content, not by status. `backup-verify` was
+triggered by hand (read-only) and its output is now queryable in Loki under
+`{unit="backup-verify.service"}`:
 
-- [ ] **Verify by content after the mount fix syncs.** Not component health, not sync
-      status — both were green throughout. `{job="node-journal", hostname="odroid-nas"}`
-      over the last hour must return lines.
-- [ ] **Remove the stray promtail from n150-1 and n150-2** once Alloy's journal works,
-      or those two nodes will ship their journal twice. Decide whether promtail remains
-      the mechanism for non-cluster hosts (it must — they have no Alloy) and fix the
-      playbook comment to match its actual target group either way.
-- [ ] `backup-verify` will not appear until it next runs (weekly, Sun 04:00) because
-      `max_age = "12h"` bounds the startup backfill. Trigger it by hand to test — the
-      script is read-only by design and never writes to, forgets from, or prunes any
-      repository.
-- [ ] Consider whether any other Helm `valuesObject` in `gitops/apps/` contains
-      invented keys. This failure is silent by construction and nothing in CI would
-      catch it; `helm template` with `--validate` against the real chart would.
+    ok:   restic check clean — /mnt/cold-8t/restic
+    ok:   restic check clean — /mnt/cold-sec/restic
+    ok:   restic check clean — R2
+    ok:   restic check clean — offsite R2
+    ok:   newest R2 snapshot contains the k3s server token
+    backup-verify: all checks passed
+
+Journal streams now carry both labels on every node, e.g.
+`{hostname="odroid-nas", job="node-journal", unit="k3s.service"}`.
+
+**The four fixes, in the order they had to be made:**
+
+| # | Defect | Fix |
+|---|---|---|
+| 1 | `alloy.extraVolumes` / `alloy.extraVolumeMounts` — keys the chart does not have; Helm discarded them | `alloy.mounts.extra` + `controller.volumes.extra` |
+| 2 | hostPath had no `type`, so a missing path would mount an empty dir silently | `type: Directory` |
+| 3 | Container `/etc/machine-id` empty; sd-journal searched for a machine with no journal and returned zero entries | mount `/etc/machine-id`, `type: File` |
+| 4 | Relabel chained downstream of the source, which strips `__journal_*` before forwarding | `relabel_rules = loki.relabel.journal.rules`, relabel `forward_to = []` |
+
+**Remaining follow-ups (tracked, not blocking):**
+
+- [ ] Remove the stray promtail from n150-1/n150-2 — `ansible/playbooks/promtail-remove-cluster.yml`, written 2026-08-21, `--check` first. They are double-shipping until then.
+- [ ] Consider whether other Helm `valuesObject` blocks in `gitops/apps/` contain invented keys. Sixteen Applications use inline values; nothing in CI would catch it, since yaml-lint, kubeconform and conftest all pass on syntactically valid nonsense. `helm template --validate` against the real chart would.
+- [ ] §4.15 covers Alloy's ephemeral `storagePath`, found during this work.
+
+**The lesson worth keeping.** Four independent failures in one config, none of which
+produced an error, a warning, or an unhealthy component — and each masked the next, so
+every fix appeared to have failed. The diagnostic that finally cut through was a single
+counter on the pod's own `:12345/metrics`:
+
+    loki_source_journal_target_lines_total 6800   <- reading fine
+    loki_relabel_entries_processed        6800   <- forwarding fine
+    loki_relabel_cache_size                  1   <- ONE label set for 6800 entries
+
+That last number is the whole diagnosis. Component-level counters distinguish "did
+nothing" from "did the wrong thing"; health status cannot, because a component doing
+the wrong thing correctly is healthy.
 
 ### 3.10 Fleet hostnames are inconsistent and do not match the Ansible inventory
 
