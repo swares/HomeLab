@@ -412,12 +412,32 @@ Correct in principle — copying a repository that just failed to update has lit
 — but one root cause now raises two alarms: the failed unit, and the offsite
 healthchecks.io check going silent at 25h/3h. Two alerts beat a silent gap.
 
+**Applied and verified 2026-08-21.** `systemctl show backup-nas.service -p OnSuccess`
+returns `OnSuccess=backup-offsite.service` on the host, and `systemd 249.11` supports it
+(249 is the version that introduced it — no margin, but supported). That `show` output
+is the real check: it proves systemd *parsed* the directive rather than that the file
+merely contains the text. Compare `Docs=` in `microshift-lvm-loop.service`, which sat
+there looking correct and meant nothing (§3.11).
+
 - [ ] **Remove `backup-offsite.timer` once the chain has a week of evidence.** It is
       deliberately retained for now as a fallback; a duplicate run is cheap because
-      `restic copy` finds nothing new and exits in seconds. Verify first with
-      `systemctl show backup-nas.service -p OnSuccess` and by confirming
-      `backup-offsite` starts within seconds of `backup-nas` finishing, rather than at
-      02:30. Do not remove it on the strength of the config alone — CLAUDE.md.
+      `restic copy` finds nothing new and exits in seconds. The evidence is the journal,
+      not the config:
+
+          journalctl -u backup-nas -u backup-offsite --since '01:00' -o short-precise \
+            | grep -E 'Starting|Finished|Succeeded|Failed'
+
+      `backup-offsite` starting seconds after `backup-nas` finishes = the chain works.
+      Starting at 02:30:09 = it does not, and the timer is covering for it — which looks
+      identical in every summary view. Do not remove it on the strength of the config
+      alone — CLAUDE.md.
+
+- [ ] **Known, accepted divergence until then:** `backup-offsite.service.j2`'s comment
+      block was updated 2026-08-21 but not applied. `backup-offsite.yml` requires a
+      `VAULT_TOKEN` and re-renders the R2 credentials env file, which is a
+      disproportionate ceremony for a comment-only change on the backup path. It will
+      sync when that playbook runs for the timer removal above. Recorded here so it is
+      a known divergence rather than the unnoticed kind (§3.11).
 
 - [ ] **Optional, later: re-init `cold-sec` with `--copy-chunker-params`** to match
       the primary. It would align all three repos, improve dedup between primary and
