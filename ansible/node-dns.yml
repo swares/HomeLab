@@ -42,6 +42,35 @@
     lab_domain: lab.home.arpa
 
   tasks:
+    # systemd-resolved MERGES DNS= across resolved.conf and every drop-in; it does not
+    # let the drop-in win. Armbian ships DNS=1.0.0.1 at /etc/systemd/resolved.conf:22
+    # on both OPi5 Pros (the N150s have no such line), which put Cloudflare FIRST in
+    # the global list:
+    #
+    #     Global: 1.0.0.1 192.168.1.148 192.168.1.116 192.168.1.184
+    #
+    # Because the drop-in's Domains=~lab.home.arpa applies to the whole global scope,
+    # lab queries could be answered by 1.0.0.1 — which returns NXDOMAIN for
+    # registry.apps.lab.home.arpa authoritatively. Whether a node could resolve lab
+    # names came down to which server resolved happened to pick: on 2026-08-21
+    # opi5pro-1 worked and opi5pro-2 did not, with identical configuration.
+    #
+    # Commenting the line out rather than deleting it keeps the distro default visible
+    # and the change obvious to anyone reading resolved.conf. `backup: true` leaves a
+    # timestamped copy alongside.
+    #
+    # NOTE: this deliberately does NOT reduce the nameserver count below the kubelet's
+    # limit of three. Public DNS still comes from the links' DHCP servers. Suppressing
+    # those as well would leave only three routing-only lab servers and nothing serving
+    # public names at all — see BACKLOG §4.16 for that decision.
+    - name: Neutralise the distro's global DNS so the drop-in is the only lab source
+      ansible.builtin.replace:
+        path: /etc/systemd/resolved.conf
+        regexp: '^(DNS=.*)$'
+        replace: '# \1   # disabled by node-dns.yml — see BACKLOG.md §4.12'
+        backup: true
+      notify: Restart resolved
+
     - name: Ensure resolved drop-in directory exists
       ansible.builtin.file:
         path: /etc/systemd/resolved.conf.d
@@ -64,16 +93,52 @@
     - name: Flush handlers (apply DNS change immediately)
       ansible.builtin.meta: flush_handlers
 
+    # resolved needs a moment after a restart. Without this the query below can land
+    # mid-reload and report "not found" on a node that is perfectly healthy — which
+    # happened on 2026-08-21 and was briefly mistaken for a regression.
+    - name: Give resolved a moment to settle after the restart
+      ansible.builtin.wait_for:
+        timeout: 3
+      when: not ansible_check_mode
+
+    # check_mode: false because Ansible skips `command` tasks under --check, so without
+    # it this verification silently vanishes from exactly the run where someone is
+    # trying to find out what will happen. See CLAUDE.md, "Verify before asserting".
     - name: Verify lab hostname resolves from node
       ansible.builtin.command:
         cmd: resolvectl query registry.apps.{{ lab_domain }}
       register: _dns_check
       changed_when: false
+      check_mode: false
       failed_when: false
 
     - name: Show DNS resolution result
       ansible.builtin.debug:
         msg: "{{ _dns_check.stdout_lines + _dns_check.stderr_lines }}"
+
+    # Under --check the drop-in has not been written and resolved has not restarted, so
+    # the query above reflects the CURRENT state, not the state this play would produce.
+    # Saying so beats letting a green run imply the change is already in place.
+    - name: DRY RUN — say plainly that nothing happened
+      ansible.builtin.debug:
+        msg: >-
+          DRY RUN. Nothing was written and resolved was not restarted. The resolution
+          result above is the CURRENT state, not the result of this play. Re-run
+          without --check to apply.
+      when: ansible_check_mode
+
+    # Fail loudly on a real run if lab resolution is broken. The whole purpose of this
+    # play is that these nodes can resolve lab names; a green recap while they cannot
+    # is the failure mode this repo keeps rediscovering.
+    - name: Fail if lab resolution is still broken
+      ansible.builtin.fail:
+        msg: >-
+          {{ inventory_hostname }} cannot resolve registry.apps.{{ lab_domain }}.
+          Check `resolvectl dns` for stray global servers — a public resolver ahead of
+          the lab ones will answer NXDOMAIN authoritatively. See BACKLOG.md §4.12.
+      when:
+        - not ansible_check_mode
+        - _dns_check.rc != 0
 
   handlers:
     - name: Restart resolved
