@@ -2263,13 +2263,65 @@ So this is not an additive project — picking it up means re-opening decisions 
 made, and that should be a conscious choice rather than a discovery halfway through.
 
 **Realistic scope for a lab this size.** The full doctrine is not the goal; the parts with
-the best ratio are. In rough order of value per unit of pain: Vault dynamic database
-credentials, mTLS on the highest-value paths only, extending SSO coverage to what it does
-not yet reach, then network policy. `NetworkPolicy` resources already exist for
-`ai-gateway`, `authelia` and `lldap`, so the cluster half has a starting point.
+the best ratio are. In rough order of value per unit of pain:
+
+1. **Vault dynamic database credentials** — replaces the static Postgres passwords for
+   Immich, Authelia and Semaphore. Self-contained, no PKI dependency, and a better use of
+   Vault than a password box. Start here.
+2. **Time-limited SSH via Vault-signed certificates** — §6b.4. The widest-reaching
+   credential in the lab and currently the only one with no expiry at all. Carries the
+   sharpest recovery-path risk, so it needs envelope item 7 first.
+3. **mTLS on the highest-value paths only** — needs §6b.1.
+4. **Extending SSO coverage** to what Authelia does not yet reach.
+5. **Network policy.** `NetworkPolicy` resources already exist for `ai-gateway`,
+   `authelia` and `lldap`, so the cluster half has a starting point; §6b.2 covers hosts.
 
 **Prerequisites:** §6b.1 (PKI), and the same Vault-fragility items — §5, §2.11, §2.12 —
 that gate everything else built on Vault.
+
+---
+
+### 6b.4 Time-limited SSH via Vault-signed certificates
+
+**Proposed 2026-08-21.** Vault's SSH secrets engine in **CA mode** — Vault signs a user's
+public key into a short-TTL certificate; hosts trust the CA via `TrustedUserCAKeys` in
+`sshd_config`. Not OTP mode, which needs `vault-ssh-helper` resident on all fourteen hosts.
+
+**What it buys.** `authorized_keys` stops being something to distribute — hosts trust a CA
+rather than an enumerated list, which today is hand-managed via
+`ansible.posix.authorized_key` (`bootstrap.yml:36`) and grows silently. Certificates expire,
+so a stolen private key is worthless tomorrow. Principals encode who may log in as whom.
+And Vault logs every signing request, which would be this lab's first real SSH audit trail.
+
+**The circular dependency is the sharpest of any proposal here.** SSH is the recovery path
+for everything, *including Vault*. If Vault is down and your certificate expired an hour
+ago, you cannot log in to fix Vault. That is worse than §6b.1's case, where a stale cert
+degrades trust between services; here it removes the means of repair.
+
+> **A permanent break-glass key in `authorized_keys` on every host is mandatory, not
+> optional — and becomes envelope item 7.** Vault-signed certs are for day-to-day access;
+> the emergency key is the floor beneath them.
+
+**Where this actually stalls: Ansible.** Plays run from the H4 and the Windows checkout
+against fourteen hosts. If SSH requires a signed certificate, so does Ansible, and it
+expires mid-week. Either a wrapper signs before each run, or the automation identity gets a
+longer-lived certificate. If the answer becomes "Ansible uses the break-glass key", the
+whole exercise is theatre — decide this before starting, not after.
+
+**Fleet-specific risk.** A bad `sshd_config` on a headless OPi Zero 2W or the RPi 3B means
+a reflash, not a console login. Roll it out with `--check` first, one host at a time,
+lowest-value hosts first, H4 and rpi5 last — and keep an open second SSH session on each
+host while changing it, so a broken config can be reverted through the existing connection.
+
+**Prerequisites**
+
+1. Envelope item 7 printed and stored *before* any host trusts the CA.
+2. The Vault fragility items — §5, §2.11, §2.12 — same as everything else built on Vault.
+3. A decided answer on the Ansible identity.
+
+**Related:** §6b.3 (this is one of its highest-value components), §6b.1 (separate PKI —
+SSH CAs and X.509 CAs are different trust roots and should not be conflated),
+`docs/BREAK-GLASS.md` (envelope items 1-6 today).
 
 ---
 
