@@ -1,0 +1,133 @@
+---
+# Remove the stray Promtail installation from k3s cluster nodes.
+#
+# WHY THIS EXISTS
+#
+# Cluster nodes ship pod logs and the systemd journal via the Alloy DaemonSet
+# (gitops/apps/alloy.yaml). Promtail is only for NON-cluster hosts, deployed by
+# playbooks/promtail.yml against `node_exporter:rpi5`.
+#
+# On 2026-08-21, n150-1 and n150-2 were found running promtail.service — active,
+# enabled, and targeted by no current playbook. It is a leftover from when
+# promtail.yml's host pattern included them, orphaned when the pattern changed and
+# never cleaned up. Two consequences:
+#
+#   1. Those two nodes now ship their journal TWICE, once via promtail and once via
+#      Alloy, since the Alloy journal pipeline was repaired (BACKLOG §3.9).
+#   2. The stray service has been failing continuously and silently:
+#        failed to start tailer  error="open /var/log/syslog: permission denied"
+#      retried every 10 seconds, indefinitely. It runs as the unprivileged `promtail`
+#      user, which is not in `adm`. Its journal scraping worked, which is the only
+#      reason those two hosts had journal data in Loki at all — and that accident is
+#      what made a cluster-wide Alloy fault look like a per-node one for two days.
+#
+# This playbook is deliberately NOT part of promtail.yml. Removal is a distinct,
+# one-time operation and should be reviewed as one.
+#
+# RUN
+#   cd ansible                      # ansible.cfg only applies from here — see §4.1c
+#   ansible-playbook -i inventory/hosts.yml playbooks/promtail-remove-cluster.yml --check
+#   ansible-playbook -i inventory/hosts.yml playbooks/promtail-remove-cluster.yml
+#
+# VERIFY AFTERWARDS by content, not by exit code:
+#   - `systemctl status promtail` on each node reports "could not be found"
+#   - In Loki, {unit="promtail.service"} returns nothing new
+#   - In Loki, {job="node-journal", hostname="n150-1"} still returns lines
+#     (Alloy must keep shipping after promtail is gone — that is the actual test)
+#
+# The `k3s_server` group is h4-core, n150-1 and n150-2; `k3s_agents` is the two OPi5s.
+# Only the N150s were found running promtail, but the play is written to be safe on
+# any cluster node and is idempotent — it removes what it finds and no-ops otherwise.
+- name: Remove stray Promtail from k3s cluster nodes
+  hosts: k3s_server:k3s_agents
+  become: true
+
+  vars:
+    promtail_user: promtail
+    promtail_group: promtail
+    promtail_bin: /usr/local/bin/promtail
+    promtail_config_dir: /etc/promtail
+    promtail_positions_dir: /var/lib/promtail
+    promtail_unit: /etc/systemd/system/promtail.service
+
+  tasks:
+    - name: Check whether promtail.service exists on this host
+      ansible.builtin.stat:
+        path: "{{ promtail_unit }}"
+      register: promtail_unit_file
+
+    - name: Report hosts with nothing to do
+      ansible.builtin.debug:
+        msg: "No promtail.service on {{ inventory_hostname }} — nothing to remove."
+      when: not promtail_unit_file.stat.exists
+
+    - name: Stop and disable promtail
+      ansible.builtin.systemd:
+        name: promtail.service
+        state: stopped
+        enabled: false
+      when: promtail_unit_file.stat.exists
+
+    - name: Remove the unit file
+      ansible.builtin.file:
+        path: "{{ promtail_unit }}"
+        state: absent
+      when: promtail_unit_file.stat.exists
+
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: promtail_unit_file.stat.exists
+
+    - name: Remove binary, config and positions
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ promtail_bin }}"
+        - "{{ promtail_config_dir }}"
+        - "{{ promtail_positions_dir }}"
+      when: promtail_unit_file.stat.exists
+
+    # The service account is removed last and only if the unit was present. Left
+    # deliberately explicit rather than folded into the loop above: deleting a system
+    # user is the one step here that is awkward to undo.
+    - name: Remove the promtail service account
+      ansible.builtin.user:
+        name: "{{ promtail_user }}"
+        state: absent
+        remove: false          # no home directory was created for it
+      when: promtail_unit_file.stat.exists
+
+    - name: Remove the promtail group
+      ansible.builtin.group:
+        name: "{{ promtail_group }}"
+        state: absent
+      when: promtail_unit_file.stat.exists
+
+    # Confirm the outcome rather than trusting the tasks above to have worked. This is
+    # the same rule backup-verify.sh applies to backups: check the result, not the
+    # exit code.
+    #
+    # check_mode: false is load-bearing. Ansible skips `command` tasks under --check,
+    # so without it this task is silently skipped exactly when someone is trying to
+    # find out what the play would do — and a --check run then prints five `changed:`
+    # lines per host with no verification at all, which reads as a successful removal
+    # and is not one. That happened on 2026-08-21. The command is read-only, so
+    # running it during --check is safe and makes the dry run report the true state.
+    - name: Confirm promtail is gone
+      ansible.builtin.command: systemctl is-active promtail.service
+      register: promtail_still_active
+      changed_when: false
+      check_mode: false
+      # Only an error on a real run. Under --check promtail is still present by
+      # definition, so failing there would be noise; the debug below reports it instead.
+      failed_when: promtail_still_active.rc == 0 and not ansible_check_mode
+
+    - name: Report what --check actually found
+      ansible.builtin.debug:
+        msg: >-
+          DRY RUN — promtail.service on {{ inventory_hostname }} is currently
+          '{{ promtail_still_active.stdout | default("absent") }}'.
+          Nothing above was applied. Re-run without --check to remove it.
+      when: ansible_check_mode
