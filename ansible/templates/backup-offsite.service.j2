@@ -2,9 +2,18 @@
 Description=restic copy of the primary repo to OFFSITE R2 (3-2-1)
 RequiresMountsFor={{ cold_primary_mount }}
 After=backup-nas.service
-# Ordering only takes effect when both are started in the same transaction; the
-# timers are an hour apart (01:30 / 02:30) so in practice the separation is the
-# schedule, not this directive.
+# This directive is load-bearing as of 2026-08-21. backup-nas.service now carries
+# OnSuccess=backup-offsite.service, so the two ARE started in one transaction and the
+# ordering applies — this unit waits for backup-nas to finish releasing the primary
+# repo lock, however long that takes. See BACKLOG §1.9.
+#
+# It was decorative before: ordering only takes effect within a transaction, and two
+# independent timer activations an hour apart never share one. The separation was the
+# schedule alone, which held only while backup-nas stayed short.
+#
+# The 02:30 timer is retained for now as a fallback while the chain proves itself. A
+# duplicate run is cheap — restic copy finds nothing new and exits in seconds. Removing
+# the timer is the follow-up in §1.9, once there is a week of evidence.
 
 [Service]
 Type=oneshot
