@@ -108,8 +108,26 @@
     # Confirm the outcome rather than trusting the tasks above to have worked. This is
     # the same rule backup-verify.sh applies to backups: check the result, not the
     # exit code.
+    #
+    # check_mode: false is load-bearing. Ansible skips `command` tasks under --check,
+    # so without it this task is silently skipped exactly when someone is trying to
+    # find out what the play would do — and a --check run then prints five `changed:`
+    # lines per host with no verification at all, which reads as a successful removal
+    # and is not one. That happened on 2026-08-21. The command is read-only, so
+    # running it during --check is safe and makes the dry run report the true state.
     - name: Confirm promtail is gone
       ansible.builtin.command: systemctl is-active promtail.service
       register: promtail_still_active
       changed_when: false
-      failed_when: promtail_still_active.rc == 0
+      check_mode: false
+      # Only an error on a real run. Under --check promtail is still present by
+      # definition, so failing there would be noise; the debug below reports it instead.
+      failed_when: promtail_still_active.rc == 0 and not ansible_check_mode
+
+    - name: Report what --check actually found
+      ansible.builtin.debug:
+        msg: >-
+          DRY RUN — promtail.service on {{ inventory_hostname }} is currently
+          '{{ promtail_still_active.stdout | default("absent") }}'.
+          Nothing above was applied. Re-run without --check to remove it.
+      when: ansible_check_mode
