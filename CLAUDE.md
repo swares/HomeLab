@@ -80,6 +80,21 @@ Read this before acting. Full context is in `docs/` (start with `ARCHITECTURE.md
 
 - Package names, StorageClass names, and exact CLI flags vary by k3s release and distro.
   Check current docs rather than relying on memory; say so when unsure.
+- **Check the artifact the consumer reads, not the config you wrote.** Config can be
+  correct while the thing consuming it sees something else. `resolvectl dns` showed
+  three resolvers per link while `/run/systemd/resolve/resolv.conf` — the file the
+  kubelet actually reads — held six (BACKLOG §4.12). Argo reported Synced and Healthy
+  on an Alloy config whose journal mount had never existed, because Helm discards
+  unknown value keys silently (§3.9). In both cases every status signal was green and a
+  single number was the whole diagnosis:
+  `grep -c nameserver /run/systemd/resolve/resolv.conf`, and `loki_relabel_cache_size`
+  returning 1 for 6800 entries. Prefer a number that can only be produced by the work
+  actually happening.
+- **A dry run that prints no verification has verified nothing.** Ansible skips
+  `command` tasks under `--check`, so a play's closing `debug` message will happily
+  assert success during a run that changed nothing. Put `check_mode: false` on
+  read-only verification commands and gate the summary on `ansible_check_mode`. This
+  was written twice in one day, the second time immediately after fixing the first.
 
 ## The fleet
 

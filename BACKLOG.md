@@ -1444,16 +1444,25 @@ apply it** — the apply step is `netplan try`, by hand, deliberately.
       NICs, `enp2s0` carrying four servers led by `.152`, from a cloud-init netplan.
 - [x] **H4 — `.152` removed 2026-08-21** via `netplan try`. `enp2s0` retained `.160`,
       `.200` and `.201` throughout and all five nodes stayed `Ready`.
-- [ ] **The warning still fires, for a third reason.** Putting the same three servers
-      on *both* links produced **six** entries in
-      `/run/systemd/resolve/resolv.conf` — **systemd-resolved aggregates per-link DNS
-      without deduplicating across links**, and says so in the file:
+- [x] **H4 FULLY RESOLVED 2026-08-21 16:14.** `grep -c nameserver
+      /run/systemd/resolve/resolv.conf` returns **3**, and no `DNSConfigForming` event
+      has fired for `odroid-nas` since — only n150-1 and n150-2, which are the
+      separate fix below.
+
+      **A third failure had to be fixed to get here.** Putting the same three servers
+      on *both* links produced **six** entries in `/run/systemd/resolve/resolv.conf`:
+      **systemd-resolved aggregates per-link DNS without deduplicating across links**,
+      and says so in the file itself —
       `# Too many DNS servers configured, the following entries may be ignored.`
-      The kubelet reads that file, counts six, keeps three and warns. The event at
-      16:02:34 carried the *correct* three in its applied line: right servers, wrong
-      count. Fix drafted — the resolver list moves to `enp2s0` only
-      (`h4_dns_link` in the playbook), leaving `enp1s0` with `use-dns: false` and no
-      nameservers. Not yet applied.
+      The kubelet read six, kept three and warned, with the *correct* three in its
+      applied line. Right servers, wrong count. Fixed by moving the resolver list to
+      `enp2s0` alone (`h4_dns_link` in the playbook); `enp1s0` keeps
+      `use-dns: false` and no nameservers.
+
+      **`resolvectl dns` showed three per link and looked correct at every single
+      stage.** It reports configured per-link state; the kubelet reads the aggregate.
+      The acceptance test for anything touching resolvers is
+      `grep -c nameserver /run/systemd/resolve/resolv.conf`, not `resolvectl`.
 
       Two things were learned the hard way and are worth keeping:
 
