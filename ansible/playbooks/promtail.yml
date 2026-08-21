@@ -1,7 +1,19 @@
 ---
 # Deploy Promtail on non-cluster Linux hosts.
-# Cluster nodes get Promtail via the k3s DaemonSet (gitops/apps/promtail.yaml).
-# This playbook covers: n150-1/2, octopi-dns, opi-zero2w-*, rpi4b, rpi5
+#
+# TARGET GROUP IS `node_exporter:rpi5` — octopi-dns, rpi4b, opi-zero2w-1..4, rpi5.
+# NOT the cluster nodes. Cluster nodes ship logs and journal via the Alloy DaemonSet
+# (gitops/apps/alloy.yaml); the old gitops/apps/promtail.yaml DaemonSet was deleted in
+# cbed946.
+#
+# This header used to claim the playbook covered "n150-1/2, octopi-dns, opi-zero2w-*,
+# rpi4b, rpi5". It did not — `hosts:` has excluded the N150s for as long as the current
+# group definition has existed. The comment was believed over the code on 2026-08-21
+# while diagnosing BACKLOG §3.9, and it sent the investigation down a false trail:
+# n150-1 and n150-2 were the only cluster nodes with journal data in Loki, which looked
+# like a per-node Alloy fault and was actually a leftover promtail service from when
+# the two did match. Both were removed 2026-08-21. If you find promtail running on a
+# cluster node again, it is stale — delete it rather than adding it here.
 #
 # Install method: binary from GitHub releases (works on all distros/arches).
 #   Debian: also available via Grafana APT repo, but binary keeps parity with Arch.
