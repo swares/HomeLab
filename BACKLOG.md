@@ -1633,6 +1633,41 @@ urgent.
       not: the rejection is correct behaviour and raising it would let stale replays
       land silently, which is worse than the noise.
 
+### 4.16 Decide whether cluster nodes should resolve public DNS through the lab
+
+**Deferred deliberately 2026-08-21**, split out of §4.12 because it is a design choice,
+not a defect.
+
+The four `node-dns.yml` nodes still exceed the kubelet's three-nameserver limit —
+**5 on n150-1/n150-2, 6 on opi5pro-1/2** — and the remaining count cannot be reduced
+without answering a question this lab has never explicitly decided.
+
+`node-dns.yml` writes `Domains=~lab.home.arpa`. The `~` makes the lab servers
+**routing-only**: they answer lab names and nothing else. Public DNS therefore comes
+from the links' DHCP servers. That is why the count stays above three, and why the H4's
+fix does not transfer:
+
+- Removing the distro's `DNS=1.0.0.1` (done in `node-dns.yml`) takes the OPi5s from 6
+  to 5 and makes lab resolution deterministic. Public DNS still works via the links.
+- Adding `use-dns: false` on the links — the H4 recipe — would leave three
+  routing-only servers and **nothing at all serving public names**. Image pulls from
+  ghcr.io and docker.io would fail on every affected node.
+
+**The decision.** To reach three, the `~` has to go, making the lab Pi-holes the
+default resolver for everything and letting them forward public queries upstream.
+
+Arguments for: Pi-hole filtering would apply to node-level traffic, which it currently
+does not; the resolver list becomes deterministic and countable; the warning stops.
+
+Arguments against: node internet DNS then depends on the lab resolvers being up. Two of
+the three are Raspberry Pis, one of which (`octopi`, a 1 GB RPi 3B) is already the
+lab's most overloaded DNS host. Losing them would stop image pulls cluster-wide rather
+than just breaking lab-name resolution — a strictly larger blast radius than today.
+
+**Not urgent.** The current state resolves correctly; the cost is a recurring warning
+and an arbitrary omission. Worth deciding when there is appetite to test it, not while
+closing something else.
+
 ---
 
 ## 5. Scheduled / time-bound
