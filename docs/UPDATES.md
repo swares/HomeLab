@@ -101,6 +101,39 @@ On H4, run the Ansible play (handles server then agents, serial: 1):
 `Error: --server is required`, the installer ran without the required env vars.
 See `docs/TROUBLESHOOTING.md` → *k3s Agent Upgrade Fails*.
 
+### Rotate the server token during this upgrade — pending since 2026-08-21
+
+**Do this once, then delete this section.** The k3s server token was exposed on
+2026-08-19 (BACKLOG §2.13). Rotation was **accepted rather than performed** because on
+its own it costs a serial restart of a three-node embedded-etcd control plane — the
+riskiest routine operation in this lab. A k3s upgrade already does exactly that
+restart, so rotating here is close to free.
+
+Before starting the drain cycle:
+
+```
+# 1. Preserve the CURRENT token — snapshots taken before rotation need it.
+sudo cat /var/lib/rancher/k3s/server/token        # this is envelope item 4
+
+# 2. Rotate (verify the flag against the release notes for the version you are
+#    installing; the CLI has changed shape between releases).
+sudo k3s token rotate --new-token="$(openssl rand -hex 32)"
+```
+
+Then run the upgrade play as normal — the restarts it performs are what makes the new
+token take effect, which is the entire reason for doing it here.
+
+Afterwards:
+
+- Update **envelope item 4** with the new token, and add **item 4b**: the old token,
+  labelled, destroy once every snapshot predating the rotation has aged out
+  (30 days on `/mnt/cold-8t/k3s-etcd-snapshots`, ~3 months in R2). Same shape and same
+  reasoning as item 5b for the superseded Vault unseal shares.
+- **A restore from a pre-rotation snapshot needs the OLD token.** This is the part that
+  bites later if 4b is skipped — the snapshot is useless without it.
+- Confirm all five nodes rejoined: `kubectl get nodes` all `Ready`.
+- Close BACKLOG §2.13 and remove this section.
+
 ### Rollback
 
 Re-run the play with the previous `k3s_version` value (revert the Renovate PR commit).

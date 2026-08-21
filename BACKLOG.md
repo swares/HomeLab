@@ -749,7 +749,7 @@ Recorded rather than done, because "can seal Vault" deserves a deliberate decisi
 Not blocking: rekey verification uses `systemctl restart vault` instead, since Vault
 always starts sealed and that needs no token at all.
 
-### 2.13 k3s server token was exposed during Drill 2c — **decide: rotate or accept**
+### 2.13 ~~k3s server token was exposed during Drill 2c~~ — **ACCEPTED 2026-08-21, with triggers**
 `docs/BREAK-GLASS.md` item 4, `ansible/playbooks/backup-cloud.yml:217`
 
 On 2026-08-19 the k3s server token was passed as `--token='K10…'` on a command line and
@@ -770,7 +770,46 @@ need the old token.** Those persist 30 days on `/mnt/cold-8t/k3s-etcd-snapshots`
 months in R2. The envelope would need an **item 4b** — old k3s token, labelled, destroy
 after the same window. Same shape and same reasoning as item 5b.
 
-**If accepting**, record that decision here rather than leaving it unstated.
+**DECISION: accept, and rotate for free during the next k3s upgrade.** Taken
+2026-08-21, after weighing both sides rather than by default.
+
+**Why not rotate now.** Rotation means a serial restart of k3s across a three-node
+embedded-etcd control plane — the highest-risk routine operation in this lab, and the
+one that has already cost a quorum (§ the `serial: 1` note). It also cascades: every
+snapshot predating the rotation needs the OLD token, so the envelope gains an item 4b
+carried until the R2 retention window closes, exactly like the Vault 5b item running to
+November. That is a half-day of self-inflicted availability risk to close a bounded
+exposure.
+
+**And it is not the biggest hole.** The realistic threat here is someone already on the
+LAN. That person has better options: §2.6 (Vault serving plaintext HTTP — live tokens
+sniffable continuously), §2.1 (Pi-hole admin unauthenticated), §2.9 (no host firewall
+anywhere). Rotating this token while those stand is bolting one door in a building with
+open windows. **If security effort is going anywhere, it should go to §2.6 first.**
+
+**Why accepting is defensible.** The token alone grants nothing. It needs either network
+access to the cluster or an etcd snapshot, and the lab is LAN-only with remote access
+explicitly deferred (§8). Snapshots live on the H4 and in R2, the latter encrypted under
+a separate credential.
+
+**Rotate immediately if any of these become true:**
+
+- Remote access is un-deferred (§8 — Tailscale or WireGuard changes the threat model
+  from "someone on my LAN" to "the internet", and this decision does not survive that).
+- Any etcd snapshot leaves storage you control.
+- Any host on the LAN is suspected compromised.
+
+**Scheduled to happen anyway:** `make update-k3s` already drains and restarts every node
+serially. Rotating during a planned upgrade costs almost nothing extra — the restarts
+are happening, the procedure is gated, and attention is already on it. Added as a step
+in `docs/UPDATES.md` §2 so the next upgrade picks it up.
+
+- [x] Decision recorded 2026-08-21.
+- [ ] Scrub the token from the H4's shell history:
+      `grep -n 'K10' ~/.bash_history` then remove those lines and
+      `history -c && history -w` in any live shell. Note this is hygiene, not
+      remediation — the transcript copy is outside your control either way.
+- [ ] Rotate at the next k3s upgrade, per `docs/UPDATES.md` §2.
 
 Process note worth keeping: this happened while pasting command output for diagnosis, in a
 session that had twice explicitly said not to paste the value. Reading a rule and applying
