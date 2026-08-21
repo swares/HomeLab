@@ -29,6 +29,32 @@ file inside the repo.
 | 5 | Vault unseal shares — **print all five**; threshold is 3 | `/etc/vault.d/unseal-keys` on the **RPi5** (`192.168.1.128`), `root:root 0400`, one key per line | Vault stays sealed; every ExternalSecret stays empty |
 | 5b | **Superseded** unseal shares — **all five**, labelled with the date they were replaced and a destroy-after date | Wherever the previous set was recorded. After a rekey they exist nowhere else — the live file has been overwritten | Vault snapshots taken *before* the rekey cannot be opened. See below |
 | 6 | Ansible vault password | `ansible/.vault_pass` | encrypted group_vars are unreadable, so no playbook that touches them runs |
+| 7 | **Login account: username and plaintext password** | Your own records — it exists nowhere recoverable, see below | **You cannot get onto any machine.** Items 1-6 are all things you need once you are already logged in |
+
+### Item 7 — added 2026-08-21, found by drilling
+
+Items 1-6 were tested end to end and every one worked. The gap they left is that **all six
+are things you need once you are already on a machine, and none of them gets you onto one.**
+
+It is not recoverable from anything else in the envelope, and the reason is worth stating
+precisely: `ansible/inventory/group_vars/all/secrets.yml:10` holds
+`lab_user_password_hash` — a **hash**. Item 6 decrypts it successfully and hands you a
+hash, which you cannot log in with. The obvious repair, running
+`ansible/playbooks/rotate-passwords.yml` to set a known password, requires SSH access you
+do not have.
+
+So the loop closes with no way in: no password, no SSH key, and password authentication is
+disabled on every Linux host by `rotate-passwords.yml:104-105`.
+
+**What this means in a real recovery.** Console access is the only path — fine on the H4
+and the N150s, which have video out. The OPi Zero 2Ws and the RPi 3B are headless and would
+need a serial cable or a reflash.
+
+**Also consider recording:** the SSH private key that currently has access, or a dedicated
+break-glass public key pre-installed in `authorized_keys` on every host. The second is
+better — it can be generated for this purpose, kept offline, and never used otherwise. It
+becomes item 8, and it is a prerequisite for BACKLOG §6b.4 (Vault-signed SSH certificates),
+where an expired certificate plus a Vault outage produces exactly this lockout again.
 
 **Not a secret, but write it down anyway** — you will not have the repo:
 

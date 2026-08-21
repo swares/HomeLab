@@ -105,7 +105,31 @@ item that makes every other backup improvement conditional.
 
 Do: one restic restore and one etcd restore into scratch, timed, recorded in the table.
 
-### 1.2 ~~The offline break-glass envelope does not exist~~ — **PRINTED AND IN USE 2026-08-17**
+### 1.2 ~~The offline break-glass envelope does not exist~~ — **PRINTED AND IN USE 2026-08-17; item 7 added 2026-08-21**
+
+**Every one of items 1-6 was drilled and worked.** The gap found by drilling was not a
+broken item — it was a missing category: **all six are things you need once you are
+already on a machine, and none of them gets you onto one.**
+
+The login account username and password are now **item 7** (`docs/BREAK-GLASS.md`). It is
+not derivable from anything else in the envelope:
+`ansible/inventory/group_vars/all/secrets.yml:10` stores `lab_user_password_hash`, so item
+6 decrypts successfully and yields a **hash**, which cannot be used to log in. The obvious
+repair — `rotate-passwords.yml` to set a known password — needs SSH access you do not have,
+and password authentication is disabled on every Linux host by that same playbook
+(`:104-105`).
+
+Console is then the only route: workable on the H4 and N150s, but the OPi Zero 2Ws and the
+RPi 3B are headless and would need a serial cable or a reflash.
+
+- [ ] **Item 8: a dedicated break-glass SSH public key**, generated for the purpose,
+      pre-installed in `authorized_keys` on every host, private half kept offline and never
+      otherwise used. Better than recording the working key, and a hard prerequisite for
+      §6b.4 — an expired Vault-signed certificate plus a Vault outage reproduces exactly
+      this lockout.
+
+*Worth noting how this was found: not by review, but by actually running the drill. Items
+1-6 all passed their tests; the missing one was invisible until someone needed to log in.*
 
 It exists. Printed 08-17 carrying the five post-rekey unseal shares, the five superseded
 shares as item 5b (destroy after 2026-11-16), and current values for items 1–4 and 6. All
