@@ -810,6 +810,17 @@ mount ever existed, on any node. Proven directly:
 ("remove Promtail, add journal unit/hostname labels to Alloy") — seven weeks —
 reporting healthy the entire time.
 
+**And fixing the mount was not enough.** With `/var/log/journal` correctly mounted and
+readable — Alloy runs as uid 0, the files are `root:systemd-journal` 0640, the host
+directory plainly present as `/var/log/journal/e4c52d300a65467db8b36a2ca592b8ad` — still
+nothing shipped. The container's `/etc/machine-id` was **empty**. sd-journal locates
+journals by machine ID, so the reader searched for a journal belonging to no machine,
+found zero entries, and returned successfully. Finding nothing is not an error. A second
+mount of `/etc/machine-id` (`type: File`) was required, added 2026-08-21.
+
+Three separate silent failures stacked in one config: a wrong key, a second wrong key,
+and a missing mount whose absence produces an empty result rather than an error.
+
 **Why two nodes appeared to work.** n150-1 and n150-2 have host logs in Loki because
 they are running a **stray promtail systemd service** — `active` and `enabled`,
 confirmed 2026-08-21, and targeted by no current playbook.
