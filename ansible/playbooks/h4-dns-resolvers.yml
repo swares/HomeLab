@@ -89,15 +89,18 @@
       changed_when: false
       check_mode: false
 
+    # `resolvectl dns` is one line per link and omits links with no servers, unlike
+    # `resolvectl status`, which on this host prints 40 veth entries and buries the
+    # two lines that matter.
     - name: Record the resolver list as it stands now
-      ansible.builtin.command: resolvectl status
+      ansible.builtin.command: resolvectl dns
       register: _resolv_before
       changed_when: false
       check_mode: false
 
     - name: Show the current resolver list
       ansible.builtin.debug:
-        msg: "{{ _resolv_before.stdout_lines | select('search', 'DNS Servers|Link ') | list }}"
+        msg: "{{ _resolv_before.stdout_lines | reject('search', ':\\s*$') | list }}"
 
     - name: Write the netplan override
       ansible.builtin.copy:
@@ -140,11 +143,27 @@
     # Deliberately no `netplan apply` and no handler. Applying a resolver change to the
     # NAS core over SSH is an `ask` action per CLAUDE.md, and the safe form of it is
     # `netplan try`, which needs an interactive confirmation this playbook cannot give.
+    #
+    # The two messages below are separate because a single one cannot be true in both
+    # modes. An earlier version said "Override written and netplan generate accepted
+    # it" unconditionally — under --check nothing was written and generate had been
+    # skipped, so the dry run asserted a success that had not happened. Same bug as
+    # BACKLOG §3.9's playbook, written after fixing it there.
+    - name: DRY RUN — say plainly that nothing happened
+      ansible.builtin.debug:
+        msg: >-
+          DRY RUN. No file was written and `netplan generate` did not run — Ansible
+          skips command tasks under --check. The diff above is what WOULD be written.
+          Re-run without --check to write it.
+      when: ansible_check_mode
+
     - name: Stop here and hand over
       ansible.builtin.debug:
         msg: >-
           Override written to /etc/netplan/99-lab-dns.yaml and `netplan generate`
-          accepted it. NOTHING HAS BEEN APPLIED. Now, on the H4:  sudo netplan try
-          — it reverts by itself after 120s unless you confirm. Then verify with
-          `resolvectl status` (three servers, no .152) and check that
-          reason=DNSConfigForming stops producing new events for odroid-nas.
+          accepted it. NOTHING HAS BEEN APPLIED to the running config. Now, on the H4:
+          sudo netplan try  — it reverts by itself after 120s unless you confirm.
+          Then verify: `resolvectl dns` shows three servers and no .152, and
+          `kubectl get events -A --field-selector reason=DNSConfigForming` stops
+          producing new entries for odroid-nas.
+      when: not ansible_check_mode
