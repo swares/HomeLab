@@ -40,6 +40,10 @@ spec:
                 hostPath:
                   path: /var/log/journal
                   type: Directory
+              - name: machine-id
+                hostPath:
+                  path: /etc/machine-id
+                  type: File
 
         alloy:
           # Node name for the discovery.kubernetes field selector below. Must come
@@ -162,6 +166,24 @@ spec:
             extra:
               - name: journal
                 mountPath: /var/log/journal
+                readOnly: true
+
+              # /etc/machine-id is NOT optional, and its absence is silent.
+              #
+              # sd-journal locates journals by machine ID: the host's journal lives
+              # in /var/log/journal/<machine-id>/. A container gets its own
+              # /etc/machine-id, which here was EMPTY — so the reader looked for a
+              # journal belonging to no machine, found zero entries, and reported
+              # success. Finding nothing is not an error, so the component stayed
+              # healthy and the logs stayed clean.
+              #
+              # Verified 2026-08-21: with the journal mounted and readable (Alloy
+              # runs as uid 0, files are root:systemd-journal 0640), and the host
+              # directory plainly present as
+              # /var/log/journal/e4c52d300a65467db8b36a2ca592b8ad, still nothing
+              # shipped until this mount was added.
+              - name: machine-id
+                mountPath: /etc/machine-id
                 readOnly: true
 
         serviceMonitor:
