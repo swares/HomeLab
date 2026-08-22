@@ -2400,6 +2400,38 @@ break-glass work is for. Revisit only if the RPi5 stops being trusted.
 
 ---
 
+### 3.12 Four machines appear twice in the inventory under two names
+
+**Found 2026-08-21** while running `break-glass-key.yml` against `all`, which reported 18
+hosts for a 14-machine fleet:
+
+| IP | Inventory names |
+|---|---|
+| `192.168.1.148` | `dns-1`, `octopi-dns` |
+| `192.168.1.184` | `dns-2`, `opi-zero2w-1` |
+| `192.168.1.116` | `dns-3`, `rpi4b` |
+| `192.168.1.217` | `dns-4`, `opi-zero2w-3` |
+
+The `dns` group names the DNS *role*; the other names name the *machine*. Both resolve to
+the same host, so any play targeting `all` visits those four twice.
+
+**Mostly harmless, occasionally not.** Idempotent plays just do the work twice — visible in
+the break-glass run, where the second visit reported `ok` because the first had already
+installed the key. A non-idempotent play would apply itself twice. And every host count,
+report and `PLAY RECAP` overstates the fleet by four.
+
+It also confuses failure attribution: three hosts passed verification in that run, but two
+of them were the same machine, which briefly looked like three independent data points.
+
+- [ ] Decide whether the `dns` group should use the machine names as members
+      (`dns: hosts: [octopi-dns, rpi4b, opi-zero2w-1, opi-zero2w-3]`) rather than defining
+      parallel entries with their own `ansible_host`. That keeps the role grouping and
+      removes the duplicate identity.
+
+Related: §3.10 and §4.14 — the fleet's identity is inconsistent at the host level too.
+
+---
+
 ## 9. Small, live, cheap
 
 - **~440 MB of pre-migration files in the etcd snapshot directory** — found during Drill 2c.
