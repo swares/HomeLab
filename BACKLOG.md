@@ -122,11 +122,18 @@ and password authentication is disabled on every Linux host by that same playboo
 Console is then the only route: workable on the H4 and N150s, but the OPi Zero 2Ws and the
 RPi 3B are headless and would need a serial cable or a reflash.
 
-- [ ] **Item 8: a dedicated break-glass SSH public key**, generated for the purpose,
-      pre-installed in `authorized_keys` on every host, private half kept offline and never
-      otherwise used. Better than recording the working key, and a hard prerequisite for
-      §6b.4 — an expired Vault-signed certificate plus a Vault outage reproduces exactly
-      this lockout.
+**Item 8 added 2026-08-21: a dedicated break-glass SSH key.** Item 7 only works at a
+physical console, and the OPi Zero 2Ws and RPi 3B do not have one — item 8 is the network
+route back in. `ansible/playbooks/break-glass-key.yml` installs the public half on every
+Linux host; the private half is generated offline and lives on paper only.
+
+- [ ] **Generate the pair offline** on a machine outside the lab, commit only
+      `ansible/files/break-glass.pub`, run the playbook, then **test it** —
+      `ssh -i ./break-glass -o IdentitiesOnly=yes <user>@192.168.1.160 'id'` — before
+      shredding the file copy. An untested break-glass key is worse than none.
+- [ ] Verify the paper transcription by typing it back **from the paper**. Diffing against
+      the file proves the file is right, not the paper, and the paper is what you will be
+      holding.
 
 *Worth noting how this was found: not by review, but by actually running the drill. Items
 1-6 all passed their tests; the missing one was invisible until someone needed to log in.*

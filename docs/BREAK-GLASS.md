@@ -30,6 +30,7 @@ file inside the repo.
 | 5b | **Superseded** unseal shares — **all five**, labelled with the date they were replaced and a destroy-after date | Wherever the previous set was recorded. After a rekey they exist nowhere else — the live file has been overwritten | Vault snapshots taken *before* the rekey cannot be opened. See below |
 | 6 | Ansible vault password | `ansible/.vault_pass` | encrypted group_vars are unreadable, so no playbook that touches them runs |
 | 7 | **Login account: username and plaintext password** | Your own records — it exists nowhere recoverable, see below | **You cannot get onto any machine.** Items 1-6 are all things you need once you are already logged in |
+| 8 | **Break-glass SSH private key** — transcribe in full; ed25519 is ~7 lines | Generated offline, installed by `ansible/playbooks/break-glass-key.yml`. Exists on paper only | Item 7 only works at a physical console. The OPi Zero 2Ws and the RPi 3B do not have one |
 
 ### Item 7 — added 2026-08-21, found by drilling
 
@@ -50,11 +51,37 @@ disabled on every Linux host by `rotate-passwords.yml:104-105`.
 and the N150s, which have video out. The OPi Zero 2Ws and the RPi 3B are headless and would
 need a serial cable or a reflash.
 
-**Also consider recording:** the SSH private key that currently has access, or a dedicated
-break-glass public key pre-installed in `authorized_keys` on every host. The second is
-better — it can be generated for this purpose, kept offline, and never used otherwise. It
-becomes item 8, and it is a prerequisite for BACKLOG §6b.4 (Vault-signed SSH certificates),
-where an expired certificate plus a Vault outage produces exactly this lockout again.
+### Item 8 — the break-glass SSH key
+
+Item 7 gets you a console login. **Item 8 is what gets you in over the network**, which
+matters because `rotate-passwords.yml:104-105` disables password authentication on every
+Linux host — so item 7 alone is useless on anything headless.
+
+A dedicated key, not a copy of your working one. It is generated offline on a machine
+outside the lab, the public half is committed to `ansible/files/break-glass.pub` and
+installed everywhere by `ansible/playbooks/break-glass-key.yml`, and the private half goes
+on paper here and nowhere else — not in `~/.ssh`, not in a password manager.
+
+    ssh-keygen -t ed25519 -a 100 -N '' -C "break-glass $(date +%F)" -f ./break-glass
+
+**ed25519 specifically**, because the private key is about seven lines of base64 and can be
+typed back in from paper under stress. RSA-4096 cannot, realistically.
+
+**No passphrase, deliberately.** The sealed offsite envelope is the protection. A
+passphrase adds a second thing to remember at exactly the moment you will not remember it
+— and if you use one anyway, it is a ninth item, not a free improvement.
+
+**Test it, then destroy the file copy.** An untested break-glass key is worse than none
+because you will rely on it:
+
+    ssh -i ./break-glass -o IdentitiesOnly=yes <user>@192.168.1.160 'id'
+
+Then `shred -u ./break-glass`, and verify the paper transcription by typing it back from
+the paper — not by diffing against the file you are about to destroy.
+
+**Prerequisite for BACKLOG §6b.4** (Vault-signed SSH certificates): an expired certificate
+during a Vault outage reproduces exactly the lockout item 7 documents, with the added
+irony that the intended fix would be its cause.
 
 **Not a secret, but write it down anyway** — you will not have the repo:
 
