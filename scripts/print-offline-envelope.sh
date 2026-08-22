@@ -154,6 +154,124 @@ half=$(( ${#tok} / 2 ))
 TOK1="${tok:0:half}"
 TOK2="${tok:half}"
 
+# ---- Items 7 and 8: prompted, because nothing on this machine holds them -----
+#
+# Every other credential here is READ from the running system. These two cannot be,
+# by design:
+#
+#   Item 7 — the login password. secrets.yml stores lab_user_password_hash, a HASH.
+#            Item 6 decrypts it and yields something you cannot log in with.
+#   Item 8 — the break-glass SSH private key. It exists on paper only; that is the
+#            entire point of it.
+#
+# So they are prompted for. Both are optional: skipping prints a loud placeholder
+# rather than silently omitting the row, because a gap you cannot see on the paper is
+# how items 1-6 came to be complete and collectively useless (BREAK-GLASS item 7).
+#
+# Nothing here is echoed, exported, or passed as a command argument — a value in argv
+# is visible in `ps` to every user on the box.
+
+ITEM7_USER="(not captured)"
+ITEM7_PASS=""
+ITEM8_KEY=""
+ITEM8_NOTE=""
+
+prompt_secret_twice() {   # $1 = prompt label; result in REPLY_SECRET
+  local a b
+  read -rsp "  $1: " a; echo
+  read -rsp "  $1 (again): " b; echo
+  if [ "$a" != "$b" ]; then
+    echo "  FATAL: the two entries differ. A mistyped credential in the envelope is" >&2
+    echo "  undetectable until the day you need it. Start again." >&2
+    exit 1
+  fi
+  REPLY_SECRET="$a"
+}
+
+if [ "$DRY_RUN" -eq 1 ]; then
+  echo "Dry run — not prompting for items 7 and 8."
+  ITEM7_USER="(dry run)"
+  ITEM8_NOTE="Dry run: not captured."
+else
+  echo
+  echo "── Item 7: login account ─────────────────────────────────────────────"
+  echo "  Press ENTER at the password prompt to skip and write it in by hand."
+  _default_user="${SUDO_USER:-$USER}"
+  read -rp "  Username [${_default_user}]: " _u
+  ITEM7_USER="${_u:-$_default_user}"
+  prompt_secret_twice "Password"
+  ITEM7_PASS="$REPLY_SECRET"
+  unset REPLY_SECRET
+
+  echo
+  echo "── Item 8: break-glass SSH private key ───────────────────────────────"
+  echo "  Give a file path (first print, straight after ssh-keygen), or press"
+  echo "  ENTER to paste it — pasting doubles as a transcription check."
+  read -rp "  Path to private key [paste instead]: " _keypath
+
+  if [ -n "$_keypath" ]; then
+    if [ -r "$_keypath" ]; then
+      ITEM8_KEY=$(cat "$_keypath")
+    else
+      echo "  WARNING: cannot read $_keypath — item 8 will be blank." >&2
+      ITEM8_NOTE="Could not read the key file. Write item 8 in by hand."
+    fi
+  else
+    echo "  Paste the key, then a line containing only: END"
+    echo "  (input is not echoed)"
+    _tmpkey="$WORKDIR/item8.key"
+    : > "$_tmpkey"; chmod 600 "$_tmpkey"
+    stty -echo 2>/dev/null || true
+    while IFS= read -r _line; do
+      [ "$_line" = "END" ] && break
+      printf '%s\n' "$_line" >> "$_tmpkey"
+    done
+    stty echo 2>/dev/null || true
+    echo
+    ITEM8_KEY=$(cat "$_tmpkey")
+  fi
+
+  # VERIFY IT. `ssh-keygen -y` derives the public key from the private one, so
+  # comparing against the committed break-glass.pub proves this key matches the one
+  # installed on every host by playbooks/break-glass-key.yml. Without this check the
+  # envelope can contain a subtly wrong transcription that looks perfectly plausible
+  # and opens nothing — and you would find that out during a recovery.
+  if [ -n "$ITEM8_KEY" ]; then
+    _pubref="$SCRIPT_DIR/../ansible/files/break-glass.pub"
+    _priv="$WORKDIR/item8.verify"
+    printf '%s\n' "$ITEM8_KEY" > "$_priv"; chmod 600 "$_priv"
+    if _derived=$(ssh-keygen -y -f "$_priv" 2>/dev/null); then
+      if [ -r "$_pubref" ] && \
+         [ "$(awk '{print $2}' <<<"$_derived")" = "$(awk '{print $2}' <"$_pubref")" ]; then
+        echo "  VERIFIED: this private key matches ansible/files/break-glass.pub,"
+        echo "            i.e. the key installed on every host."
+      elif [ -r "$_pubref" ]; then
+        echo "  FATAL: this key does NOT match ansible/files/break-glass.pub." >&2
+        echo "  Printing it would produce an envelope that opens nothing." >&2
+        exit 1
+      else
+        echo "  WARNING: $_pubref not found — key parsed, but not verified against" >&2
+        echo "  the installed public key." >&2
+        ITEM8_NOTE="NOT verified against break-glass.pub — that file was missing."
+      fi
+    else
+      echo "  FATAL: that is not a usable SSH private key (ssh-keygen could not read it)." >&2
+      exit 1
+    fi
+  else
+    ITEM8_NOTE="Not captured. Write item 8 in by hand."
+  fi
+fi
+
+# Render-ready values. Placeholders are deliberately shouty.
+ITEM7_ROW="**NOT CAPTURED — WRITE IN BY HAND**"
+[ -n "$ITEM7_PASS" ] && ITEM7_ROW="\`${ITEM7_PASS}\`"
+if [ -n "$ITEM8_KEY" ]; then
+  ITEM8_BLOCK=$(printf '```\n%s\n```' "$ITEM8_KEY")
+else
+  ITEM8_BLOCK="**NOT CAPTURED — WRITE IN BY HAND.** ${ITEM8_NOTE}"
+fi
+
 # ---- Render -----------------------------------------------------------------
 {
   cat "$DOC"
@@ -176,6 +294,8 @@ runs off the page.
 | 5  | Vault unseal shares      | Vault stays sealed, so every ExternalSecret stays empty. All ${#UNSEAL[@]} are below; any 3 will unseal |
 | 5b | Superseded unseal shares | pre-rekey Vault snapshots cannot be opened. **Not printed — write them on this page by hand** |
 | 6  | Ansible vault password   | encrypted group_vars are unreadable, so those playbooks will not run |
+| 7  | Login account            | **you cannot get onto any machine.** 1-6 are all things you need once already logged in |
+| 8  | Break-glass SSH key      | item 7 works only at a physical console — the Zero 2Ws and RPi 3B have none |
 
 | What | Value |
 | ---- | ----- |
@@ -190,6 +310,16 @@ ${UNSEAL_ROWS}
 | Ansible vault password (#6) | \`${CRED[ANSIBLE_VAULT_PASS]}\` |
 | MinIO root user | \`${CRED[RC_ENV_MINIO_ROOT_USER]:-MISSING}\` |
 | MinIO root password | \`${CRED[RC_ENV_MINIO_ROOT_PASSWORD]:-MISSING}\` |
+| Login username (#7) | \`${ITEM7_USER}\` |
+| Login password (#7) | ${ITEM7_ROW} |
+
+## Break-glass SSH private key (#8)
+
+Installed on every Linux host by \`ansible/playbooks/break-glass-key.yml\`. Item 7 gets you
+a console login; this is the only route in over the network, and the only route at all to
+the headless hosts. Use it with \`ssh -i <file> -o IdentitiesOnly=yes\`.
+
+${ITEM8_BLOCK}
 
 ## Superseded unseal shares (#5b) — fill in by hand
 
@@ -314,6 +444,22 @@ cat <<'MANUAL'
 
  4. UPDATE THE CURRENCY TABLE in docs/BREAK-GLASS.md. A stale envelope is
     worse than none, because you will trust it.
+
+ 5. WRITE IN ITEM 7 BY HAND — the login account username and password.
+    This script cannot derive it and never will. secrets.yml stores a
+    HASH (lab_user_password_hash), so item 6 decrypts to something you
+    cannot log in with. Added 2026-08-21 after a drill found that items
+    1-6 all worked and none of them got anyone onto a machine.
+
+ 6. WRITE IN ITEM 8 BY HAND — the break-glass SSH private key, in full.
+    Generated offline; the public half is in ansible/files/break-glass.pub
+    and installed by playbooks/break-glass-key.yml. ed25519 is about seven
+    lines. Item 7 only helps at a physical console, and the Zero 2Ws and
+    the RPi 3B do not have one — item 8 is the network route back in.
+
+    Verify the transcription by TYPING IT BACK from the paper. Diffing it
+    against the file proves the file is correct, not the paper, and the
+    paper is the copy you will actually be holding.
 
  Note: rm and shred do not reliably erase flash storage — wear levelling
  may retain the blocks regardless. That is why this renders in /dev/shm

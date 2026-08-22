@@ -1,0 +1,131 @@
+---
+# Install the break-glass SSH public key on every Linux host — envelope item 8.
+#
+# WHY THIS EXISTS
+#
+# Break-glass envelope items 1-6 were drilled end to end and all worked. What they left
+# out was a category, not an item: every one of them is something you need ONCE YOU ARE
+# ALREADY ON A MACHINE, and none of them gets you onto one (docs/BREAK-GLASS.md item 7).
+#
+# The password is not recoverable either. `ansible/inventory/group_vars/all/secrets.yml`
+# holds `lab_user_password_hash` — a HASH. Envelope item 6 decrypts it successfully and
+# hands you something you cannot log in with. And `rotate-passwords.yml:104-105` disables
+# password authentication on every Linux host, so even the right password only works at a
+# physical console — which the OPi Zero 2Ws and the RPi 3B do not have.
+#
+# This key is the network route back in. It is deliberately boring: one keypair, generated
+# offline, installed everywhere, never used for anything else, private half on paper.
+#
+# THIS PLAYBOOK NEVER SEES THE PRIVATE KEY. It installs a public key, which is not a
+# secret. Generate the pair on a trusted machine that is not part of the lab:
+#
+#     ssh-keygen -t ed25519 -a 100 -N '' \
+#       -C "break-glass $(date +%F)" -f ./break-glass
+#
+#   - ed25519 because the private key is ~400 bytes: about seven lines of base64, which
+#     is transcribable from paper. An RSA-4096 key is not.
+#   - No passphrase, deliberately. The paper in a sealed offsite envelope IS the
+#     protection; a passphrase adds a second thing to remember under exactly the stress
+#     where you will not remember it. If you disagree, use one — but then it is a second
+#     envelope item, not a free improvement.
+#   - Commit `break-glass.pub` to `ansible/files/`. A public key is not a secret, and
+#     having it in git is what makes this playbook idempotent and reviewable.
+#   - The private key goes on paper in the envelope and NOWHERE ELSE. Not in ~/.ssh, not
+#     in a password manager, not on the machine you generated it on. Shred the file.
+#
+# RUN
+#   cd ansible                    # ansible.cfg only applies from here — §4.1c
+#   ansible-playbook -i inventory/hosts.yml playbooks/break-glass-key.yml --check --diff
+#   ansible-playbook -i inventory/hosts.yml playbooks/break-glass-key.yml
+#
+# TEST IT — an untested break-glass key is worse than none, because you will trust it:
+#   ssh -i ./break-glass -o IdentitiesOnly=yes <user>@192.168.1.160 'id'
+# Then shred the local private key copy and confirm the paper transcription is correct
+# by typing it back in from the paper, not by copying the file.
+- name: Install the break-glass SSH public key (envelope item 8)
+  # Every Linux host that accepts SSH. Excludes x86_nodes (n150-3 is the Windows HTPC,
+  # managed over WinRM) and embedded (hostmon/m5stack are microcontrollers, not hosts).
+  hosts: "{{ break_glass_hosts | default('all:!x86_nodes:!embedded') }}"
+  become: true
+  gather_facts: true
+
+  vars:
+    break_glass_pubkey_file: "{{ playbook_dir }}/../files/break-glass.pub"
+    # The account the key is installed for. Break-glass access is to the normal admin
+    # account, not root: root is locked on every host (docs/SECURITY.md) and unlocking it
+    # for this would be a larger change than the problem warrants.
+    break_glass_user: "{{ ansible_user | default(lookup('env', 'USER')) }}"
+
+  tasks:
+    - name: Require the public key to exist
+      ansible.builtin.stat:
+        path: "{{ break_glass_pubkey_file }}"
+      register: _pubkey
+      delegate_to: localhost
+      become: false
+      run_once: true
+      check_mode: false
+
+    - name: Refuse to continue without it
+      ansible.builtin.assert:
+        that: _pubkey.stat.exists
+        fail_msg: >-
+          {{ break_glass_pubkey_file }} does not exist. Generate the pair OFFLINE on a
+          machine outside the lab (see this playbook's header), commit only the .pub, and
+          put the private half on paper in the envelope. Do not generate it on a lab host
+          — the whole point is that it survives the lab being unavailable.
+      run_once: true
+
+    - name: Sanity-check that it is a public key and not a private one
+      ansible.builtin.assert:
+        that:
+          - "'PRIVATE KEY' not in _pubkey_content"
+          - _pubkey_content is search('^(ssh-ed25519|ssh-rsa|ecdsa-)')
+        fail_msg: >-
+          {{ break_glass_pubkey_file }} does not look like an SSH public key. If a PRIVATE
+          key has been committed here, treat it as compromised: generate a new pair, and
+          purge it from git history rather than just deleting the file.
+      vars:
+        _pubkey_content: "{{ lookup('file', break_glass_pubkey_file) | trim }}"
+      run_once: true
+
+    - name: Install the break-glass key
+      ansible.posix.authorized_key:
+        user: "{{ break_glass_user }}"
+        key: "{{ lookup('file', break_glass_pubkey_file) }}"
+        state: present
+        # NOT exclusive — this must never remove the working keys. A break-glass key that
+        # locks out day-to-day access has converted one problem into two.
+        exclusive: false
+        comment: "break-glass — envelope item 8 — do not remove"
+
+    # Verify by reading back what is actually on the host, not by trusting the module's
+    # return. check_mode: false so a dry run reports the true current state rather than
+    # skipping and letting a green summary imply the key is present (CLAUDE.md).
+    - name: Confirm the key is present in authorized_keys
+      ansible.builtin.shell:
+        cmd: >-
+          grep -qF "$(awk '{print $2}' <<< '{{ lookup('file', break_glass_pubkey_file) | trim }}')"
+          ~{{ break_glass_user }}/.ssh/authorized_keys
+      register: _verify
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Report per-host result
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: break-glass key
+          {{ 'PRESENT' if _verify.rc == 0 else 'NOT PRESENT' }}
+          {{ '(dry run — nothing was installed; this reflects the state BEFORE this play)'
+             if ansible_check_mode else '' }}
+
+    - name: Fail if the key did not land on a real run
+      ansible.builtin.fail:
+        msg: >-
+          {{ inventory_hostname }} does not have the break-glass key in
+          ~{{ break_glass_user }}/.ssh/authorized_keys after a real run. Do not record this
+          host as covered in docs/BREAK-GLASS.md.
+      when:
+        - not ansible_check_mode
+        - _verify.rc != 0
