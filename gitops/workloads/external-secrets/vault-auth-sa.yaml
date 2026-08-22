@@ -1,0 +1,66 @@
+# Token-reviewer identity for Vault's Kubernetes auth method.
+#
+# WHY THIS EXISTS
+#
+# ESO currently authenticates to Vault with a STATIC TOKEN (`vault-token` Secret in
+# this namespace), minted 2026-08-07 with a 768h TTL. It expires ~2026-09-08 and fails
+# SILENTLY: ESO simply stops syncing, existing k8s Secrets keep their last values, and
+# nothing looks broken until something needs a refresh. See BACKLOG.md §5.
+#
+# Kubernetes auth removes the deadline entirely rather than moving it. ESO presents its
+# own ServiceAccount token; Vault validates it via the TokenReview API and issues a
+# short-lived Vault token per request. Nothing to renew, ever.
+#
+# WHY A SEPARATE REVIEWER SERVICEACCOUNT
+#
+# Vault runs OUTSIDE the cluster (rpi5, 192.168.1.128), so it cannot use the in-pod
+# CA/JWT shortcuts available to in-cluster Vault. It needs its own credential to call
+# TokenReview — hence a dedicated SA with `system:auth-delegator` and nothing else.
+# That role grants exactly one capability: asking "is this token valid?". It cannot
+# read secrets, list pods, or see anything else.
+#
+# WHY THE EXPLICIT SECRET
+#
+# Since Kubernetes 1.24, ServiceAccounts no longer auto-create long-lived token
+# Secrets. Vault needs a non-expiring reviewer JWT, so one is requested explicitly via
+# a `kubernetes.io/service-account-token` Secret. This is the documented pattern for
+# external Vault and is the only long-lived token in the design — it reviews tokens,
+# it does not grant access to data.
+#
+# ORDER OF OPERATIONS — this manifest is step 1 of 3:
+#   1. (here) Create the reviewer SA, binding and token Secret.
+#   2. ansible/playbooks/vault-eso-k8s-auth.yml — configure Vault's kubernetes auth
+#      method and the `eso` role, using the token from step 1.
+#   3. Switch the ClusterSecretStore's auth stanza from tokenSecretRef to kubernetes
+#      (gitops/workloads/immich/external-secret.yaml).
+#
+# Applying step 1 alone changes nothing about how ESO authenticates. It is safe on its
+# own and can sit here until steps 2 and 3 are ready.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vault-token-reviewer
+  namespace: external-secrets
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: vault-token-reviewer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator      # TokenReview + SubjectAccessReview only
+subjects:
+  - kind: ServiceAccount
+    name: vault-token-reviewer
+    namespace: external-secrets
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: vault-token-reviewer-token
+  namespace: external-secrets
+  annotations:
+    kubernetes.io/service-account.name: vault-token-reviewer
+type: kubernetes.io/service-account-token
