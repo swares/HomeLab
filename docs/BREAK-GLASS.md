@@ -227,11 +227,20 @@ codepoint; never paste the glyph.
 | 2026-08-07 | offsite repo `homelab-nas` created, reusing the R2 restic password (#2) | `[x]` 08-17 |
 | 2026-08-16 | Vault unseal shares **rekeyed** — all five of item 5 are new | `[x]` 08-17 |
 | 2026-08-16 | superseded shares become item 5b — destroy after 2026-11-16 | `[x]` 08-17 |
+| 2026-08-21 | **item 7 added** — login username and password. Found by drilling: items 1-6 all worked and none of them got anyone onto a machine | `[x]` 08-21 |
+| 2026-08-21 | **item 8 added** — break-glass SSH key, installed on all 18 inventory entries by `ansible/playbooks/break-glass-key.yml` | `[x]` 08-21 |
 
-**Envelope printed and in use from 2026-08-17.** All rows above are propagated. Item 1 and
-items 2, 3 are additionally *proven* rather than assumed — Drills 1 and 2a opened real
-repositories with them. Item 5 is proven against the live server but not yet against a
-snapshot; that is Drill 2b.
+**Envelope reprinted 2026-08-21 with items 7 and 8.** All rows above are propagated.
+
+**What is proven rather than assumed.** Items 1, 2 and 3 opened real repositories in
+Drills 1 and 2a. Item 5 is proven against the live server and, since Drill 2b, against a
+snapshot. **Item 8 was tested by logging in with it** on three machines across two distros
+— `h4-core` (Ubuntu), `opi-zero2w-1` (Arch ARM) and `octopi-dns` (Debian, RPi 3B) — the
+last two chosen deliberately because they are headless, which is the case item 8 exists
+for and where item 7 alone is useless.
+
+Item 7 is the only entry that has never been exercised: nobody has logged into a console
+with it. Worth folding into the next drill rather than assuming.
 
 ## The drill
 
