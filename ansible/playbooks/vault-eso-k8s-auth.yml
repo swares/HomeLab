@@ -1,0 +1,134 @@
+---
+# Configure Vault's Kubernetes auth method so ESO stops using a static token.
+#
+# This is STEP 2 of 3. See gitops/workloads/external-secrets/vault-auth-sa.yaml for the
+# full sequence and the reasoning. Short version: ESO's Vault token expires ~2026-09-08
+# and fails silently (BACKLOG.md §5). Kubernetes auth removes the expiry rather than
+# extending it.
+#
+# WHAT THIS DOES
+#   - Reads the token-reviewer JWT and the cluster CA from the k8s Secret created in
+#     step 1.
+#   - Writes auth/kubernetes/config on the rpi5 Vault so it can call TokenReview.
+#   - Creates the `eso` role, bound to the external-secrets ServiceAccount in the
+#     external-secrets namespace, with the existing `eso` policy.
+#
+# WHAT IT DOES NOT DO
+#   It does not switch ESO over. That is step 3, a one-line change to the
+#   ClusterSecretStore in gitops/workloads/immich/external-secret.yaml. Until then ESO
+#   keeps using the static token and this configuration sits unused — which is
+#   deliberate, so the two halves can be verified separately.
+#
+# RUN
+#   cd ansible                    # ansible.cfg only applies from here — §4.1c
+#   ansible-playbook -i inventory/hosts.yml playbooks/vault-eso-k8s-auth.yml --check
+#   ansible-playbook -i inventory/hosts.yml playbooks/vault-eso-k8s-auth.yml
+#
+# VERIFY (step 2 alone, before touching ESO):
+#   vault read auth/kubernetes/config
+#   vault write auth/kubernetes/login role=eso jwt="$(kubectl create token external-secrets -n external-secrets)"
+# A token in the response means Vault can validate cluster identities. If that works,
+# step 3 is safe; if it does not, ESO is untouched and nothing is broken.
+#
+# ROLLBACK
+#   Step 3 is the risky one and reverts with `git revert`. This playbook's effects are
+#   inert while the ClusterSecretStore still uses tokenSecretRef.
+- name: Vault — Kubernetes auth for external-secrets
+  hosts: vault
+  become: false
+  gather_facts: false
+
+  vars:
+    # kube-vip control-plane VIP. NOT a node IP: the whole point of the VIP is that it
+    # survives losing any one server, and Vault must follow it. See CLAUDE.md.
+    k8s_api: "https://192.168.1.200:6443"
+    eso_namespace: external-secrets
+    eso_service_account: external-secrets
+    reviewer_secret: vault-token-reviewer-token
+    vault_policy: eso
+
+  tasks:
+    - name: Read the token-reviewer JWT from the cluster
+      ansible.builtin.command:
+        cmd: >-
+          kubectl -n {{ eso_namespace }} get secret {{ reviewer_secret }}
+          -o jsonpath={.data.token}
+      delegate_to: h4-core
+      register: _reviewer_jwt_b64
+      changed_when: false
+      check_mode: false
+
+    - name: Read the cluster CA from the same Secret
+      ansible.builtin.command:
+        cmd: >-
+          kubectl -n {{ eso_namespace }} get secret {{ reviewer_secret }}
+          -o jsonpath={.data['ca\.crt']}
+      delegate_to: h4-core
+      register: _cluster_ca_b64
+      changed_when: false
+      check_mode: false
+
+    # Fail early and clearly rather than writing an empty config into Vault. An empty
+    # token here produces a Vault config that looks fine and rejects every login.
+    - name: Refuse to continue without both values
+      ansible.builtin.assert:
+        that:
+          - _reviewer_jwt_b64.stdout | length > 0
+          - _cluster_ca_b64.stdout | length > 0
+        fail_msg: >-
+          The token-reviewer Secret is empty or missing. Apply step 1
+          (gitops/workloads/external-secrets/vault-auth-sa.yaml) and wait for Argo to
+          sync before running this.
+
+    - name: Configure the Kubernetes auth method
+      ansible.builtin.shell:
+        cmd: >-
+          vault write auth/kubernetes/config
+          kubernetes_host='{{ k8s_api }}'
+          kubernetes_ca_cert='{{ _cluster_ca_b64.stdout | b64decode }}'
+          token_reviewer_jwt='{{ _reviewer_jwt_b64.stdout | b64decode }}'
+      no_log: true          # the reviewer JWT must not reach the log
+      changed_when: true
+      when: not ansible_check_mode
+
+    - name: Bind the eso role to the external-secrets ServiceAccount
+      ansible.builtin.shell:
+        cmd: >-
+          vault write auth/kubernetes/role/eso
+          bound_service_account_names='{{ eso_service_account }}'
+          bound_service_account_namespaces='{{ eso_namespace }}'
+          policies='{{ vault_policy }}'
+          ttl=1h
+      changed_when: true
+      when: not ansible_check_mode
+
+    # Prove Vault can actually validate a cluster identity. This is the difference
+    # between "the writes returned 0" and "authentication works" — see CLAUDE.md,
+    # "Check the artifact the consumer reads".
+    - name: Verify a real login succeeds
+      ansible.builtin.shell:
+        cmd: >-
+          vault write -field=token auth/kubernetes/login role=eso
+          jwt="$(kubectl create token {{ eso_service_account }} -n {{ eso_namespace }})"
+      delegate_to: h4-core
+      register: _login_test
+      changed_when: false
+      check_mode: false
+      failed_when: false
+      when: not ansible_check_mode
+
+    - name: Report the result
+      ansible.builtin.debug:
+        msg: >-
+          {{ 'Kubernetes auth WORKS — a login returned a token. Step 3 (switching the
+          ClusterSecretStore) is safe.' if (_login_test.rc | default(1)) == 0
+          else 'Kubernetes auth is NOT working: ' ~ (_login_test.stderr | default('n/a'))
+          ~ ' — do NOT proceed to step 3. ESO is still on the static token and unaffected.' }}
+      when: not ansible_check_mode
+
+    - name: DRY RUN — say plainly that nothing happened
+      ansible.builtin.debug:
+        msg: >-
+          DRY RUN. Nothing was written to Vault. Re-run without --check to configure
+          the auth method; ESO is unaffected either way until step 3.
+      when: ansible_check_mode
