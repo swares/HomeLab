@@ -19,8 +19,17 @@
 # THIS PLAYBOOK NEVER SEES THE PRIVATE KEY. It installs a public key, which is not a
 # secret. Generate the pair on a trusted machine that is not part of the lab:
 #
-#     ssh-keygen -t ed25519 -a 100 -N '' \
-#       -C "break-glass $(date +%F)" -f ./break-glass
+# Windows cmd — the authoritative checkout, and note the date is typed LITERALLY:
+#     cd %USERPROFILE%
+#     ssh-keygen -t ed25519 -a 100 -N "" -C "break-glass 2026-08-21" -f break-glass
+#
+# bash, if generating elsewhere:
+#     ssh-keygen -t ed25519 -a 100 -N '' -C "break-glass $(date +%F)" -f ./break-glass
+#
+# Generate it OUTSIDE the repository. cmd does not expand $(date +%F) and will bake the
+# literal string into the comment; worse, running it from the repo root leaves a private
+# key in a git working tree that also lives under Downloads. .gitignore now blocks the
+# name, but that is the backstop.
 #
 #   - ed25519 because the private key is ~400 bytes: about seven lines of base64, which
 #     is transcribable from paper. An RSA-4096 key is not.
@@ -102,11 +111,23 @@
     # Verify by reading back what is actually on the host, not by trusting the module's
     # return. check_mode: false so a dry run reports the true current state rather than
     # skipping and letting a green summary imply the key is present (CLAUDE.md).
+    #
+    # The key blob is extracted by JINJA, not by awk in a subshell. The first version of
+    # this task did:
+    #     grep -qF "$(awk '{print $2}' <<< '<pubkey>')" ~user/.ssh/authorized_keys
+    # `<<<` is a bashism. ansible.builtin.shell runs /bin/sh, which is dash on Debian and
+    # Ubuntu, so on 2026-08-21 that was a syntax error on 15 of 18 hosts — grep never ran,
+    # rc was non-zero, and the play reported the key MISSING on hosts whose diffs showed it
+    # had just been installed. The three that passed were the ones where /bin/sh is bash.
+    # Doing the work Ansible-side removes the shell dialect from the equation entirely.
+    #
+    # ~{{ break_glass_user }} rather than ~ or $HOME: this runs under become, so those
+    # would resolve to root's home, not the account the key was installed for.
     - name: Confirm the key is present in authorized_keys
       ansible.builtin.shell:
-        cmd: >-
-          grep -qF "$(awk '{print $2}' <<< '{{ lookup('file', break_glass_pubkey_file) | trim }}')"
-          ~{{ break_glass_user }}/.ssh/authorized_keys
+        cmd: grep -qF '{{ _bg_blob }}' ~{{ break_glass_user }}/.ssh/authorized_keys
+      vars:
+        _bg_blob: "{{ (lookup('file', break_glass_pubkey_file) | trim).split()[1] }}"
       register: _verify
       changed_when: false
       check_mode: false
