@@ -19,8 +19,17 @@
 # THIS PLAYBOOK NEVER SEES THE PRIVATE KEY. It installs a public key, which is not a
 # secret. Generate the pair on a trusted machine that is not part of the lab:
 #
-#     ssh-keygen -t ed25519 -a 100 -N '' \
-#       -C "break-glass $(date +%F)" -f ./break-glass
+# Windows cmd — the authoritative checkout, and note the date is typed LITERALLY:
+#     cd %USERPROFILE%
+#     ssh-keygen -t ed25519 -a 100 -N "" -C "break-glass 2026-08-21" -f break-glass
+#
+# bash, if generating elsewhere:
+#     ssh-keygen -t ed25519 -a 100 -N '' -C "break-glass $(date +%F)" -f ./break-glass
+#
+# Generate it OUTSIDE the repository. cmd does not expand $(date +%F) and will bake the
+# literal string into the comment; worse, running it from the repo root leaves a private
+# key in a git working tree that also lives under Downloads. .gitignore now blocks the
+# name, but that is the backstop.
 #
 #   - ed25519 because the private key is ~400 bytes: about seven lines of base64, which
 #     is transcribable from paper. An RSA-4096 key is not.

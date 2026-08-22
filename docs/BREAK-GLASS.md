@@ -62,7 +62,23 @@ outside the lab, the public half is committed to `ansible/files/break-glass.pub`
 installed everywhere by `ansible/playbooks/break-glass-key.yml`, and the private half goes
 on paper here and nowhere else — not in `~/.ssh`, not in a password manager.
 
+Windows `cmd` (the authoritative checkout) — note the date is typed literally, because
+`cmd` does not expand `$(date +%F)` and will happily bake that string into the comment as
+a label that means nothing later:
+
+    cd %USERPROFILE%
+    ssh-keygen -t ed25519 -a 100 -N "" -C "break-glass 2026-08-21" -f break-glass
+
+bash, if you generate elsewhere:
+
     ssh-keygen -t ed25519 -a 100 -N '' -C "break-glass $(date +%F)" -f ./break-glass
+
+**Generate it outside the repository.** On 2026-08-21 the first attempt ran from the repo
+root, leaving a private key in a git working tree that also lives under `Downloads` and
+travels with any zip or sync of the folder. `.gitignore` now refuses to track
+`break-glass` (an OpenSSH private key has no extension, so the existing `*.key` and
+`*.pem` rules never matched it), but the guard is the second line of defence, not the
+first.
 
 **ed25519 specifically**, because the private key is about seven lines of base64 and can be
 typed back in from paper under stress. RSA-4096 cannot, realistically.

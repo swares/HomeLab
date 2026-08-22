@@ -7,6 +7,19 @@ ansible/files/*.secret
 kubeconfig
 .kube/
 
+# SSH private keys. An OpenSSH private key has NO extension, so the *.key and
+# *.pem rules above do not catch one — and on 2026-08-21 a break-glass private key
+# was generated straight into the repo root, where a single `git add -A` would have
+# committed it. The .pub half is deliberately NOT ignored: it is not a secret, and
+# ansible/files/break-glass.pub must be tracked for playbooks/break-glass-key.yml.
+break-glass
+**/break-glass
+!**/break-glass.pub
+id_rsa
+id_ed25519
+**/id_rsa
+**/id_ed25519
+
 # Local reference docs (not for git)
 LAB-URLS.md
 
