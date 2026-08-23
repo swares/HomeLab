@@ -2400,6 +2400,45 @@ break-glass work is for. Revisit only if the RPi5 stops being trusted.
 
 ---
 
+### 3.13 ~~ApplicationSet name collisions are silent until Argo prunes something~~ — **GUARDED 2026-08-21**
+
+**Found the hard way, same day.** `gitops/workloads/external-secrets/` was created without
+adding the matching exclusion to `workloads-appset.yaml`. That generator names Applications
+`{{path.basename}}`, so two Applications then claimed the name `external-secrets`: the
+hand-declared Helm chart, and a generated one pointing at a directory containing three RBAC
+objects. The generated one won, and its `prune: true` **deleted the entire external-secrets
+Helm release**. The operator was gone for roughly twenty minutes.
+
+**Nothing appeared to break, which is the part worth remembering.** The CRDs and all 16
+ExternalSecret CRs survived, and the target Secrets carry ownerReferences to those CRs, so
+every workload kept running on its existing values and every ExternalSecret still reported
+`True` — a stale condition nobody was reconciling. The blast radius was "no secret can ever
+refresh again", and it was invisible in every summary view.
+
+**The generator had 11 exclusions before this, every one for the same reason** — a directory
+basename colliding with a hand-declared Application. The pattern was documented in comments
+and enforced nowhere, so the twelfth was a matter of time.
+
+**Guarded by `scripts/check-appset-collisions.py`**, wired into `.github/workflows/validate.yml`.
+It fails on:
+
+- **collision** — a workload directory whose basename matches a declared Application and is
+  not excluded (the destructive case);
+- **orphan** — a directory that *is* excluded but which no Application deploys, so its
+  manifests sit in git and never reach the cluster (silent no-op, equally invisible).
+
+None of the existing CI jobs would have caught this: the YAML was valid, the schema was
+valid, and no OPA policy covers cross-file naming. It was only detectable by knowing how the
+generator constructs names — which is exactly the kind of thing to encode once rather than
+remember eleven times.
+
+Verified by reproducing the bug against a copy of the repo and confirming the check exits 1
+with the right message, not merely that it passes on a healthy tree. It also caught a false
+positive in its own first version — `gitlab-runner` uses multi-source `sources:` rather than
+`source:` — which is worth noting because a check that cries wolf gets switched off.
+
+---
+
 ### 3.12 Four machines appear twice in the inventory under two names
 
 **Found 2026-08-21** while running `break-glass-key.yml` against `all`, which reported 18

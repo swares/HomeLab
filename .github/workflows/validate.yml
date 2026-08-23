@@ -84,6 +84,29 @@ jobs:
               -summary \
               -output text
 
+  appset-collisions:
+    name: ApplicationSet name collisions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Check for Application name collisions and orphaned directories
+        # Offline, milliseconds, no cluster needed — same class as yaml-lint and conftest.
+        #
+        # Exists because on 2026-08-21 gitops/workloads/external-secrets/ was added without
+        # the matching exclusion in workloads-appset.yaml. Two Applications then claimed the
+        # name `external-secrets`; the generated one won, and its prune: true deleted the
+        # entire external-secrets Helm release. The operator was down ~20 minutes and every
+        # status view stayed green throughout, because the ExternalSecret CRs and their
+        # target Secrets survived — nothing was reconciling, and nothing said so.
+        #
+        # None of the existing jobs would have caught it: the YAML was valid, the schema was
+        # valid, and no OPA policy covers cross-file naming. It was only visible by knowing
+        # how the generator names things.
+        run: |
+          pip install --quiet pyyaml
+          python3 scripts/check-appset-collisions.py .
+
   policy-check:
     name: OPA policy check (conftest)
     runs-on: ubuntu-latest
