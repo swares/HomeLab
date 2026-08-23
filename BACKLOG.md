@@ -2040,14 +2040,14 @@ configured Vault to accept it, while ESO carried on using the static token. Step
 with a **real login**, printed explicitly, so step 3 was taken on evidence rather than
 expectation.
 
-- [ ] **Cleanup, while it is fresh:** revoke the now-unused static token
-      (`vault token revoke -self` with it in the environment, never on a command line —
-      §2.13), delete the `vault-token` Secret in `external-secrets`, and remove
-      `secret/lab/eso` from Vault. A valid unused credential left lying around is what
-      turns up in a review two years later with nobody able to say whether it is live.
-- [ ] Update `docs/RUNBOOK.md` → "ESO token expired". That procedure now describes a
-      mechanism that no longer exists, and it is the page someone would reach for in a
-      panic.
+- [x] **Cleanup done 2026-08-23.** Static token revoked (via the environment, never on a
+      command line — §2.13), the `vault-token` Secret deleted, `secret/lab/eso` removed.
+      No unused valid credential left behind.
+- [x] **`docs/RUNBOOK.md` rewritten** — "ESO token expired" became "ESO cannot read from
+      Vault". The old procedure minted a token that no longer exists, on the page someone
+      reaches for in a panic. It now leads with *diagnose by content, not condition*, and
+      gives the three independently-testable pieces (auth method, a real login, the
+      token-reviewer identity) which fail in distinguishable ways.
 
 <details><summary>Original three-step plan, retained for the reasoning</summary>
 

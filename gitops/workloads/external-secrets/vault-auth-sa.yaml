@@ -2,10 +2,14 @@
 #
 # WHY THIS EXISTS
 #
-# ESO currently authenticates to Vault with a STATIC TOKEN (`vault-token` Secret in
-# this namespace), minted 2026-08-07 with a 768h TTL. It expires ~2026-09-08 and fails
-# SILENTLY: ESO simply stops syncing, existing k8s Secrets keep their last values, and
-# nothing looks broken until something needs a refresh. See BACKLOG.md §5.
+# ESO authenticates to Vault with KUBERNETES AUTH as of 2026-08-23, and this manifest is
+# what makes that possible.
+#
+# It previously used a STATIC TOKEN (a `vault-token` Secret in this namespace), minted
+# 2026-08-07 with a 768h TTL, due to expire ~2026-09-08 and to fail SILENTLY: ESO would
+# stop syncing, existing k8s Secrets would keep their last values, and nothing would look
+# broken until something needed a refresh. That token has been revoked and the Secret
+# deleted. See BACKLOG.md §5.
 #
 # Kubernetes auth removes the deadline entirely rather than moving it. ESO presents its
 # own ServiceAccount token; Vault validates it via the TokenReview API and issues a
