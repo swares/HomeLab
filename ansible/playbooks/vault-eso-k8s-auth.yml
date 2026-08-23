@@ -21,7 +21,8 @@
 #
 # RUN
 #   cd ansible                    # ansible.cfg only applies from here — §4.1c
-#   ansible-playbook -i inventory/hosts.yml playbooks/vault-eso-k8s-auth.yml --check
+#   VAULT_TOKEN=<token> ansible-playbook -i inventory/hosts.yml playbooks/vault-eso-k8s-auth.yml --check
+#   (need a token? docs/OPS.md -> "Get a Vault admin token")
 #   ansible-playbook -i inventory/hosts.yml playbooks/vault-eso-k8s-auth.yml
 #
 # VERIFY (step 2 alone, before touching ESO):
@@ -47,46 +48,86 @@
     reviewer_secret: vault-token-reviewer-token
     vault_policy: eso
 
-  tasks:
-    - name: Read the token-reviewer JWT from the cluster
-      ansible.builtin.command:
-        cmd: >-
-          kubectl -n {{ eso_namespace }} get secret {{ reviewer_secret }}
-          -o jsonpath={.data.token}
-      delegate_to: h4-core
-      register: _reviewer_jwt_b64
-      changed_when: false
-      check_mode: false
+  # `vault write` needs both an address and a token. VAULT_ADDR because the CLI otherwise
+  # defaults to https://127.0.0.1:8200 and this Vault serves plaintext HTTP (BACKLOG §2.6);
+  # VAULT_TOKEN because writing auth methods is a privileged operation. Same preflight
+  # pattern as backup-offsite.yml, which fails clearly rather than producing a confusing
+  # 403 halfway through.
+  environment:
+    VAULT_ADDR: "{{ vault_addr | default('http://127.0.0.1:8200') }}"
+    VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
 
-    - name: Read the cluster CA from the same Secret
+  tasks:
+    - name: Preflight — VAULT_TOKEN must be set
+      ansible.builtin.assert:
+        that: lookup('env', 'VAULT_TOKEN') | length > 0
+        fail_msg: >-
+          VAULT_TOKEN is empty. Pass a current token:
+          VAULT_TOKEN=<token> ansible-playbook -i inventory/hosts.yml
+          playbooks/vault-eso-k8s-auth.yml
+          Need one? docs/OPS.md -> "Get a Vault admin token". token-admin is
+          allowed to lapse — nothing automated uses it, so an expired one is expected,
+          not an incident.
+      run_once: true
+
+    # ONE read, as JSON, with argv — not two jsonpath queries.
+    #
+    # The first version used `-o jsonpath={.data['ca\.crt']}`. The key genuinely contains a
+    # dot, so it needs bracket-and-quote syntax — but those quotes have to survive a YAML
+    # folded scalar AND the shell before kubectl sees them, and on 2026-08-23 they did not:
+    #     error parsing jsonpath {.data[ca\.crt]}, invalid array index ca\.crt
+    # argv bypasses shell parsing entirely, and Jinja handles data['ca.crt'] without any
+    # escaping at all. Fewer layers, fewer places for quoting to be eaten.
+    - name: Read the token-reviewer Secret
       ansible.builtin.command:
-        cmd: >-
-          kubectl -n {{ eso_namespace }} get secret {{ reviewer_secret }}
-          -o jsonpath={.data['ca\.crt']}
+        argv:
+          - kubectl
+          - -n
+          - "{{ eso_namespace }}"
+          - get
+          - secret
+          - "{{ reviewer_secret }}"
+          - -o
+          - json
       delegate_to: h4-core
-      register: _cluster_ca_b64
+      register: _reviewer_raw
       changed_when: false
       check_mode: false
+      failed_when: false
+
+    - name: Refuse to continue if the Secret is missing
+      ansible.builtin.assert:
+        that: _reviewer_raw.rc == 0
+        fail_msg: >-
+          Cannot read secret/{{ reviewer_secret }} in {{ eso_namespace }}. Apply step 1
+          (gitops/workloads/external-secrets/vault-auth-sa.yaml) and wait for Argo to sync.
+          kubectl said: {{ _reviewer_raw.stderr | default('(no stderr)') }}
+
+    - name: Extract the reviewer JWT and the cluster CA
+      ansible.builtin.set_fact:
+        _reviewer_jwt: "{{ (_reviewer_raw.stdout | from_json).data.token | b64decode }}"
+        _cluster_ca: "{{ (_reviewer_raw.stdout | from_json).data['ca.crt'] | b64decode }}"
+      no_log: true          # the JWT is a credential; do not put it in the play log
 
     # Fail early and clearly rather than writing an empty config into Vault. An empty
     # token here produces a Vault config that looks fine and rejects every login.
     - name: Refuse to continue without both values
       ansible.builtin.assert:
         that:
-          - _reviewer_jwt_b64.stdout | length > 0
-          - _cluster_ca_b64.stdout | length > 0
+          - _reviewer_jwt | length > 0
+          - _cluster_ca | length > 0
         fail_msg: >-
-          The token-reviewer Secret is empty or missing. Apply step 1
-          (gitops/workloads/external-secrets/vault-auth-sa.yaml) and wait for Argo to
-          sync before running this.
+          The token-reviewer Secret exists but token or ca.crt is empty. Kubernetes
+          populates these asynchronously after the Secret is created — if step 1 only just
+          synced, wait a moment and re-run.
 
     - name: Configure the Kubernetes auth method
       ansible.builtin.shell:
         cmd: >-
           vault write auth/kubernetes/config
           kubernetes_host='{{ k8s_api }}'
-          kubernetes_ca_cert='{{ _cluster_ca_b64.stdout | b64decode }}'
-          token_reviewer_jwt='{{ _reviewer_jwt_b64.stdout | b64decode }}'
+          kubernetes_ca_cert='{{ _cluster_ca }}'
+          token_reviewer_jwt='{{ _reviewer_jwt }}'
       no_log: true          # the reviewer JWT must not reach the log
       changed_when: true
       when: not ansible_check_mode
@@ -111,6 +152,12 @@
           vault write -field=token auth/kubernetes/login role=eso
           jwt="$(kubectl create token {{ eso_service_account }} -n {{ eso_namespace }})"
       delegate_to: h4-core
+      # Delegated to the H4, so the play-level environment (rpi5's loopback address) is
+      # wrong here — this must reach Vault over the network. A login needs no token; that
+      # is the point of the test.
+      environment:
+        VAULT_ADDR: "http://192.168.1.128:8200"
+        VAULT_TOKEN: ""
       register: _login_test
       changed_when: false
       check_mode: false

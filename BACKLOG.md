@@ -2009,16 +2009,49 @@ closing something else.
 
 | Item | By | Ref |
 |---|---|---|
-| Renew `token-admin` (720h TTL) | **2026-09-06** | `TODO-2026-08-03.md:248` |
-| ESO → Kubernetes auth (token expires) | **~2026-09-08** | `TODO-2026-08-03.md:261` |
+| ~~Renew `token-admin` (720h TTL)~~ | ~~2026-09-06~~ | **Decided 2026-08-23: let it lapse.** Nothing automated uses it — see below |
+| ~~ESO → Kubernetes auth (token expires)~~ | ~~2026-09-08~~ | **DONE 2026-08-23** — deadline eliminated, not renewed |
 | Destroy superseded unseal shares (envelope item 5b) | **2026-11-16** | §1.2, `docs/BREAK-GLASS.md` |
 | ~~Enable `backup-offsite.timer` after seed~~ | ~~Sunday 08-09~~ | done — §1.3 |
 
-The two September items fail **silently**: `token-admin` stops authenticating, and ESO stops
-syncing secrets with nothing visibly broken until something needs a refresh. Neither has an
-alert. Do them at a time of your choosing rather than theirs — and note that since §1.11,
+**Both September items are resolved, and neither by renewing anything.** ESO's expiry was
+designed out — Kubernetes auth has no TTL to lapse. `token-admin`'s was dissolved by
+checking what actually depends on it: nothing automated does, so its expiry is not a
+failure, it is a door that locks. Mint a new one when needed
+(`docs/OPS.md` → *Get a Vault admin token*).
+
+The pattern worth carrying: **when something has a recurring deadline, ask what breaks if
+it lapses before deciding how to keep it alive.** Twice today the honest answer changed the
+fix — once to remove the mechanism, once to stop treating a non-event as an outage. Do them at a time of your choosing rather than theirs — and note that since §1.11,
 letting `token-admin` lapse means a `generate-root` ceremony to get back in, so it costs
 more than it used to.
+
+#### ESO — ~~drafted~~ **DONE 2026-08-23. Deadline removed, not moved.**
+
+All three steps applied and verified. `kubectl get externalsecrets -A` shows all **16**
+with a `refreshTime` of `2026-08-23T01:14:38-40Z` — a full reconcile pass within two
+seconds, under Kubernetes auth. The ~2026-09-08 expiry no longer exists to miss.
+
+Verified by **content, not condition**: an advancing `refreshTime` can only be produced by
+the operator actually reconciling. The `Ready: True` conditions are worthless as evidence
+here — on 2026-08-21 all 16 reported `True` for twenty minutes while the operator was
+deleted and nothing was syncing (§3.13).
+
+Sequencing that made it safe: steps 1 and 2 were inert — they created an identity and
+configured Vault to accept it, while ESO carried on using the static token. Step 2 ended
+with a **real login**, printed explicitly, so step 3 was taken on evidence rather than
+expectation.
+
+- [x] **Cleanup done 2026-08-23.** Static token revoked (via the environment, never on a
+      command line — §2.13), the `vault-token` Secret deleted, `secret/lab/eso` removed.
+      No unused valid credential left behind.
+- [x] **`docs/RUNBOOK.md` rewritten** — "ESO token expired" became "ESO cannot read from
+      Vault". The old procedure minted a token that no longer exists, on the page someone
+      reaches for in a panic. It now leads with *diagnose by content, not condition*, and
+      gives the three independently-testable pieces (auth method, a real login, the
+      token-reviewer identity) which fail in distinguishable ways.
+
+<details><summary>Original three-step plan, retained for the reasoning</summary>
 
 #### ESO — drafted 2026-08-21, three steps, deadline removed rather than moved
 
@@ -2042,31 +2075,48 @@ anything depends on them. Step 3 is the only one that can break ESO, and its fai
 quiet — Secrets keep their last values, so nothing appears wrong. Check
 `kubectl get externalsecrets -A` for `SecretSynced` on every row, not the pod's health.
 
-#### `token-admin` — renew, but fix the silence first
+</details>
 
-The renewal itself is one command on rpi5:
+#### `token-admin` — **decided 2026-08-23: let it lapse**
 
-    vault token create -orphan -policy=admin -ttl=720h -display-name=token-admin
+**The premise of this entry was wrong, and correcting it dissolves the deadline.**
 
-Note **`-orphan`** — matching how it was created (`TODO-2026-08-03.md:720`). A child
-token would die with its parent and reintroduce the problem being solved. `renew` is
-the wrong verb here: the token is non-periodic, so renewal is capped at the mount's max
-TTL and buys days rather than a month.
+It said `token-admin` "fails silently". Operationally it does not fail at all. Checked
+2026-08-23: **nothing automated uses it.** Every playbook takes `VAULT_TOKEN` from the
+environment, supplied by a human or Semaphore (`backup-cloud.yml:54`,
+`backup-offsite.yml:74`, `sync-secrets-to-vault.yml:33`, `vault-eso-k8s-auth.yml`). The
+only unattended Vault credential is `/etc/vault.d/backup-token`
+(`backup-vault.yml:14`), which is a different token and whose failure trips
+`LabBackupUnitFailed`.
 
-**The renewal is not the real work.** A token that expires on a known date with no
-alert is a scheduled outage that depends on someone remembering. This lab already has
-the right pattern — `LabBackupUnitFailed` covers every `backup-*.service` on every
-host, and `backup-verify` proves outcomes rather than exit codes. The equivalent here
-is a timer that checks `vault token lookup` and fails loudly below a threshold:
+So an expired `token-admin` breaks nothing. It is a locked door you meet next time you do
+admin work — a different problem, needing a different answer.
 
-- [ ] **Add a `vault-token-expiry` check** — systemd timer on rpi5, weekly, exiting
-      non-zero when any tracked token has under 14 days left, so `LabBackupUnitFailed`
-      picks it up. Without it this entry recurs every 30 days forever and eventually
-      gets missed. Not written yet.
+**Decision: do not keep it alive.** A standing token carrying the `admin` policy is a
+credential that can be stolen, and not having one is strictly better. The recovery path is
+documented (`docs/RUNBOOK.md` → *Root token lost*), has been performed twice (2026-08-05,
+2026-08-07) and its unseal-share half was drilled in Drill 2b. Paying ~20 minutes of
+ceremony on the rare occasions admin is needed is a better trade than maintaining a
+permanent admin credential to avoid it.
 
-The November item is the opposite shape: nothing breaks if it is missed, but a superseded
-set of unseal shares with no expiry quietly becomes a permanent second copy of full Vault
-access, which is the reverse of what the rekey was for.
+This is the same move as the ESO half above: **the deadline was not renewed, the thing
+that had one was removed.** ESO's could be designed out entirely; this one is downgraded
+from "recurring obligation" to "occasional ceremony", which is as far as it goes while
+something must still hold admin.
+
+**No alert is needed**, and one would have been the wrong fix — alerting on the expiry of
+a credential nothing depends on is noise that trains you to ignore alerts.
+
+- [x] **Canonical procedure written** — `docs/OPS.md` → *Get a Vault admin token*. Covers
+      the still-valid case, the expired case via `generate-root`, and why `token-admin` is
+      insufficient for rekey. Referenced from `RUNBOOK.md`, `WORKFLOWS.md` and the
+      playbook headers, so "how do I get a token" has one answer rather than four.
+- [ ] Remove the 2026-09-06 row from the table above once this is merged — it is no longer
+      a deadline, it is a date on which a token quietly stops working, by design.
+- [ ] **§1.11 becomes the load-bearing entry.** With no standing admin token, the ceremony
+      is the recovery path rather than a fallback. It is documented and proven, but worth
+      re-reading with that weight on it — particularly the config-line-and-restart step,
+      which is easy to leave enabled.
 
 ---
 
@@ -2397,6 +2447,45 @@ where auto-unseal requires a threshold of shares on the RPi5 and therefore makes
 there equivalent to full Vault access. Rejected because it introduces an external
 dependency (or a second Vault) in the recovery path, which is the opposite of what the
 break-glass work is for. Revisit only if the RPi5 stops being trusted.
+
+---
+
+### 3.13 ~~ApplicationSet name collisions are silent until Argo prunes something~~ — **GUARDED 2026-08-21**
+
+**Found the hard way, same day.** `gitops/workloads/external-secrets/` was created without
+adding the matching exclusion to `workloads-appset.yaml`. That generator names Applications
+`{{path.basename}}`, so two Applications then claimed the name `external-secrets`: the
+hand-declared Helm chart, and a generated one pointing at a directory containing three RBAC
+objects. The generated one won, and its `prune: true` **deleted the entire external-secrets
+Helm release**. The operator was gone for roughly twenty minutes.
+
+**Nothing appeared to break, which is the part worth remembering.** The CRDs and all 16
+ExternalSecret CRs survived, and the target Secrets carry ownerReferences to those CRs, so
+every workload kept running on its existing values and every ExternalSecret still reported
+`True` — a stale condition nobody was reconciling. The blast radius was "no secret can ever
+refresh again", and it was invisible in every summary view.
+
+**The generator had 11 exclusions before this, every one for the same reason** — a directory
+basename colliding with a hand-declared Application. The pattern was documented in comments
+and enforced nowhere, so the twelfth was a matter of time.
+
+**Guarded by `scripts/check-appset-collisions.py`**, wired into `.github/workflows/validate.yml`.
+It fails on:
+
+- **collision** — a workload directory whose basename matches a declared Application and is
+  not excluded (the destructive case);
+- **orphan** — a directory that *is* excluded but which no Application deploys, so its
+  manifests sit in git and never reach the cluster (silent no-op, equally invisible).
+
+None of the existing CI jobs would have caught this: the YAML was valid, the schema was
+valid, and no OPA policy covers cross-file naming. It was only detectable by knowing how the
+generator constructs names — which is exactly the kind of thing to encode once rather than
+remember eleven times.
+
+Verified by reproducing the bug against a copy of the repo and confirming the check exits 1
+with the right message, not merely that it passes on a healthy tree. It also caught a false
+positive in its own first version — `gitlab-runner` uses multi-source `sources:` rather than
+`source:` — which is worth noting because a check that cries wolf gets switched off.
 
 ---
 

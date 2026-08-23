@@ -88,7 +88,7 @@ All lab credentials live under `secret/lab/*`:
 | `secret/lab/argocd` | `admin_password` |
 | `secret/lab/argocd-deploy-key` | `private_key`, `public_key` |
 | `secret/lab/lab-ca` | `cert`, `key` |
-| `secret/lab/eso` | ESO Vault token |
+| ~~`secret/lab/eso`~~ | **deleted 2026-08-23** — ESO uses Kubernetes auth; there is no token |
 
 ### Three-direction sync loop
 
@@ -97,6 +97,9 @@ All lab credentials live under `secret/lab/*`:
      host files,            │                     ▼
      lldap config)   ESO pulls to k8s      rotate-passwords.yml
                       Secrets at runtime         fallback
+
+> **Need a `VAULT_TOKEN`?** `docs/OPS.md` → *Get a Vault admin token*. There is no standing
+> root token, and `token-admin` is allowed to lapse — nothing automated depends on it.
 
 **Runtime → HashiCorp Vault** (run after any credential rotation):
 
@@ -182,17 +185,17 @@ Vault 2.x requires a config change to allow unauthenticated generate-root:
     sudo sed -i '/enable_unauthenticated_access/d' /etc/vault.d/vault.hcl
     sudo kill -s HUP $(pidof vault)
 
-**If ESO token expired/revoked:**
+**If ESO cannot read from Vault:** see `docs/RUNBOOK.md` → *ESO cannot read from Vault*.
 
-    vault policy write eso - << 'POLICY'
-    path "secret/data/lab/*" { capabilities = ["read"] }
-    path "secret/metadata/lab/*" { capabilities = ["read", "list"] }
-    POLICY
-    vault token create -display-name=eso -period=87600h -policy=eso
-    kubectl create secret generic vault-token -n external-secrets \
-      --from-literal=token=<new-token> \
-      --dry-run=client -o yaml | kubectl apply -f -
-    vault kv put secret/lab/eso token=<new-token>
+There is no ESO token any more. Since 2026-08-23 ESO uses Kubernetes auth — it presents
+its own ServiceAccount token and Vault validates it via TokenReview — so there is nothing
+to expire and nothing to re-mint. The static token was revoked and `secret/lab/eso`
+deleted (BACKLOG.md §5).
+
+Deliberately a pointer rather than a copy of the procedure. This page carried its own
+duplicate of the old token-minting steps, which is how a fix in one file leaves the wrong
+instructions live in another — see §6.2, where the same claim was stale in three places at
+once.
 
 ### Full cluster loss (H4 dies)
 

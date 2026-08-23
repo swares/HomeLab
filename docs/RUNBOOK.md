@@ -187,17 +187,68 @@ Vault 2.x requires unauthenticated access to be explicitly enabled for generate-
     sudo sed -i '/enable_unauthenticated_access/d' /etc/vault.d/vault.hcl
     sudo kill -s HUP $(pidof vault)
 
-### ESO token expired
+### Get a Vault admin token
+
+See `docs/OPS.md` → *Get a Vault admin token*. Short version: there is no standing root
+token and `token-admin` is allowed to expire, because nothing automated uses it. If yours
+has lapsed, the `generate-root` ceremony below (*Root token lost*) mints a new one — that
+is the intended path, not an incident.
+
+### ESO cannot read from Vault
+
+**There is no ESO token to expire any more.** Since 2026-08-23 ESO authenticates with
+Kubernetes auth: it presents its own ServiceAccount token and Vault validates it via
+TokenReview, issuing a short-lived token per request. The old static token was revoked and
+`secret/lab/eso` deleted. If you are here because you expected to mint a new one, you do
+not need to. See BACKLOG.md §5.
+
+**Diagnose by content, not by condition.** ESO failing is quiet: existing Secrets keep
+their last values and every `ExternalSecret` keeps reporting `Ready: True`, because that is
+the last state of a CR nobody is reconciling. On 2026-08-21 all 16 reported `True` for
+twenty minutes while the operator did not exist.
+
+    # The real signal — refreshTime must be ADVANCING.
+    kubectl get externalsecrets -A -o custom-columns=\
+    NS:.metadata.namespace,NAME:.metadata.name,REFRESH:.status.refreshTime
+
+    kubectl -n external-secrets get deploy      # all three: operator, webhook, cert-controller
+    kubectl -n external-secrets logs deploy/external-secrets --tail=50 | grep -iE 'error|denied|unauthor'
+
+**If Vault is refusing the login**, check the pieces in order — each is independently
+testable and they fail differently:
+
+    # 1. Does Vault still have the auth method and role?
+    vault read auth/kubernetes/config
+    vault read auth/kubernetes/role/eso
+
+    # 2. Can a cluster identity actually authenticate? (No Vault token needed — that is the point.)
+    vault write auth/kubernetes/login role=eso \
+      jwt="$(kubectl create token external-secrets -n external-secrets)"
+
+    # 3. Is the token-reviewer identity intact? Vault calls TokenReview with it.
+    kubectl -n external-secrets get sa vault-token-reviewer
+    kubectl -n external-secrets get secret vault-token-reviewer-token
+
+Step 2 returning a token means Vault and the cluster agree, and the fault is on the ESO
+side. Step 2 failing while step 3 looks fine usually means the reviewer JWT stored in
+Vault is stale — re-run `ansible/playbooks/vault-eso-k8s-auth.yml`, which reads it fresh
+from the cluster and re-tests the login before reporting success.
+
+**To rebuild the whole path from scratch:**
 
     vault policy write eso - << 'POLICY'
     path "secret/data/lab/*" { capabilities = ["read"] }
     path "secret/metadata/lab/*" { capabilities = ["read", "list"] }
     POLICY
-    vault token create -display-name=eso -period=87600h -policy=eso
-    kubectl create secret generic vault-token -n external-secrets \
-      --from-literal=token=<new-token> \
-      --dry-run=client -o yaml | kubectl apply -f -
-    vault kv put secret/lab/eso token=<new-token>
+    # then, with a Vault admin token:
+    cd ansible
+    VAULT_TOKEN=<token> ansible-playbook -i inventory/hosts.yml playbooks/vault-eso-k8s-auth.yml
+
+The `vault-token-reviewer` ServiceAccount, its `system:auth-delegator` binding and its
+token Secret are declared in `gitops/workloads/external-secrets/vault-auth-sa.yaml` and
+deployed by the `external-secrets-vault-auth` Application — **not** by the appset, which
+excludes that directory because the name would collide with the Helm chart's Application
+(§3.13; that collision once deleted the operator).
 
 ---
 
