@@ -187,6 +187,13 @@ Vault 2.x requires unauthenticated access to be explicitly enabled for generate-
     sudo sed -i '/enable_unauthenticated_access/d' /etc/vault.d/vault.hcl
     sudo kill -s HUP $(pidof vault)
 
+### Get a Vault admin token
+
+See `docs/OPS.md` → *Get a Vault admin token*. Short version: there is no standing root
+token and `token-admin` is allowed to expire, because nothing automated uses it. If yours
+has lapsed, the `generate-root` ceremony below (*Root token lost*) mints a new one — that
+is the intended path, not an incident.
+
 ### ESO cannot read from Vault
 
 **There is no ESO token to expire any more.** Since 2026-08-23 ESO authenticates with

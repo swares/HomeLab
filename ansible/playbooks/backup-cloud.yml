@@ -61,6 +61,9 @@
           ansible/playbooks/backup-cloud.yml
           — if running via Semaphore, check the environment on the task template;
           tokens expire and the stored one may be stale.
+          Need one? docs/OPS.md -> "Get a Vault admin token". token-admin is
+          allowed to lapse — nothing automated uses it, so an expired one is expected,
+          not an incident.
         quiet: true
 
     - name: Preflight — probe Vault reachability and seal status

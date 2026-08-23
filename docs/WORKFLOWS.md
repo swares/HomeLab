@@ -98,6 +98,9 @@ All lab credentials live under `secret/lab/*`:
      lldap config)   ESO pulls to k8s      rotate-passwords.yml
                       Secrets at runtime         fallback
 
+> **Need a `VAULT_TOKEN`?** `docs/OPS.md` → *Get a Vault admin token*. There is no standing
+> root token, and `token-admin` is allowed to lapse — nothing automated depends on it.
+
 **Runtime → HashiCorp Vault** (run after any credential rotation):
 
     export VAULT_ADDR=http://192.168.1.128:8200
