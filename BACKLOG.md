@@ -2010,15 +2010,46 @@ closing something else.
 | Item | By | Ref |
 |---|---|---|
 | Renew `token-admin` (720h TTL) | **2026-09-06** | `TODO-2026-08-03.md:248` |
-| ESO → Kubernetes auth (token expires) | **~2026-09-08** | `TODO-2026-08-03.md:261` |
+| ~~ESO → Kubernetes auth (token expires)~~ | ~~2026-09-08~~ | **DONE 2026-08-23** — deadline eliminated, not renewed |
 | Destroy superseded unseal shares (envelope item 5b) | **2026-11-16** | §1.2, `docs/BREAK-GLASS.md` |
 | ~~Enable `backup-offsite.timer` after seed~~ | ~~Sunday 08-09~~ | done — §1.3 |
 
-The two September items fail **silently**: `token-admin` stops authenticating, and ESO stops
-syncing secrets with nothing visibly broken until something needs a refresh. Neither has an
-alert. Do them at a time of your choosing rather than theirs — and note that since §1.11,
+**One September item remains.** `token-admin` fails **silently** — it simply stops
+authenticating, with no alert. ESO's expiry was the other, and it is gone: Kubernetes auth
+has no TTL to lapse (below).
+
+The pattern worth carrying over: the ESO deadline was not renewed, it was **designed out**.
+`token-admin` cannot be designed out the same way — something must hold admin — so there
+the answer is an alert, not a longer TTL. Do them at a time of your choosing rather than theirs — and note that since §1.11,
 letting `token-admin` lapse means a `generate-root` ceremony to get back in, so it costs
 more than it used to.
+
+#### ESO — ~~drafted~~ **DONE 2026-08-23. Deadline removed, not moved.**
+
+All three steps applied and verified. `kubectl get externalsecrets -A` shows all **16**
+with a `refreshTime` of `2026-08-23T01:14:38-40Z` — a full reconcile pass within two
+seconds, under Kubernetes auth. The ~2026-09-08 expiry no longer exists to miss.
+
+Verified by **content, not condition**: an advancing `refreshTime` can only be produced by
+the operator actually reconciling. The `Ready: True` conditions are worthless as evidence
+here — on 2026-08-21 all 16 reported `True` for twenty minutes while the operator was
+deleted and nothing was syncing (§3.13).
+
+Sequencing that made it safe: steps 1 and 2 were inert — they created an identity and
+configured Vault to accept it, while ESO carried on using the static token. Step 2 ended
+with a **real login**, printed explicitly, so step 3 was taken on evidence rather than
+expectation.
+
+- [ ] **Cleanup, while it is fresh:** revoke the now-unused static token
+      (`vault token revoke -self` with it in the environment, never on a command line —
+      §2.13), delete the `vault-token` Secret in `external-secrets`, and remove
+      `secret/lab/eso` from Vault. A valid unused credential left lying around is what
+      turns up in a review two years later with nobody able to say whether it is live.
+- [ ] Update `docs/RUNBOOK.md` → "ESO token expired". That procedure now describes a
+      mechanism that no longer exists, and it is the page someone would reach for in a
+      panic.
+
+<details><summary>Original three-step plan, retained for the reasoning</summary>
 
 #### ESO — drafted 2026-08-21, three steps, deadline removed rather than moved
 
@@ -2041,6 +2072,8 @@ The split is deliberate: steps 1 and 2 are reversible and provably correct befor
 anything depends on them. Step 3 is the only one that can break ESO, and its failure is
 quiet — Secrets keep their last values, so nothing appears wrong. Check
 `kubectl get externalsecrets -A` for `SecretSynced` on every row, not the pod's health.
+
+</details>
 
 #### `token-admin` — renew, but fix the silence first
 
