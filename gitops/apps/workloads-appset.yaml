@@ -35,6 +35,15 @@ spec:
             exclude: true
           - path: gitops/workloads/cert-manager
             exclude: true
+          # Same conflict as cert-manager/kyverno/monitoring: gitops/apps/external-secrets.yaml
+          # already owns an Application named `external-secrets` (the Helm chart). This
+          # generator names apps {{path.basename}}, so without this exclusion the directory
+          # produces a SECOND Application of the same name, and the two fight over it. The
+          # generated one points at a directory holding only a ServiceAccount and RBAC —
+          # with prune: true, winning would DELETE THE OPERATOR and stop every secret sync.
+          # Added 2026-08-21, immediately after creating that directory without noticing.
+          - path: gitops/workloads/external-secrets
+            exclude: true
           - path: gitops/workloads/coredns-custom
             exclude: true
           - path: gitops/workloads/gitlab-runner
