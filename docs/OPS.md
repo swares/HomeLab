@@ -465,6 +465,75 @@ kubectl get externalsecret -A
 
 ---
 
+## Get a Vault admin token
+
+**Canonical procedure.** Anything asking for `VAULT_TOKEN=<token>` means this. Referenced
+from `docs/RUNBOOK.md`, `docs/WORKFLOWS.md`, `BACKLOG.md` §5 and the playbook headers.
+
+This lab keeps **no standing root token** (revoked 2026-08-07). `token-admin` is an orphan
+token with the `admin` policy, created on demand. **It is allowed to lapse** — nothing
+automated depends on it. Every playbook takes `VAULT_TOKEN` from the environment, supplied
+by a human or by Semaphore; the only unattended Vault credential is
+`/etc/vault.d/backup-token`, used by `backup-vault.yml`, whose failure trips
+`LabBackupUnitFailed`. See `BACKLOG.md` §5 for why lapsing is preferred to maintaining a
+standing admin credential.
+
+### A. You still have a valid token-admin
+
+    export VAULT_ADDR=http://192.168.1.128:8200
+    vault token lookup            # confirms it is live and shows the remaining TTL
+
+If the TTL is short and you want longer, create a fresh one rather than renewing — a
+`-ttl` token cannot be renewed past the mount's max TTL, so renewal buys days where
+recreation buys the full period:
+
+    vault token create -orphan -policy=admin -ttl=720h -display-name=token-admin
+
+**`-orphan` matters.** A child token dies with its parent, which reintroduces exactly the
+dependency this is trying to avoid.
+
+### B. token-admin has expired, and there is no other token
+
+This is the expected steady state, not an incident. The route is the `generate-root`
+ceremony — it needs **root on the rpi5** and **three unseal shares** (envelope item 5).
+
+`vault operator generate-root -init` returns `403 permission denied` on its own: Vault
+2.0.0 made `sys/generate-root` and `sys/rekey` authenticated by default (HCSEC-2026-08 /
+CVE-2026-5807). That is not a lockout, it is a config line — see `docs/RUNBOOK.md` →
+*Root token lost (Vault 2.x)* for the full sequence, and `BACKLOG.md` §1.11 for why the
+403 is expected rather than alarming.
+
+Summary of that procedure:
+
+    # On rpi5, as root:
+    sudo bash -c 'echo "enable_unauthenticated_access = [\"generate-root\"]" >> /etc/vault.d/vault.hcl'
+    sudo kill -s HUP $(pidof vault)
+
+    vault operator generate-root -init             # note the OTP and nonce
+    vault operator generate-root -nonce=<nonce>    # x3, one per unseal share
+    vault operator generate-root -decode=<encoded> -otp=<otp>
+
+    # PUT THE CONFIG BACK IMMEDIATELY — do not leave this enabled.
+    sudo sed -i '/enable_unauthenticated_access/d' /etc/vault.d/vault.hcl
+    sudo kill -s HUP $(pidof vault)
+
+Then mint a working token and **revoke the root token you just made** — a standing root
+token is what was deliberately removed on 2026-08-07:
+
+    export VAULT_TOKEN=<the-generated-root-token>
+    vault token create -orphan -policy=admin -ttl=720h -display-name=token-admin
+    vault token revoke -self      # revokes the ROOT token, not the new admin one
+
+Performed successfully on 2026-08-05 and 2026-08-07 (see `vault-policies.yml`'s header),
+and the unseal-share half was drilled in Drill 2b.
+
+### C. You need rekey or generate-root specifically
+
+`token-admin` is **not** enough — `admin.hcl` grants neither path. See *Rekey Vault unseal
+shares* below, which covers the dedicated short-lived `rekey` policy and token.
+
+---
+
 ## Rekey Vault unseal shares
 
 Issues a fresh set of unseal shares and **invalidates every existing one immediately**.
