@@ -30,23 +30,27 @@ copy reported `tools/` as absent when `tools/sdcard/` plainly exists on the H4. 
 
 ---
 
-## 0. OPEN INCIDENT — H4 will not complete boot (2026-08-23)
+## 0. ~~OPEN INCIDENT — H4 will not complete boot~~ — **RESOLVED 2026-08-26**
 
-> **`docs/INCIDENT-2026-08-23-h4-boot.md` — recovery steps live there. Start with that
-> file, not this entry.**
+> Full write-up: **`docs/INCIDENT-2026-08-23-h4-boot.md`**. No data lost.
 >
-> **Nothing is lost and the cluster is healthy** — etcd quorum holds on the two N150s and
-> kube-vip moved the control-plane VIP. The NAS is down and the H4 has no userspace: it
-> pings, every TCP port is closed, and the console shows nothing on two monitors.
+> **Root cause:** `/srv/nas` mounts `/dev/vg_microshift/lv_nas`, an LV that does not exist
+> until `microshift-lvm-loop.service` runs — and that service is `WantedBy=multi-user.target`,
+> which comes *after* `local-fs.target`. A dependency cycle. The mount timed out,
+> `local-fs.target` failed, and boot stopped before `sshd`. **Latent for 62 days**; the
+> reboot merely exercised it.
 >
-> Boot stalls after networking and before `multi-user.target` — the signature of a mount
-> blocking `local-fs.target`. Prime suspect is the §1.4 change of the cold tiers from
-> `/dev/mdX` to `UUID=`, made without pinning `ARRAY` lines in `mdadm.conf`. The stated
-> reason for skipping that was about *naming*; the thing that matters at boot is
-> *assembly*.
+> **My mdadm theory was wrong** — both arrays were `[2/2] [UU]` throughout. The §1.4 UUID
+> change did not cause this, and the `mdadm.conf` question raised there can stay closed.
 >
-> **Do not `mkfs`, `--create` or `wipefs` anything while diagnosing.** The cold tiers are
-> the copy-of-record and no data has been touched.
+> **Fixed** in `ansible/playbooks/storage.yml`: `x-systemd.requires=microshift-lvm-loop.service`
+> so `/srv/nas` waits for the loop device rather than racing it, plus `nofail` on all three
+> data mounts. Also `immich-postgres` 512Mi → 2Gi — it OOMKilled seven times during WAL
+> replay, having been sized for idle rather than recovery.
+>
+> **Confirmed 2026-08-26 19:45 UTC by a clean unattended reboot.** `microshift-lvm-loop`
+> reached `active (exited)` — the state it never reached on 2026-08-23 — all four mounts
+> came up, and SSH answered with no console intervention.
 
 ---
 

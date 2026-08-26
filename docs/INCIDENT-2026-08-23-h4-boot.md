@@ -1,108 +1,153 @@
-# OPEN INCIDENT — H4 does not complete boot after reboot (2026-08-23)
+# INCIDENT — H4 boot deadlock, 2026-08-23 to 2026-08-26
 
-**Status: unresolved. Recovery not yet attempted.** Pick up from *What to do next*.
+**Status: RESOLVED AND CONFIRMED 2026-08-26 19:45 UTC.** No data lost. Root cause found,
+fixed in `ansible/playbooks/storage.yml`, and **proven by a clean unattended reboot**.
 
 ---
 
-## Current state
+## What happened
 
-| | |
-|---|---|
-| **H4 (`odroid-nas`, 192.168.1.160)** | Powered, kernel up, **networking up**, no userspace |
-| **Cluster** | Healthy. etcd quorum holds on n150-1 + n150-2 (2 of 3) |
-| **Control-plane VIP `.200`** | Answering — kube-vip moved it to an N150, which is correct |
-| **NAS (smbd/NFS)** | **DOWN** |
-| **Workloads pinned to `odroid-nas`** | Down: registry, ai-gateway/LiteLLM, m5stack adapters, immich db-backup |
-| **Data** | Nothing lost. Nothing has been written to or deleted from any disk |
+The H4 was rebooted to pick up two changes that only take effect at boot (netplan
+resolvers, loop-device unit ordering). It did not come back. It responded to ICMP but
+every TCP port was closed — kernel and networking up, no userspace.
 
-## Evidence
+It sat that way for three days. The cluster was unaffected: etcd quorum held on the two
+N150s and kube-vip moved the control-plane VIP. The NAS was down, and everything pinned to
+`odroid-nas` with it.
 
-    ping 192.168.1.160        -> replies, TTL=64, MAC 00-1e-06-45-99-e5 (enp2s0)
-    Test-NetConnection :22    -> TcpTestSucceeded : False
-    Test-NetConnection :6443  -> TcpTestSucceeded : False
-    Test-NetConnection :445   -> TcpTestSucceeded : False
-    ping 192.168.1.200        -> replies (VIP relocated to an N150)
+## Root cause
 
-**Console gives no output at all** — two monitors and two cables tried, nothing from
-power-on. This box has been headless its entire life, so it is quite possible video output
-was never functional or the UEFI redirects console to serial. **Do not spend more time on
-the monitor.** The H4 has a UART header if a serial console is ever needed.
+**`/srv/nas` deadlocked `local-fs.target`.** In `/etc/fstab` it read:
 
-## Diagnosis
+    /dev/vg_microshift/lv_nas /srv/nas xfs defaults,noatime 0 0
 
-`systemd-networkd` starts early; `sshd` comes with `multi-user.target`. Ping working while
-every TCP port is closed means **boot stalled after networking and before userspace** —
-the signature of a hung or failed mount blocking `local-fs.target`.
+That LV does not exist until `microshift-lvm-loop.service` attaches the loop device and
+runs `vgchange -ay`. That service is `WantedBy=multi-user.target` — which comes **after**
+`local-fs.target`. So:
 
-**Most likely cause, and it is mine.** On 2026-08-21 the cold tiers were moved from
-`/dev/mdX` to `UUID=` in `/etc/fstab` (BACKLOG §1.4). A `UUID=` entry needs the array
-assembled *and* the `/dev/disk/by-uuid/` symlink present before `local-fs.target`
-completes. I declined to pin `ARRAY` lines in `mdadm.conf` at the time, reasoning that
-"nothing depends on the numbering any more" — but the thing that matters at boot is
-**assembly**, not naming, and that reasoning did not address it. `CLAUDE.md` also records
-the 8 TB mirror as possibly degraded from the UDMA-CRC issue, and degraded arrays are
-exactly where auto-assembly gets fragile.
+    local-fs.target waits for /srv/nas
+      -> /srv/nas waits for /dev/vg_microshift/lv_nas
+         -> that LV needs microshift-lvm-loop.service
+            -> which runs at multi-user.target, after local-fs.target
 
-Neither the old nor the new fstab entries carried `nofail`, so this could have happened
-before the change too — the UUID move plausibly exposed it rather than created it.
+A cycle. The device never appeared, the 90-second timeout expired, the mount failed,
+`local-fs.target` failed, and boot dropped to recovery — before `sshd`.
 
-## What to do next
+**This was latent, not new.** The H4 had 62 days of uptime; nothing had exercised a boot.
+A reboot is simply when this class of fault gets discovered, which is the argument for
+rebooting deliberately and occasionally rather than only under pressure.
 
-**1. Boot a USB live image** (Ubuntu live or similar). This also settles whether the
-hardware POSTs — if the live image gives video, the machine is fine and this is purely a
-boot problem.
+## What was NOT the cause
 
-**2. Look before changing anything:**
+Recorded because time was spent on them:
 
-    lsblk                          # identify the eMMC root partition
-    cat /proc/mdstat               # DO THE ARRAYS ASSEMBLE? This is the key question
-    sudo mkdir -p /mnt/root
-    sudo mount /dev/mmcblk0p2 /mnt/root      # adjust per lsblk
-    cat /mnt/root/etc/fstab
+- **Not mdadm assembly.** Both arrays came up clean: `md1 [2/2] [UU]`, `md0 [2/2] [UU]`.
+  The initial hypothesis was that moving the cold tiers to `UUID=` (§1.4) without pinning
+  `ARRAY` lines in `mdadm.conf` broke boot-time assembly. It did not. Assembly was never
+  the problem, and the `mdadm.conf` question can stay closed.
+- **Not the netplan change.** Resolvers survived correctly: `.148 .116 .184` on `enp2s0`,
+  none on `enp1s0`, `grep -c nameserver /run/systemd/resolve/resolv.conf` = 3. §4.12's
+  fix is now proven across a reboot.
+- **Not a dead console.** Recovery mode WAS visible on the monitor. The earlier blank
+  screen was most likely a display attached after boot had already failed. **Envelope item
+  7 (console login) is viable on this host** — the working assumption that it might not be
+  was wrong.
+- **Not hardware.** POST, eMMC boot and all disks were fine throughout.
 
-- Arrays assemble cleanly in the live environment → boot-time ordering, `nofail` fixes it.
-- Arrays do **not** assemble → a real storage fault the reboot surfaced. Stop and diagnose
-  that before booting the H4 again. Do not `mkfs`, do not `--create`, do not `wipefs`
-  (CLAUDE.md). The cold tiers are the copy-of-record.
+## Contributing factor
 
-**3. Make the cold mounts non-blocking:**
+`nofail` was absent from **every** fstab entry. Adding it to the cold tiers during recovery
+got boot past their device timeouts, but `/srv/nas` still blocked. Neither old nor new
+entries had it, so this was not introduced by the §1.4 UUID change — that change is
+unrelated to the deadlock.
 
-    sudo sed -i 's|\(UUID=.* /mnt/cold-8t .*defaults,noatime\)|\1,nofail,x-systemd.device-timeout=10s|' /mnt/root/etc/fstab
-    sudo sed -i 's|\(UUID=.* /mnt/cold-sec .*defaults,noatime\)|\1,nofail,x-systemd.device-timeout=10s|' /mnt/root/etc/fstab
-    cat /mnt/root/etc/fstab        # VERIFY before rebooting
+## Fixes applied
 
-`nofail` is correct regardless of the cause. **A NAS that will not boot because a backup
-mirror is unavailable has its priorities inverted** — you want the box up so you can
-diagnose the array, not held hostage by it.
+**`/srv/nas`** — `defaults,noatime,nofail,x-systemd.requires=microshift-lvm-loop.service`
 
-**4. Unmount, reboot, and confirm from Windows:**
+`x-systemd.requires=` generates both `Requires=` and `After=` on that unit, so the mount
+*waits for* the loop device rather than racing it. That breaks the cycle properly.
+`nofail` is the backstop: if it fails anyway, the box still boots. **A NAS you cannot log
+into is worse than a NAS with an unmounted share** — you need the box up to fix the share.
 
-    Test-NetConnection 192.168.1.160 -Port 22
+**Cold tiers** — `defaults,noatime,nofail,x-systemd.device-timeout=10s`
 
-**5. If it is still stuck** and the arrays do assemble in the live environment, the fault
-is elsewhere in boot. Read the previous boot's journal from the live image:
+These are backup tiers; an unavailable mirror should never cost you the machine.
+`backup-nas.service` carries `RequiresMountsFor=`, so backups still fail loudly rather
+than silently writing a restic repo onto the eMMC root. `nofail` makes boot survivable
+without making backup failure quiet.
 
-    sudo journalctl --root=/mnt/root -b -1 -p err --no-pager | tail -60
-    sudo journalctl --root=/mnt/root -b -1 --no-pager | grep -iE 'mount|dependency|timed out|emergency'
+Both are in `ansible/playbooks/storage.yml` with the reasoning inline, so a future run
+cannot revert them and nobody "simplifies" them away.
 
-## Follow-ups once recovered
+**`immich-postgres`** — memory limit 512Mi → 2Gi (`gitops/workloads/immich/postgres.yaml`)
 
-- [ ] Put `nofail,x-systemd.device-timeout=10s` into `ansible/playbooks/storage.yml` so the
-      fix is permanent rather than hand-applied. Hand-fixing it in the live environment and
-      leaving the playbook unchanged means the next run reverts it.
-- [ ] **Reopen the `mdadm.conf` ARRAY-line question closed in §1.4.** Pinning assembly is
-      what makes `UUID=` mounts dependable at boot; the reason given for skipping it was
-      about naming and did not address assembly.
-- [ ] Verify the loop-device unit ordering actually took effect — that fix was the other
-      reason for this reboot and has still never been tested:
-      `systemctl status microshift-lvm-loop.service` and `vgs`.
-- [ ] Confirm the netplan resolver change survived the reboot: `resolvectl dns` shows three
-      servers, no `.152`, and `grep -c nameserver /run/systemd/resolve/resolv.conf` is 3.
-- [ ] **Envelope gap found by this incident.** Item 7 (console login) assumes a usable
-      console; the H4 appears to have none. Item 8 (break-glass SSH key) assumes a network
-      that reaches `sshd`; here the network was up and `sshd` was not. **Neither envelope
-      item would have helped with the single most important host in the lab.** A serial
-      console procedure, or a documented USB-live-boot recovery, is the missing piece.
-      Add to `docs/BREAK-GLASS.md` once resolved.
-- [ ] Add `Before=` / `After=` review for `backup-*.timer` units — if the H4 was down over a
-      backup window, check `LabBackupUnitFailed` fired and catch up any missed run.
+Secondary failure found during recovery. The pod OOMKilled (exit 137) seven times:
+Postgres reached "ready to accept connections", then died during WAL replay of the unclean
+shutdown. 512Mi sufficed for steady-state idling and not for recovery — which is exactly
+when the database needs to come back. **The database itself was fine**: `redo done`, no
+corruption.
+
+## Final state
+
+    /srv/nas         /dev/mapper/vg_microshift-lv_nas
+    /mnt/cold-8t     /dev/md1
+    /mnt/cold-sec    /dev/md0
+    /mnt/nvme0n1p2   /dev/nvme0n1p2
+    vg_microshift    1.95t, lv_nas 1.46t active
+    kubectl get nodes -> all 5 Ready
+
+## Confirming reboot — 2026-08-26 19:45 UTC
+
+Clean. SSH answered unattended; no console intervention needed.
+
+    microshift-lvm-loop.service   active (exited) since 19:45:38
+      19:45:35  Starting Attach MicroShift LVM sparse image (/dev/loop100)
+      19:45:38  1 logical volume(s) in volume group "vg_microshift" now active
+      19:45:38  Finished
+
+    /srv/nas        /dev/mapper/vg_microshift-lv_nas
+    /mnt/cold-8t    /dev/md1
+    /mnt/cold-sec   /dev/md0
+    /mnt/nvme0n1p2  /dev/nvme0n1p2
+
+    systemctl --failed -> only snap.lxd.activate.service (unrelated snap cruft)
+
+**`active (exited)` is the whole result.** On 2026-08-23 that unit read `inactive (dead)`
+with no journal entries at all — never attempted, because the mount it feeds had already
+failed `local-fs.target`. Three seconds in the right order was all it ever needed.
+
+`systemctl show srv-nas.mount` was checked *before* rebooting and returned both
+`Requires=microshift-lvm-loop.service` and `After=microshift-lvm-loop.service` — confirming
+systemd had parsed `x-systemd.requires=` rather than merely that fstab contained the text.
+Config correct and generated-unit correct are two different claims.
+
+## Remaining
+
+- [x] `storage.yml` merged and run — fstab fix is under Ansible, not hand-applied.
+- [x] Confirming reboot passed.
+- [x] `backup-etcd` / `backup-verify` failed state cleared by the reboot; no `reset-failed`
+      needed. Their next scheduled runs are the real test.
+- [ ] `monitoring-prometheus-node-exporter-fmxwl` has been crashlooping for **18 days** —
+      unrelated to this incident and predating it. Worth its own look; it is the H4's
+      node-exporter, so its absence is a monitoring blind spot on the most important host.
+- [ ] Consider whether other units depend on `microshift-lvm-loop.service` implicitly and
+      would benefit from the same explicit `x-systemd.requires=`.
+
+## Lessons
+
+**Reboot deliberately and periodically.** A 62-day-old boot path is an untested boot path.
+This deadlock could have surfaced during an unplanned power cut instead, with less patience
+available.
+
+**The two envelope items added on 2026-08-21 were both untested and one was wrong.** Item 7
+assumed a console that was believed absent and turned out to work. Item 8 (SSH key) assumed
+a network that reaches `sshd` — here the network was up and `sshd` was not, so it would not
+have helped. Neither was the recovery path; the console was. Worth reflecting in
+`docs/BREAK-GLASS.md`.
+
+**Malformed commands read as evidence.** `findmnt /a /b /c /d` returns nothing — it takes
+one target, or a source/target pair. Empty output was read as "nothing is mounted" four
+times before the syntax was questioned. All four were mounted the whole time. Same failure
+class as everything in `CLAUDE.md` → *Check the artifact the consumer reads*: a check that
+cannot succeed reports the same silence as a real negative.
