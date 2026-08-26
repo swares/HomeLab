@@ -122,12 +122,18 @@
       loop_control:
         label: "{{ item.item.name }}"
 
+    # nofail + a short device timeout, added 2026-08-23. These are BACKUP tiers: if a
+    # cold mirror is unavailable, the right outcome is a running box with a missing
+    # mount, not a box in recovery mode. backup-nas.service carries
+    # RequiresMountsFor=, so backups still FAIL loudly rather than silently writing a
+    # restic repo onto the eMMC root — nofail makes boot survivable without making
+    # backup failure quiet.
     - name: Mount the cold mirrors by UUID
       ansible.posix.mount:
         path: "{{ item.path }}"
         src: "UUID={{ item.uuid }}"
         fstype: xfs
-        opts: defaults,noatime
+        opts: "defaults,noatime,nofail,x-systemd.device-timeout=10s"
         state: mounted
       loop:
         - { path: "{{ cold_primary_mount }}",   uuid: "{{ cold_primary_fs_uuid }}" }
@@ -203,13 +209,54 @@
         dev: "/dev/{{ microshift_vg }}/{{ nas_lv }}"
         force: false
 
+    # ---- /srv/nas — the mount that deadlocked boot on 2026-08-23 -----------------
+    #
+    # THE OPTIONS HERE ARE LOAD-BEARING. `defaults,noatime` alone put the H4 into
+    # recovery mode on the first reboot in 62 days:
+    #
+    #   local-fs.target waits for /srv/nas
+    #     -> /srv/nas needs /dev/vg_microshift/lv_nas
+    #        -> that LV only exists once microshift-lvm-loop.service has attached the
+    #           loop device and run `vgchange -ay`
+    #           -> that service is WantedBy=multi-user.target, which comes AFTER
+    #              local-fs.target
+    #
+    # A cycle. The device never appeared, the 90s timeout expired, the mount failed,
+    # local-fs.target failed, and the box dropped to recovery — pingable, no userspace,
+    # no sshd. Latent for a long time; a reboot is simply when it got exercised.
+    #
+    #   x-systemd.requires=  generates BOTH Requires= and After= on that unit, so the
+    #                        mount waits for the loop device instead of racing it. This
+    #                        is what actually breaks the cycle.
+    #   nofail               so that if it ever fails anyway, the box still boots. A NAS
+    #                        you cannot log into is worse than a NAS with an unmounted
+    #                        share — you need the box up to fix the share.
+    #
+    # Do not "simplify" this back to defaults,noatime.
     - name: Mount the live NAS share
       ansible.posix.mount:
         path: "{{ nas_mount }}"
         src: "/dev/{{ microshift_vg }}/{{ nas_lv }}"
         fstype: xfs
-        opts: defaults,noatime
+        opts: "defaults,noatime,nofail,x-systemd.requires=microshift-lvm-loop.service"
         state: mounted
+
+    # Verify the outcome rather than trusting the module. check_mode: false so a dry run
+    # reports the true state instead of skipping (CLAUDE.md).
+    - name: Confirm /srv/nas is actually mounted
+      ansible.builtin.command: "findmnt --noheadings --output SOURCE {{ nas_mount }}"
+      register: _nas_mnt
+      changed_when: false
+      check_mode: false
+      failed_when: false
+
+    - name: Report the NAS mount
+      ansible.builtin.debug:
+        msg: >-
+          {{ nas_mount }} is
+          {{ ('mounted from ' ~ _nas_mnt.stdout) if _nas_mnt.rc == 0
+             else 'NOT MOUNTED — check microshift-lvm-loop.service and `vgs`. The LV does
+                   not exist until that service has run.' }}
 
   handlers:
     - name: reload systemd
