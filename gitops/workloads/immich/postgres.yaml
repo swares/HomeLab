@@ -41,13 +41,25 @@ spec:
             initialDelaySeconds: 30
             periodSeconds: 10
             failureThreshold: 3
+          # Raised from 256Mi/512Mi on 2026-08-26. After the H4's hard power-cycle this
+          # pod OOMKilled (exit 137) seven times in a row: Postgres reached "ready to
+          # accept connections", then died partway through WAL replay of an unclean
+          # shutdown. 512Mi is enough for steady-state idling and is not enough for
+          # recovery — which is exactly when you need the database to come back.
+          #
+          # This is also a vectorchord image (pgvector/VectorChord), so index memory is
+          # well above a plain postgres:14 footprint. The H4 has 64 GB; 2Gi is not a
+          # meaningful cost, and an OOM loop on the photo library's database is.
+          #
+          # The old values were never wrong in normal operation — they were wrong under
+          # recovery, which is a state nothing had exercised until a power-cycle.
           resources:
             requests:
               cpu: 50m
-              memory: 256Mi
+              memory: 512Mi
             limits:
               cpu: "1"
-              memory: 512Mi
+              memory: 2Gi
           volumeMounts: [{ name: pgdata, mountPath: /var/lib/postgresql/data }]
       volumes:
         - { name: pgdata, persistentVolumeClaim: { claimName: immich-pgdata } }

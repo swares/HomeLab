@@ -30,6 +30,26 @@ copy reported `tools/` as absent when `tools/sdcard/` plainly exists on the H4. 
 
 ---
 
+## 0. OPEN INCIDENT — H4 will not complete boot (2026-08-23)
+
+> **`docs/INCIDENT-2026-08-23-h4-boot.md` — recovery steps live there. Start with that
+> file, not this entry.**
+>
+> **Nothing is lost and the cluster is healthy** — etcd quorum holds on the two N150s and
+> kube-vip moved the control-plane VIP. The NAS is down and the H4 has no userspace: it
+> pings, every TCP port is closed, and the console shows nothing on two monitors.
+>
+> Boot stalls after networking and before `multi-user.target` — the signature of a mount
+> blocking `local-fs.target`. Prime suspect is the §1.4 change of the cold tiers from
+> `/dev/mdX` to `UUID=`, made without pinning `ARRAY` lines in `mdadm.conf`. The stated
+> reason for skipping that was about *naming*; the thing that matters at boot is
+> *assembly*.
+>
+> **Do not `mkfs`, `--create` or `wipefs` anything while diagnosing.** The cold tiers are
+> the copy-of-record and no data has been touched.
+
+---
+
 ## 1. Data loss — the things that end the lab
 
 ### 1.1 ~~No restore has ever been performed~~ — **DRILL 1 PASSED 2026-08-16**
