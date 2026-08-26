@@ -90,6 +90,17 @@ Read this before acting. Full context is in `docs/` (start with `ARCHITECTURE.md
   `grep -c nameserver /run/systemd/resolve/resolv.conf`, and `loki_relabel_cache_size`
   returning 1 for 6800 entries. Prefer a number that can only be produced by the work
   actually happening.
+- **Empty output is not a finding until you prove the check can speak.** A healthy
+  Alertmanager receiver logs nothing on first-attempt success; a mistyped label selector
+  prints the same `No resources found` as a deleted workload; `findmnt /a /b /c /d` returns
+  nothing whatever is mounted. On 2026-08-26 all three were read as faults and all three
+  were fine. Before treating absence as evidence, run the same query against a case known
+  to be true. That control costs one command and has twice produced a finding of its own —
+  it is how §3.14 (Prometheus evicting at ~14d under a `30d` config) was discovered.
+- **Ask what the person actually saw before investigating why they saw nothing.** An hour
+  went into finding the defect in an alerting pipeline that had none, because "found it in
+  the Argo UI" was silently expanded into "no alert arrived." It had arrived. The cheapest
+  diagnostic in this lab is a question.
 - **A dry run that prints no verification has verified nothing.** Ansible skips
   `command` tasks under `--check`, so a play's closing `debug` message will happily
   assert success during a run that changed nothing. Put `check_mode: false` on

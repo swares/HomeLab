@@ -122,17 +122,100 @@ failed `local-fs.target`. Three seconds in the right order was all it ever neede
 systemd had parsed `x-systemd.requires=` rather than merely that fstab contained the text.
 Config correct and generated-unit correct are two different claims.
 
-## Remaining
+## Aftermath — what the recovery surfaced, 2026-08-26
 
-- [x] `storage.yml` merged and run — fstab fix is under Ansible, not hand-applied.
+The box came back; the cluster did not, immediately. Three things followed, in the order
+they were found.
+
+### ESO — a ClusterSecretStore with an unqualified `serviceAccountRef`
+
+Ten Argo Applications were `Degraded` and all sixteen ExternalSecrets read
+`SecretSyncedError`:
+
+    cannot request Kubernetes service account token for service account
+    "external-secrets": serviceaccounts "external-secrets" not found
+
+The Kubernetes-auth switch (§5, step 3 of 3) wrote `serviceAccountRef` without a
+`namespace`. A **ClusterSecretStore has no namespace of its own**, so the reference is
+resolved against *each ExternalSecret's* namespace — ESO went looking for an
+`external-secrets` ServiceAccount in `immich`, `monitoring`, `semaphore`, `lldap` and the
+rest, and failed all sixteen.
+
+**The store itself reported `Ready: True` throughout.** Store validation does not exercise
+the ServiceAccount lookup, so the health signal nearest the fault was the one signal that
+stayed green. Fixed by adding `namespace: external-secrets`; the reasoning is now inline in
+`gitops/workloads/immich/external-secret.yaml` where the next person will hit it.
+
+This was also declared "verified" on 2026-08-23 on the strength of an advancing
+`refreshTime`. That batch was a reconcile, not a successful authentication. `READY` was the
+column to read.
+
+### Backup CronJobs — three nights missed in two namespaces
+
+`immich-db-backup` and `lldap-backup` had failed every night since 08-23. Argo surfaced it
+only as `Degraded`, and it took an hour to decode because the failing resource was a
+**Job** — a kind neither of us thought to look at, after Deployments, Ingresses, PVCs and
+the ClusterSecretStore had each been checked and cleared.
+
+Neither job was broken. immich's is pinned `nodeSelector: kubernetes.io/hostname=odroid-nas`
+and lldap's mounts `192.168.1.160:/mnt/cold-8t/restic` over NFS — both write to the H4, and
+the H4 was down. Manual runs off both CronJobs succeeded immediately after recovery (immich:
+16.7 MB, 61 tables; lldap: snapshot `b53108ec`), which is what proved the jobs healthy rather
+than merely unblocked. The failed Jobs were then cleared and both apps returned to `Healthy`.
+
+`Events: <none>` on all six failed Jobs. Whatever they said about *why* had already aged out
+of the one-hour event TTL — the retention problem `docs/LEDGER-DESIGN.md` exists to solve,
+appearing in the first real incident after the design was written.
+
+### Alerting was working the whole time — an hour spent proving otherwise
+
+The investigation then went looking for why three critical rules
+(`LabBackupJobFailed`, `LabCronJobStale`, `LabArgoCDAppDegraded`) had not paged. They had.
+All three fired correctly and are in the Alertmanager log by name. ntfy delivered to the
+phone. The m5stack adapter was `1/1 Running` the entire time.
+
+Three wrong conclusions were drawn on the way, each from an artifact that could not have
+shown otherwise:
+
+- **"The ntfy route never loaded"** — because no log line said `receiver=ntfy`. Alertmanager
+  logs `Notify success` *only when a notification took more than one attempt*. A healthy
+  receiver that succeeds first time writes nothing. The m5stack lines dominated the log
+  precisely because m5stack was retrying. Absence of evidence, again read as evidence.
+- **"The m5stack adapter is gone"** — `No resources found` came from a wrong label selector,
+  not a missing workload.
+- **"The rules don't exist, write them"** — all three were already in
+  `gitops/workloads/monitoring/lab-alerts.yaml`, two of them for weeks. Writing them again
+  would have produced a duplicate PR that closed nothing.
+
+The retry storm was burst saturation: roughly twenty alert groups resolving at once against
+a single small webhook server, filling its listen backlog. Every group eventually delivered.
+
+**The premise was never checked.** The whole line of investigation rested on assuming that
+"found via the Argo UI" meant "no alert arrived." One question — *did you get notified?* —
+would have ended it before it started. Ask the human what they observed before instrumenting
+a search for why they observed nothing.
+
+
 - [x] Confirming reboot passed.
 - [x] `backup-etcd` / `backup-verify` failed state cleared by the reboot; no `reset-failed`
       needed. Their next scheduled runs are the real test.
+- [x] ESO `serviceAccountRef` namespace fixed; all 16 ExternalSecrets `SecretSynced`/`True`.
+- [x] Backup CronJobs proven healthy by manual runs; failed Jobs cleared; `immich` and
+      `lldap` back to `Healthy`.
+- [ ] `backup-vault.service` on rpi5 is `failed` — it tried to rsync a raft snapshot to
+      `192.168.1.160:22` at 06:33 UTC, thirteen hours before `sshd` came back. Outage
+      fallout, not an rpi5 fault. **Confirm the next scheduled run clears it** rather than
+      assuming; this is the second time this unit has failed for days (see the 2026-08-04
+      note in `lab-alerts.yaml`).
 - [ ] `monitoring-prometheus-node-exporter-fmxwl` has been crashlooping for **18 days** —
       unrelated to this incident and predating it. Worth its own look; it is the H4's
       node-exporter, so its absence is a monitoring blind spot on the most important host.
 - [ ] Consider whether other units depend on `microshift-lvm-loop.service` implicitly and
       would benefit from the same explicit `x-systemd.requires=`.
+- [ ] BACKLOG §1.12 — the unexplained 15-day lldap backup gap found while reading restic
+      snapshots during this recovery.
+- [ ] BACKLOG §3.14 — Prometheus evicts inside its nominal 30d retention, which is why that
+      gap can no longer be investigated.
 
 ## Lessons
 
@@ -151,3 +234,24 @@ one target, or a source/target pair. Empty output was read as "nothing is mounte
 times before the syntax was questioned. All four were mounted the whole time. Same failure
 class as everything in `CLAUDE.md` → *Check the artifact the consumer reads*: a check that
 cannot succeed reports the same silence as a real negative.
+
+**Silence has at least two causes, and the log format decides which.** The `findmnt` lesson
+above repeated itself twice more during recovery, in a form worth naming separately: an
+Alertmanager receiver that succeeds first time logs nothing, and a `kubectl` selector that
+matches nothing prints the same `No resources found` as a deleted workload. In both cases
+empty output was read as "broken" when it meant "fine" or "wrong question." Before treating
+absence as a finding, establish that the check *would* have produced output had the thing
+been true — a control query against a case known to work costs one command.
+
+**Run the control before publishing the conclusion.** The 15-day lldap gap was about to be
+attributed to a known blind spot in `LabCronJobStale`, on the strength of an empty
+Prometheus query mid-gap. The control — querying `up` at the same timestamp — came back
+empty too: Prometheus had evicted the whole window under `retentionSize: 15GB`, well inside
+its nominal `30d`. The query proved nothing about the metric, and without the control it
+would have gone into this document as fact. It also produced a real finding that nobody was
+looking for (§3.14).
+
+**Ask what the human saw before investigating why they saw nothing.** An hour went into
+finding the fault in an alerting pipeline that had no fault, because "you found this in the
+Argo UI" was silently expanded into "no alert reached you." It had. The cheapest diagnostic
+in the lab is a question.

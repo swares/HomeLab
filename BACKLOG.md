@@ -621,6 +621,46 @@ rather than for the length of a ceremony.
 Related: §2.11 (cannot seal), §2.12 (version lag), §4.6 (Vault restore, now a verified
 manual procedure in `docs/BACKUP-RESTORE.md` §3.4).
 
+### 1.12 lldap had **no backup for 15 days** in August and nothing recorded it
+
+**Found 2026-08-26**, incidentally, while reading `restic snapshots` output during the H4
+recovery. The lldap repo's snapshot list has two holes:
+
+    fd2689a6  2026-07-31  /tmp/lldap.sql
+    ...
+    fe9f1e59  2026-08-04 15:28  /tmp/lldap.sql     <- last before the gap
+    4ad08fd9  2026-08-19 02:30  /dump/lldap.sql    <- first after it
+
+That is **15 days with no lldap backup**, plus a shorter 07-27 → 07-30 hole earlier. The
+path changes across the gap (`/data/users.db` → `/tmp/lldap.sql` → `/dump/lldap.sql`), so
+the boundaries look like job-spec rewrites rather than infrastructure failure — the 08-02
+hard-NFS incident in §1.8 sits immediately before the first one, and lldap's Argo app last
+synced **08-04 13:14**, two hours before the last good snapshot.
+
+**What makes this a §1 item rather than a monitoring one:** for 15 days the only copy of
+the lab's identity database was whatever `lldap-data` held on a single `local-path` PV. The
+directory service that every other service authenticates against had no copy-of-record.
+Nobody knew until three timestamps were read three weeks later, by accident, while looking
+for something else.
+
+**It is also no longer investigable.** Prometheus has evicted that window (§3.14), the
+Kubernetes events expired within the hour, and the Job objects rotated out. Three restic
+snapshot IDs are the entire surviving record of a two-week outage. This is the concrete
+case for `docs/LEDGER-DESIGN.md`: not "it would be nice to query history" but "a two-week
+failure of the identity database's only backup left no evidence anywhere except a file
+listing."
+
+**To do:**
+
+- [ ] `git log -- gitops/workloads/lldap/backup-cronjob.yaml` across 08-04 → 08-19 and
+      identify what changed. The answer is in git even though it is nowhere else.
+- [ ] Whatever broke it, add the failure mode to the CronJob's comments — this is the
+      second lldap backup outage in a month (§1.8 was the first) and both were found by
+      accident.
+- [ ] Decide whether §3.5's never-succeeded blind spot was the reason it went unseen. Do
+      **not** assume it was: the metric history that would prove it is gone, and the
+      2026-08-26 investigation nearly recorded that assumption as fact.
+
 ### 1.4 ~~`storage.yml` can `mkfs` a cold mirror by unstable device name~~ — **FIXED 2026-08-21, one step left**
 `docs/REVIEW-2026-07-24.md:291` (H15)
 
@@ -1022,6 +1062,46 @@ against the 25h threshold.*
 ### 3.5 A CronJob that has never succeeded is invisible
 `gitops/workloads/monitoring/lab-alerts.yaml:262-269` — `LabCronJobStale` keys off
 `kube_cronjob_status_last_successful_time`, which does not exist until the first success.
+
+**2026-08-26:** this is the obvious explanation for the 15-day lldap backup gap (§1.12),
+and it remains **unproven** — the metric history that would confirm or refute it has been
+evicted (§3.14). Recorded here so the next person does not mistake a plausible fit for a
+diagnosis. The fix is worth making on its own merits either way; the sketch is already in
+the rule's comment (`kube_cronjob_info unless on(namespace, cronjob) …`).
+
+### 3.14 Prometheus evicts well inside its nominal 30-day retention
+
+**Found 2026-08-26.** `gitops/apps/monitoring.yaml:156-157` sets `retention: 30d` and
+`retentionSize: "15GB"`. Whichever limit is reached first wins, and **`retentionSize` is
+winning by a wide margin**: a query for `up` at ~2026-08-11 — fifteen days back, half the
+nominal window — returned an empty vector. There is no data at all before roughly two
+weeks ago.
+
+This was found by running a control query, not by looking for it. An empty result for
+`kube_cronjob_status_last_successful_time` mid-August was about to be recorded as proof
+that §3.5's blind spot caused the §1.12 lldap gap. Querying `up` at the same instant
+returned empty as well, which meant the first query had proved nothing.
+
+**Why it matters beyond the one investigation:** `30d` appears in the config, in the docs
+and in everyone's head. The actual answer to "what did this look like two weeks ago" is
+*nothing*. Any post-incident analysis reaching back further than about a fortnight will
+silently return empty vectors that look like healthy zeroes or absent series — and an
+empty result from Prometheus is indistinguishable from a metric that never existed.
+
+**To do:**
+
+- [ ] Measure the real horizon rather than guessing:
+      `prometheus_tsdb_lowest_timestamp_seconds`, and
+      `prometheus_tsdb_storage_blocks_bytes` against the 15GB cap.
+- [ ] Decide which limit is the honest one and make the config say so. Either raise
+      `retentionSize` (needs PV headroom — check before, per §4's disk history) or lower
+      `retention` to the truth so the number in git matches the number in the TSDB.
+- [ ] Alert when the actual horizon falls below the intended one. A retention that quietly
+      shrinks is the same class of fault as a backup that quietly stops: the config keeps
+      claiming a guarantee the system stopped providing.
+- [ ] Feed the real number into `docs/LEDGER-DESIGN.md`. The ledger's premise is that
+      Prometheus covers the recent window and the ledger covers the durable one — the
+      boundary is ~14 days, not 30, and the design should say the measured figure.
 
 ### 3.6 `.github/workflows/sync-check.yml` performs no sync check
 `:17-30` — named `Post-merge notice`, does nothing but `echo`, because hosted runners
@@ -2065,6 +2145,38 @@ Sequencing that made it safe: steps 1 and 2 were inert — they created an ident
 configured Vault to accept it, while ESO carried on using the static token. Step 2 ended
 with a **real login**, printed explicitly, so step 3 was taken on evidence rather than
 expectation.
+
+> **CORRECTION, 2026-08-26. Step 3 shipped broken, and the paragraph above is how it was
+> missed.** The `serviceAccountRef` was written without a `namespace`. A ClusterSecretStore
+> has no namespace of its own, so the reference resolved against *each ExternalSecret's*
+> namespace — ESO looked for an `external-secrets` ServiceAccount in `immich`, `monitoring`,
+> `semaphore`, `lldap` and the rest, and failed all sixteen:
+>
+>     cannot request Kubernetes service account token for service account
+>     "external-secrets": serviceaccounts "external-secrets" not found
+>
+> It surfaced only three days later, after the H4 recovery, as ten `Degraded` Argo
+> Applications.
+>
+> **The `refreshTime` evidence was wrong, and wrong in the way this entry warns about.**
+> Sixteen ExternalSecrets sharing a `refreshTime` inside two seconds proved the operator
+> reconciled them; it did not prove any of them *authenticated*. A reconcile that fails
+> stamps the same field as one that succeeds. The column that would have shown it was
+> `READY`, which read `SecretSyncedError`.
+>
+> So this section correctly rejected `Ready: True` as proof — and then substituted a
+> different signal that also could not distinguish success from failure. **"Verify by
+> content, not condition" is not a rule about which field to read; it is a rule about
+> finding a value that the failure case cannot produce.** `refreshTime` advances either way.
+>
+> The `ClusterSecretStore` also reported `Ready: True` throughout, because store validation
+> never exercises the ServiceAccount lookup — the health signal closest to the fault was
+> structurally incapable of seeing it.
+>
+> Fixed by adding `namespace: external-secrets`, with the reasoning inline at
+> `gitops/workloads/immich/external-secret.yaml`. All 16 now read `SecretSynced` / `True`.
+> Kubernetes auth itself was never the problem: the design was sound, the deadline is
+> genuinely gone, and one missing field made it inoperative for three days.
 
 - [x] **Cleanup done 2026-08-23.** Static token revoked (via the environment, never on a
       command line — §2.13), the `vault-token` Secret deleted, `secret/lab/eso` removed.
