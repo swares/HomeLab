@@ -621,7 +621,52 @@ rather than for the length of a ceremony.
 Related: §2.11 (cannot seal), §2.12 (version lag), §4.6 (Vault restore, now a verified
 manual procedure in `docs/BACKUP-RESTORE.md` §3.4).
 
-### 1.12 lldap had **no backup for 15 days** in August and nothing recorded it
+### 1.12 lldap's backups failed intermittently through August — ~~15-day gap~~ **CORRECTED 2026-08-27**
+
+> **CORRECTION, and the ledger's first act was to make it.** This entry was written
+> hours earlier claiming a single continuous **15-day gap, 2026-08-04 → 08-19**. That is
+> wrong. Querying `/var/lib/lab-ledger` — populated the same evening by backfilling every
+> restic snapshot — produced:
+>
+>     2026-08-04 15:28  fe9f1e59  /tmp/lldap.sql
+>     2026-08-09 02:30  7f8b5e42  /dump/lldap.sql     <- absent from the listing I read
+>     2026-08-16 02:30  c519b63f  /dump/lldap.sql     <- absent from the listing I read
+>     2026-08-17 … 08-22  daily
+>
+> Confirmed directly against the repo: `restic snapshots --tag lldap` shows both.
+>
+> **The real shape is two gaps of 5 and 7 days, not one of 15** — plus two-day gaps on
+> 07-27 and 07-30 that nobody noticed at all. That is a materially different diagnosis:
+> **intermittent failure, not a sustained outage**, which points away from "the 08-04
+> Argo sync broke it and it stayed broken" and toward something that fails most nights
+> and occasionally succeeds.
+>
+> **How the error was made.** The evidence was the backup job's own
+> "Recent lldap snapshots" output, which showed 15 snapshots jumping 08-04 → 08-19. I
+> read absence *in that listing* as absence *of backups*, without establishing that the
+> listing was complete. It was not. Why the job prints an incomplete list is itself an
+> open question and worth chasing — a backup job that under-reports its own history is a
+> trap for the next person.
+>
+> This is the same failure as `findmnt`, `Reach 0`, and the empty Prometheus vector:
+> **absence in a view is not absence in the world, until you have shown the view can
+> see everything.** It is now recorded four times in one day across three files.
+>
+> **What the ledger changes:** the corrected timeline came from one `jq` query against a
+> store that did not exist twelve hours earlier, on data it backfilled for free. The
+> design argued this in the abstract (§6, contradiction detection); this is the first
+> instance, and the record it contradicted was fresh, confident, and mine.
+
+**To do (revised):**
+
+- [ ] Establish why `2026-08-05..08` and `08-10..15` produced no snapshot while
+      08-09 and 08-16 did. Intermittent success rules out a simple "job broken since
+      08-04" story.
+- [ ] Find out why the backup job's own snapshot listing omitted 08-09 and 08-16.
+
+---
+
+### ~~1.12 lldap had no backup for 15 days in August and nothing recorded it~~ (original entry, retained)
 
 **Found 2026-08-26**, incidentally, while reading `restic snapshots` output during the H4
 recovery. The lldap repo's snapshot list has two holes:
