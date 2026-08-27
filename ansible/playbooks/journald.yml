@@ -36,13 +36,50 @@
         owner: root
         group: root
 
-    # Small-disk hosts (SBCs on SD/eMMC) get a much smaller cap. 500M of journal
-    # on a 16-32G SD card is both a space and a wear problem, and these hosts
-    # produce far less log volume than the cluster nodes.
+    # SIZE THE CAP AGAINST THE FILESYSTEM, NOT AGAINST THE ARCHITECTURE.
+    #
+    # The first version of this used a flat 100M for aarch64/armv7l. That was
+    # wrong in a way that made things worse on 2026-08-27: Orange Pi's ramlog
+    # mounts /var/log as a 50M zram device (SIZE=50M in
+    # /etc/default/orangepi-ramlog), so a 100M journal cap is twice the
+    # filesystem it lives on. opi5pro-2 was found at 189.5M on a 188M zram,
+    # 100% full — a condition this playbook caused rather than found.
+    #
+    # Measure /var/log and take 40% of it, bounded by the architecture default.
+    # 40% leaves room for everything else in /var/log (nginx, dpkg, wtmp) and
+    # for the vacuum to have somewhere to stand.
+    - name: Measure the filesystem /var/log lives on
+      ansible.builtin.command: findmnt -bno SIZE --target /var/log
+      register: _varlog_size
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # NOTE THE ZERO CASE. A first draft took min(40% of measured, arch default)
+    # with no floor, so a failed or empty `findmnt` produced SystemMaxUse=0M —
+    # journald keeping nothing at all, on every host, silently. Caught by running
+    # the arithmetic against the sizes actually seen tonight before shipping it.
+    # If the measurement fails, fall back to the architecture default rather than
+    # trusting a number the measurement did not produce.
     - name: Decide the journal cap for this host
       ansible.builtin.set_fact:
-        _journal_max: "{{ '100M' if ansible_architecture in ['aarch64', 'armv7l'] else '500M' }}"
+        _journal_default_max: "{{ 100 if ansible_architecture in ['aarch64', 'armv7l'] else 500 }}"
+        _varlog_mb: "{{ (_varlog_size.stdout | default('0') | trim | int) // 1048576 }}"
+
+    - name: Apply the measured cap, or the default if the measurement failed
+      ansible.builtin.set_fact:
+        _journal_max: >-
+          {{ (_journal_default_max | int) if (_varlog_mb | int) < 1
+             else [ ((_varlog_mb | int) * 4 // 10), (_journal_default_max | int) ] | min }}M
         _journal_keep_free: "{{ '200M' if ansible_architecture in ['aarch64', 'armv7l'] else '1G' }}"
+
+    - name: Show the cap chosen and why
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: /var/log is {{ _varlog_mb }}M,
+          journal capped at {{ _journal_max | trim }}
+          {{ '(measurement failed — using architecture default)'
+             if (_varlog_mb | int) < 1 else '' }}
 
     # PERSISTENCE IS THE POINT OF THIS TASK, added 2026-08-27.
     #
