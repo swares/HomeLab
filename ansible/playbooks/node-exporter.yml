@@ -17,6 +17,80 @@
 # Run:
 #   ansible-playbook -i inventory/hosts.yml playbooks/node-exporter.yml
 #
+# ── Play 0: cluster nodes must NOT run a host node_exporter ──────────────────
+#
+# The header above has always SAID cluster nodes get the DaemonSet only. Nothing
+# enforced it, and on 2026-08-27 the H4 was found running the Debian package
+# anyway — almost certainly a MicroShift-era leftover that survived the k3s
+# rebuild.
+#
+# The cost: `prometheus-node` (PID 986, started at boot) owned 0.0.0.0:9100, so
+# the DaemonSet pod could never bind and had been in CrashLoopBackOff for
+# **19 days** — 273 restarts, firing KubePodCrashLooping and
+# KubeDaemonSetRolloutStuck the whole time. The pod's only log line that mattered:
+#
+#     listen tcp 0.0.0.0:9100: bind: address already in use
+#
+# This exact collision was ALREADY documented in inventory/hosts.yml, in the
+# comment excluding gitlab-1 ("GitLab Omnibus ships its own node_exporter ...
+# so the Debian package can't bind 0.0.0.0:9100 and its unit dies on start").
+# Same conflict, opposite winner. Nobody connected the two for 19 days.
+#
+# Proven before removing, not assumed: with the host unit stopped and the pod
+# deleted to clear its 5-minute backoff, the pod reached 1/1 Running in 25s and
+# `curl localhost:9100/metrics | grep -c node_systemd_unit_state` returned **52**
+# on the H4. The control on n150-1 returned **0**, which is CORRECT — the
+# collector is scoped to backup-.+\.(service|timer) and those units exist only on
+# odroid-nas. Without that control the 52 would have meant nothing.
+#
+# `state: absent` rather than `stopped`: stopping is not enough, because the unit
+# starts at boot and wins the race against the pod every time.
+- name: Ensure cluster nodes do not run a host node_exporter
+  hosts: k3s_server:k3s_agents
+  become: true
+
+  tasks:
+    - name: Remove the Debian node_exporter package from cluster nodes
+      ansible.builtin.package:
+        name: prometheus-node-exporter
+        state: absent
+      when: ansible_os_family == 'Debian'
+      register: _removed
+
+    # Verify by what is LISTENING, not by what the package manager reported.
+    # An absent package and a free port are different claims; only the second
+    # one lets the DaemonSet pod start.
+    - name: Check what owns port 9100
+      ansible.builtin.shell: |
+        set -o pipefail
+        ss -lntp 2>/dev/null | grep ':9100 ' || true
+      args:
+        executable: /bin/bash
+      register: _port9100
+      changed_when: false
+      check_mode: false
+
+    - name: Report the holder of port 9100
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} port 9100:
+          {{ _port9100.stdout | default('(nothing listening — the DaemonSet pod will bind on its next start)') }}
+
+    # The pod is expected to hold 9100 on a healthy cluster node. Anything whose
+    # command is NOT the containerised exporter means a host process has taken it
+    # again and the pod will crashloop silently for as long as nobody looks.
+    - name: Warn if a host process still holds 9100
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: a non-DaemonSet process holds 9100 —
+          {{ _port9100.stdout }}. The kube-prometheus-stack pod cannot bind and
+          will CrashLoopBackOff. See BACKLOG.md and the gitlab-1 note in
+          inventory/hosts.yml.
+      when:
+        - _port9100.stdout | default('') | length > 0
+        - _port9100.stdout is search('prometheus-node')
+        - not ansible_check_mode
+
 - name: Install and enable node_exporter on non-cluster hosts
   hosts: node_exporter
   become: true
