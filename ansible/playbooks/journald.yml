@@ -36,7 +36,33 @@
         owner: root
         group: root
 
-    - name: Write journald size cap drop-in
+    # Small-disk hosts (SBCs on SD/eMMC) get a much smaller cap. 500M of journal
+    # on a 16-32G SD card is both a space and a wear problem, and these hosts
+    # produce far less log volume than the cluster nodes.
+    - name: Decide the journal cap for this host
+      ansible.builtin.set_fact:
+        _journal_max: "{{ '100M' if ansible_architecture in ['aarch64', 'armv7l'] else '500M' }}"
+        _journal_keep_free: "{{ '200M' if ansible_architecture in ['aarch64', 'armv7l'] else '1G' }}"
+
+    # PERSISTENCE IS THE POINT OF THIS TASK, added 2026-08-27.
+    #
+    # `Storage=` was previously unset, which means the systemd default `auto`:
+    # persistent ONLY IF /var/log/journal already exists. On most Armbian images
+    # it does not, so those hosts logged to RAM (/run/log/journal) and
+    # **every reboot or power cut destroyed the entire journal**.
+    #
+    # That is not a tidiness issue, it is why a recurring fault has never been
+    # diagnosed. The Orange Pi Zero 2W boards (WiFi-only, .184 and .99) keep
+    # losing their IP and needing a power cycle — and the power cycle is also
+    # what erases the evidence of why. On 2026-08-27 both were recovered that
+    # way with nothing left to read. The fix for the symptom destroys the cause.
+    #
+    # Ordering matters: creating /var/log/journal is what actually makes
+    # persistence take effect, so it is a separate task below and both are
+    # required. Setting Storage=persistent without the directory works (journald
+    # creates it), but the explicit directory task makes the intent legible and
+    # survives someone later trimming the drop-in.
+    - name: Write journald drop-in (size cap + persistent storage)
       ansible.builtin.copy:
         dest: /etc/systemd/journald.conf.d/max-use.conf
         mode: "0644"
@@ -44,22 +70,37 @@
         group: root
         content: |
           # Managed by Ansible — ansible/playbooks/journald.yml
-          # Caps journal to 500M and keeps 1G free on filesystem.
-          # Without this, Ubuntu defaults to 10% of filesystem (4.9G on n150-1's
-          # 49G root) which caused disk pressure + pod eviction on 2026-07-23.
+          #
+          # SystemMaxUse: without a cap, Ubuntu defaults to 10% of the filesystem
+          # (4.9G on n150-1's 49G root) which caused disk pressure + pod eviction
+          # on 2026-07-23. ARM SBCs get a smaller cap for SD-card wear.
+          #
+          # Storage=persistent: the default `auto` keeps the journal in RAM
+          # unless /var/log/journal exists, so a power cycle takes the logs with
+          # it. See the playbook for why that matters here.
           [Journal]
-          SystemMaxUse=500M
-          SystemKeepFree=1G
+          Storage=persistent
+          SystemMaxUse={{ _journal_max }}
+          SystemKeepFree={{ _journal_keep_free }}
       register: journald_conf
+
+    - name: Create /var/log/journal so persistence actually takes effect
+      ansible.builtin.file:
+        path: /var/log/journal
+        state: directory
+        mode: "2755"
+        owner: root
+        group: systemd-journal
+      register: journal_dir
 
     - name: Restart systemd-journald to apply new limits
       ansible.builtin.systemd:
         name: systemd-journald
         state: restarted
-      when: journald_conf.changed
+      when: journald_conf.changed or journal_dir.changed
 
     - name: Vacuum journals to enforce new size limit immediately
-      ansible.builtin.command: journalctl --vacuum-size=500M
+      ansible.builtin.command: "journalctl --vacuum-size={{ _journal_max }}"
       when: journald_conf.changed
       changed_when: true
 
@@ -67,7 +108,45 @@
       ansible.builtin.command: journalctl --disk-usage
       register: disk_usage
       changed_when: false
+      check_mode: false
 
-    - name: Show journal usage on {{ inventory_hostname }}
+    # VERIFY BY WHAT JOURNALD REPORTS, NOT BY THE FILE WE JUST WROTE.
+    #
+    # A drop-in saying Storage=persistent and a journal actually being persistent
+    # are different claims — this is the repo's recurring lesson (CLAUDE.md,
+    # "check the artifact the consumer reads"). journalctl's own header names the
+    # directory it is using: /var/log/journal for persistent, /run/log/journal
+    # for volatile. That string is the artifact.
+    - name: Ask journald where it is actually storing logs
+      ansible.builtin.shell: |
+        set -o pipefail
+        journalctl --header 2>/dev/null | grep -m1 -oE '/(var|run)/log/journal' || echo UNKNOWN
+      args:
+        executable: /bin/bash
+      register: _journal_path
+      changed_when: false
+      check_mode: false
+
+    - name: Show journal storage and usage on {{ inventory_hostname }}
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: {{ disk_usage.stdout }}"
+        msg: >-
+          {{ inventory_hostname }}: {{ disk_usage.stdout }} |
+          storage={{ _journal_path.stdout | default('UNKNOWN') }}
+          {{ '(VOLATILE — logs will not survive a reboot)'
+             if '/run/log/journal' in (_journal_path.stdout | default('')) else '' }}
+
+    # A value the failure case cannot produce. /run/log/journal means the journal
+    # is still in RAM whatever the drop-in says — which is the exact condition
+    # that has made the Zero 2W dropouts undiagnosable.
+    - name: Fail if the journal is still volatile
+      ansible.builtin.assert:
+        that:
+          - "'/run/log/journal' not in (_journal_path.stdout | default(''))"
+          - "'UNKNOWN' not in (_journal_path.stdout | default('UNKNOWN'))"
+        fail_msg: >-
+          {{ inventory_hostname }} is still logging to RAM
+          ({{ _journal_path.stdout | default('UNKNOWN') }}). A reboot or power cut
+          will erase the journal. Check /var/log/journal exists and is owned by
+          root:systemd-journal, then restart systemd-journald.
+        success_msg: "{{ inventory_hostname }} journal is persistent ({{ _journal_path.stdout }})"
+      when: not ansible_check_mode
