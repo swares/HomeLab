@@ -142,6 +142,29 @@ deleting it."**
   chart versions join one hop later via `targetRevision` in `gitops/apps/*.yaml` and the
   Renovate PR that bumped it. Do not assume a 40-hex string.
 
+### 3.2a Phase 2 — BUILT 2026-08-27, and two sources this design had missed
+
+`ansible/playbooks/ledger.yml` installs the first two collectors on the H4. Both were
+chosen from evidence rather than from this table, after a session that surfaced nine
+faults — and **neither was listed above.**
+
+| Source | Why it earned first place |
+|---|---|
+| **restic snapshot inventory** (`scripts/ledger-collect-restic.sh`) | §3.2 listed "backup outcomes" as a journal-parsing task. That is the weaker source: journals expire, and **a backup that never runs writes no journal line at all**. The snapshot list is the artifact only a successful backup can produce (§5), and it is what actually found the fifteen-day lldap gap (BACKLOG §1.12) after events, metrics and Jobs had all expired. It also **backfills complete** — restic already holds the history — so absence is meaningful from day one rather than from first light |
+| **host reboots and package upgrades** (`scripts/ledger-collect-hosts.sh`) | Entirely absent from this design, and the root cause of BACKLOG §1.13: `apt-daily-upgrade` at 06:10:49 → systemd re-exec → networkd stops → chrony parks all 17 sources, on an etcd voter, for 18 hours. Four journal lines, eighteen hours from expiry, on a host whose journal was volatile at the time. "What upgraded or rebooted just before this broke" is the most common correlation question in a lab running unattended-upgrades nightly, and nothing recorded it |
+
+**The generalisable lesson:** this design chose sources by asking *what is being
+destroyed* (§3.1, correctly). It did not ask *what actually answered the last hard
+question* — and the answer there was a durable inventory nobody thought of as a log,
+plus a nightly automated change nobody thought of as an event.
+
+**A structural limit worth recording.** For the Orange Pi Zero 2W dropouts, no central
+collection can help: the failure *is* loss of network, so promtail cannot ship the
+window that matters, and neither can this collector, which reaches hosts over SSH. Only
+local durable storage works — hence `ansible/playbooks/journald.yml`. **Shipping is
+structurally incapable of capturing a fault whose symptom is that the host stopped
+being reachable.** Any future source should be checked against that test.
+
 ### 3.3 Explicitly out of scope
 
 Pod logs (Loki has them), metrics (Prometheus has them), and NAS file activity. The
@@ -374,6 +397,34 @@ Candidates and their known shape against those criteria:
 - **Postgres** — worth a serious look given the ledger is small, relational, and this lab already runs several instances. Full-text search plus `pgvector` covers (1); ordinary SQL covers (2) better than either of the above. Do not attach to Immich's instance — it is app-owned and upgrade-coupled.
 
 The Phase 1 capture work is engine-independent, which is why it goes first.
+
+### 8.1 Storage, decided 2026-08-27 — JSONL on disk, engine still deferred
+
+Phase 2 writes **append-only JSONL to `/var/lib/lab-ledger/YYYY-MM.jsonl`** on the H4's
+NVMe, included in `backup-nas` so it reaches both cold mirrors and offsite through the
+existing chain.
+
+This is not a decision *against* the engines above; it is what keeps the choice open.
+A file has three properties an engine has to earn:
+
+- **It cannot silently stop working.** Every engine in this lab has, at some point,
+  reported healthy while doing nothing — Argo Synced on a discarded Helm value (§3.9),
+  ESO `Ready: True` with sixteen secrets failing, a config-correct journald writing to
+  RAM. A file that stops being appended to is visible with `wc -l`.
+- **It is queryable today.** `jq` answers "what changed near 06:11 on 2026-08-26"
+  without standing anything up. That question was worth an hour this week.
+- **It replays.** Kilobytes a day of structured lines import into OpenSearch, Qdrant or
+  Postgres whenever the criteria above are actually tested against a real corpus —
+  which is a better basis for choosing than a specification.
+
+**Why not the alternatives considered:** a git-committed ledger maximises durability but
+fights the two-checkouts rule and grows the repo with machine noise; a dedicated restic
+repo on the cold tier adds to the rotation and touches disks `CLAUDE.md` is strict
+about; `/srv/nas` is NAS data and off-limits. The hot tier plus the existing backup
+chain costs one line in `backup-nas.service.j2`.
+
+**Revisit when** the corpus exceeds roughly a gigabyte, or when a question needs a join
+`jq` cannot express in one pass. Neither is close.
 
 ---
 
