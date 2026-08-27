@@ -1187,6 +1187,20 @@ line was the entire diagnosis:
 `node_exporter` inventory group — cluster nodes are meant to get metrics from the
 DaemonSet — so it was unmanaged drift, most likely a MicroShift-era leftover.
 
+**Scope correction, added after the fix ran: the package was on all three x86 cluster
+nodes**, not just the H4 — `state: absent` reported `changed` on `h4-core`, `n150-1` and
+`n150-2` (the two opi5pro agents were clean). The N150s' pods were healthy, so their copy
+of the unit must have been losing the boot race quietly and sitting failed or disabled.
+The H4 is simply where the host service won the port and the condition became visible.
+**A 19-day crashloop was the loud instance of a silent condition on three machines** — and
+the original wording here implied an H4-only problem, which is the same tense-and-scope
+error that made the `.99` comment in `gitops/apps/monitoring.yaml` misleading a month
+after it was written.
+
+Confirmed after the run: all five cluster nodes show `node_exporter` (the DaemonSet
+binary) on 9100, and every external scrape target is `up` except `.184` and `.99`, which
+are physically down.
+
 **This was already written down, about a different host.** The comment excluding
 `gitlab-1` from the `node_exporter` group describes the identical collision: "GitLab
 Omnibus ships its own node_exporter already bound to 127.0.0.1:9100, so the Debian package
