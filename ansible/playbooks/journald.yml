@@ -190,16 +190,45 @@
     # A value the failure case cannot produce. /run/log/journal means the journal
     # is still in RAM whatever the drop-in says — which is the exact condition
     # that has made the Zero 2W dropouts undiagnosable.
+    # THE PATH IS NOT THE POINT — THE DURABILITY OF THE PATH IS.
+    #
+    # Found 2026-08-27, after the check above had already passed 16 hosts.
+    # opi5pro-2 refused to leave /run/log/journal, and the reason was:
+    #
+    #     /dev/zram1  188M  184M  0  100%  /var/log
+    #
+    # Armbian's ramlog puts /var/log on a zram device. journald was right to
+    # refuse it — persisting into RAM is not persisting — but the check as
+    # written would have reported "persistent" on any host where /var/log is
+    # zram or tmpfs and journald had gone there anyway. A green result on a host
+    # that still loses its journal on a power cut is the precise failure this
+    # playbook exists to prevent, so the check has to look one level deeper than
+    # the path string.
+    - name: Find out what filesystem /var/log actually lives on
+      ansible.builtin.command: findmnt -no SOURCE,FSTYPE --target /var/log
+      register: _varlog_fs
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
     - name: Fail if the journal is still volatile
       ansible.builtin.assert:
         that:
           - _journal_path.stdout | trim == '/var/log/journal'
+          - not (_varlog_fs.stdout | default('') is search('zram|tmpfs|ramfs'))
         fail_msg: >-
-          {{ inventory_hostname }} journal is at
-          '{{ _journal_path.stdout | trim }}' — expected /var/log/journal.
-          '/run/log/journal' means it is still in RAM and a reboot or power cut
-          will erase it; run `journalctl --flush`. 'UNKNOWN' means the check
-          itself could not read journalctl --header, which is not the same
-          finding — investigate the check before the host.
-        success_msg: "{{ inventory_hostname }} journal is persistent ({{ _journal_path.stdout | trim }})"
+          {{ inventory_hostname }} journal is NOT durable.
+          journald path: '{{ _journal_path.stdout | trim }}';
+          /var/log lives on: '{{ _varlog_fs.stdout | default('?') | trim }}'.
+          — '/run/log/journal' means it is still in RAM; run `journalctl --flush`.
+          — a zram/tmpfs/ramfs /var/log means persistence is IMPOSSIBLE there
+            (Armbian ramlog). Disable the ramlog service, or accept it and rely
+            on shipping logs off-box; do not "fix" it by pointing journald at a
+            RAM disk.
+          — 'UNKNOWN' means the check could not read journalctl --header, which
+            is a different finding: investigate the check before the host.
+        success_msg: >-
+          {{ inventory_hostname }} journal is durable
+          ({{ _journal_path.stdout | trim }} on
+          {{ _varlog_fs.stdout | default('?') | trim }})
       when: not ansible_check_mode
