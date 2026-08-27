@@ -143,11 +143,27 @@
     - name: Collect service facts
       ansible.builtin.service_facts:
 
+    # `state: started`, NOT `restarted`.
+    #
+    # This read `state: restarted` until 2026-08-27, which bounced node_exporter
+    # on all five non-cluster hosts on EVERY run — three consecutive real runs
+    # each reported `changed` on rpi5, rpi4b, opi-zero2w-2, opi-zero2w-3 and
+    # octopi-dns, and a fourth would have too.
+    #
+    # Two costs, both quiet. Each run punches a scrape gap into five hosts'
+    # metrics — short enough that LabExternalHostDown's `for: 3m` never fires, so
+    # nobody sees it. And it makes `changed` meaningless: a playbook that always
+    # reports a change cannot tell you whether it changed anything, which is
+    # precisely the signal BACKLOG §3.11 wants from a scheduled `--check`.
+    #
+    # `started` is idempotent. If a future change needs a restart, notify a
+    # handler from the task that made the change, so the restart is caused by
+    # something rather than by the clock.
     - name: Enable and start node_exporter
       ansible.builtin.systemd:
         name: prometheus-node-exporter
         enabled: true
-        state: restarted
+        state: started
       when: "'prometheus-node-exporter.service' in ansible_facts.services"
 
     - name: Allow node_exporter port through ufw (Debian, if active)
