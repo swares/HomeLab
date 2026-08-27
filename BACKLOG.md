@@ -1174,6 +1174,55 @@ empty result from Prometheus is indistinguishable from a metric that never exist
       Prometheus covers the recent window and the ledger covers the durable one — the
       boundary is ~14 days, not 30, and the design should say the measured figure.
 
+### 3.15 ~~The H4's node-exporter pod crashlooped for 19 days~~ — **FIXED 2026-08-27**
+
+`monitoring-prometheus-node-exporter-fmxwl` was in CrashLoopBackOff for **19 days**, 273
+restarts, firing `KubePodCrashLooping` and `KubeDaemonSetRolloutStuck` throughout. One log
+line was the entire diagnosis:
+
+    listen tcp 0.0.0.0:9100: bind: address already in use
+
+`ss -lntp` named the holder: `prometheus-node`, PID 986, the **Debian
+`prometheus-node-exporter` package** running as a host service from boot. It is not in the
+`node_exporter` inventory group — cluster nodes are meant to get metrics from the
+DaemonSet — so it was unmanaged drift, most likely a MicroShift-era leftover.
+
+**This was already written down, about a different host.** The comment excluding
+`gitlab-1` from the `node_exporter` group describes the identical collision: "GitLab
+Omnibus ships its own node_exporter already bound to 127.0.0.1:9100, so the Debian package
+can't bind 0.0.0.0:9100 and its unit dies on start." Same conflict, opposite winner, and
+nobody connected the two for nineteen days.
+
+**Two beliefs it corrects:**
+
+- It was recorded as "a monitoring blind spot on the most important host." It was not —
+  the host package was serving metrics the whole time, including `node_systemd_*`. The
+  cost was 19 days of alert noise, not missing data.
+- The 2026-08-02 and 08-07 DaemonSet work (D-Bus socket mount, `appArmorProfile:
+  Unconfined`, widening `--collector.systemd.unit-include`) was justified on the grounds
+  that "backup-nas.timer and backup-etcd.timer exist only on odroid-nas." Those series were
+  coming from the **host package**. That work was right for the other nodes and was never
+  what delivered the H4's timer metrics.
+
+**Verified before removing, and the control is the point.** With the host unit stopped and
+the pod deleted to clear its 5-minute backoff, the pod reached `1/1 Running` in 25 seconds
+and returned **52** `node_systemd_unit_state` series. The control on n150-1 returned **0** —
+correct, because the collector is scoped to `backup-.+\.(service|timer)` and those units
+exist only on odroid-nas. Without running the control, 52 was a number with no scale and 0
+would have looked like failure.
+
+A first attempt at this test returned 0 on the H4 and proved nothing: the host unit was
+stopped and the pod had not yet retried through its backoff, so **nothing was listening at
+all**. The check had two ways to produce a zero and only one was accounted for.
+
+**Fixed** in `ansible/playbooks/node-exporter.yml` — a new play removes the package from
+`k3s_server:k3s_agents`, then verifies by what is *listening* rather than by what the
+package manager said, and warns by name if a host process holds 9100 on a cluster node.
+
+- [ ] Run it, then confirm the H4 target is `up` in Prometheus and
+      `node_systemd_unit_state{name=~"backup-.+"}` still has series — those feed
+      `LabBackupUnitFailed` on the one host where backups run.
+
 ### 3.6 `.github/workflows/sync-check.yml` performs no sync check
 `:17-30` — named `Post-merge notice`, does nothing but `echo`, because hosted runners
 cannot reach the LAN.
