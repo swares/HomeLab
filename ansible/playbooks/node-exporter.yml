@@ -9,8 +9,19 @@
 # no exporter at all while Prometheus scraped them. Corrected 2026-07-26.
 #
 # Supported OS families:
-#   Debian    — octopi-dns, rpi4b, rpi5, gitlab-1, opi-zero2w-3  (apt)
-#   Archlinux — opi-zero2w-{1,2,4}                               (pacman)
+#   Debian    — octopi-dns, rpi4b, rpi5, gitlab-1, opi-zero2w-3, opi-zero2w-4 (apt)
+#   Archlinux — opi-zero2w-1, opi-zero2w-2                                    (pacman)
+#
+# CORRECTED 2026-08-27. This listed opi-zero2w-4 as Archlinux. It is not: on the
+# first run after that board came back online, it took the Debian path —
+# `Bootstrap python3-apt` and `Install prometheus-node-exporter (Debian)` both
+# ran on it, and the Arch tasks skipped. `ansible_os_family` is the measurement;
+# the comment was the assumption. Whether the board was reimaged or was never
+# Arch is not recoverable from here.
+#
+# docs/HARDWARE.md does NOT repeat this error — it annotates an OS only for
+# Zero 2W #3 ("Armbian Trixie") and is silent about #4. Checked, because the
+# first draft of this comment asserted otherwise without looking.
 #
 # xu3-1 is handled by the second play below (upstream binary, not apt).
 #
@@ -112,11 +123,27 @@
       when: ansible_os_family == 'Debian'
       register: deb_install
 
+    # update_cache split out and marked changed_when: false.
+    #
+    # community.general.pacman reports `changed` for the CACHE REFRESH itself,
+    # not just for installing something. With update_cache on the install task,
+    # opi-zero2w-1 and opi-zero2w-2 reported `changed` on runs where the package
+    # was already present and nothing happened — the same useless-but-truthful
+    # `changed` as the `state: restarted` defect fixed above on 2026-08-27.
+    #
+    # A refreshed package cache is not a change to the host's configuration, so
+    # it should not colour the run's changed count. Keep the two separate and the
+    # install task's `changed` means the package was actually installed.
+    - name: Refresh the pacman cache (Arch)
+      community.general.pacman:
+        update_cache: true
+      when: ansible_os_family == 'Archlinux'
+      changed_when: false
+
     - name: Install prometheus-node-exporter (Arch)
       community.general.pacman:
         name: prometheus-node-exporter
         state: present
-        update_cache: true
       when: ansible_os_family == 'Archlinux'
       register: arch_install
 
