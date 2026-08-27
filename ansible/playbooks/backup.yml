@@ -47,6 +47,65 @@
         name: restic
         state: present
 
+    # BACKLOG §1.7 — restic was installed with a bare `state: present` and nothing
+    # held it, so an unattended `apt upgrade` could move it under the backup path at
+    # any time. Crossing 0.14 reverses `restic copy` argument semantics.
+    #
+    # The copy scripts already guard the version (backup-nas-copy.sh.j2:50-67 and
+    # backup-offsite.sh.j2:64-78 parse it and refuse to guess), so the failure mode
+    # is a dead backup rather than a reversed one. A dead backup is still the wrong
+    # outcome for an upgrade nobody asked for, and it would surface at 01:30.
+    #
+    # Not pinned to a version string: the available version differs by distro and
+    # arch across this fleet, and a pin naming a version the repo does not carry
+    # fails the play on hosts that were previously fine. Hold what is installed;
+    # move it deliberately.
+    - name: Hold restic at the installed version
+      ansible.builtin.dpkg_selections:
+        name: restic
+        selection: hold
+
+    # These two are read-only and must run under --check as well. Ansible skips
+    # `command` tasks in check mode, so without `check_mode: false` the report below
+    # would assert success on a run that verified nothing — CLAUDE.md, written twice
+    # in one day.
+    - name: Read installed restic version
+      ansible.builtin.command: restic version
+      register: restic_installed_version
+      changed_when: false
+      check_mode: false
+
+    - name: Read dpkg's recorded selection for restic
+      ansible.builtin.command: dpkg-query -W -f='${db:Status-Abbrev}' restic
+      register: restic_hold_state
+      changed_when: false
+      check_mode: false
+
+    # Under --check the hold has not been applied yet, so this reports the state as
+    # it actually is rather than failing the run. That output is the drift signal
+    # §3.11 asks for: a host reporting NOT held is a host the play has never reached.
+    - name: Report restic pin state (check mode reports what is, not what would be)
+      ansible.builtin.debug:
+        msg: >-
+          {{ restic_installed_version.stdout_lines[0] | default('restic version unknown') }}
+          — dpkg '{{ restic_hold_state.stdout | trim }}'
+          ({{ 'held' if restic_hold_state.stdout is match('^h') else 'NOT held; this run would apply the hold' }})
+      when: ansible_check_mode
+
+    # The `h` prefix is dpkg's own record of the desired state. `dpkg_selections`
+    # reporting `changed` only says the module ran; this says the hold stuck.
+    - name: Confirm the hold is recorded in dpkg, not merely requested
+      ansible.builtin.assert:
+        that:
+          - restic_hold_state.stdout is match('^h')
+        success_msg: >-
+          {{ restic_installed_version.stdout_lines[0] | default('restic') }} held
+          (dpkg '{{ restic_hold_state.stdout | trim }}')
+        fail_msg: >-
+          restic is NOT held (dpkg '{{ restic_hold_state.stdout | default('unknown') | trim }}').
+          An unattended apt upgrade can still move it under the backup path.
+      when: not ansible_check_mode
+
     - name: Ensure restic password file dir
       ansible.builtin.file:
         path: /etc/restic
