@@ -739,6 +739,63 @@ retention is deleting.
 varies per run, so `--group-by` never matches an existing series. Every cloud snapshot
 is kept forever, and the 10 GB free tier is the ceiling.
 
+### 1.13 An unattended upgrade silently stopped time sync on an etcd voter
+
+**Found 2026-08-26.** n150-2 ran **18 hours with no time synchronisation at all**, and the
+sequence is fully in the journal:
+
+    06:10:49  apt-daily-upgrade.service starts (unattended-upgrades)
+    06:11:37  systemd re-executes, pulled in by a package upgrade
+    06:11:38  Stopping systemd-networkd.service
+    06:11:38  chronyd: "Source <all 17> offline"
+
+chronyd marks a source offline when a transmit returns `ENETUNREACH`, which every source
+did the moment networkd tore down the addresses. networkd returned one second later.
+**chrony did not, and never would have** — it does not retry a source it has marked
+offline. It waits to be told, and nothing on this host could tell it: the chrony package
+ships its come-back-online hooks for **ifupdown** and **dhclient**, and neither is
+installed (`dpkg -l ifupdown` → `un`, no `/etc/network/interfaces`, no
+`isc-dhcp-client`). `networkd-dispatcher` *was* installed with **every hook directory
+empty**. The offline path fired; the online path did not exist.
+
+**Why this is a §1 item.** `apt-daily-upgrade` runs nightly on every Debian/Ubuntu host in
+the lab, so this is reproducible fleet-wide, on any package that restarts networking.
+n150-1 escaped by timing, not configuration — its `chrony.conf` is byte-identical (verified
+by `diff`). It is filed next to §1.7 because it is the same shape: **unattended upgrades
+change running behaviour with nothing watching**, and here the victim was an etcd voter.
+
+**How close it came to mattering, honestly:** the final offset was **4.9 microseconds**.
+Chrony's frequency estimate held the clock accurate for 18 undisciplined hours, so nothing
+broke. The exposure is the next reboot, a warm RTC, or a longer gap — and the fact that
+`systemctl is-active chrony` said `active`, ICMP worked, and the config was correct
+throughout.
+
+**The number that identified it:** `chronyc activity` → `0 sources online / 17 sources
+offline`. `Reach 0` on every source reads identically to a firewall blocking UDP 123, and
+that misreading cost a round trip; the online/offline count is the value the firewall case
+cannot produce.
+
+**Fixed** in `ansible/chrony.yml` — a `/etc/networkd-dispatcher/routable.d/50-chrony` hook
+running `chronyc onoffline` (not `online`: it reconciles against the current routing table,
+so it is correct on a host that genuinely has no route). Plus `LabClockUnsynced` in
+`gitops/workloads/monitoring/lab-alerts.yaml`, critical so it reaches the phone.
+
+**To do:**
+
+- [ ] Run `chrony.yml` `--check` and then for real, so every host gets the hook — this is
+      §3.11 territory: merged is not applied, and nothing reports the gap.
+- [ ] Check whether other hosts are currently parked: `chronyc activity` fleet-wide. Any
+      host that hit an upgrade window since installing networkd-dispatcher could be sitting
+      in this state right now with a plausible-looking clock.
+- [ ] `systemd-networkd-wait-online` returned exit 1 on n150-2 at 06:11:19, *before* the
+      upgrade proceeded — a pre-existing condition, likely the bridge plus k8s veths never
+      reaching "online". Worth its own look; apt believing the network is not ready is not
+      harmless.
+- [ ] Consider whether cluster nodes should hold `systemd` out of unattended-upgrades, or
+      whether the dispatcher hook is sufficient. The hook fixes the symptom class; the
+      broader question is whether etcd voters should self-upgrade networking packages
+      unattended at all.
+
 ### 1.7 Nothing pins restic, so an unattended upgrade can change copy semantics
 **Reframed 2026-08-21 — the original heading described a requirement, not the risk.**
 
