@@ -204,9 +204,21 @@ spec:
                       # training the eye to ignore it. Meanwhile Vault, the Pi-hole
                       # secondary, the 4th DNS server and the build agent were not
                       # scraped at all: real outages there were invisible.
-                      # opi-zero2w-4 was already listed and has in fact been
-                      # unreachable since at least 2026-07-25 (M-new-5) — the
-                      # target was right, nothing was routing the alert anywhere.
+                      # opi-zero2w-4 was already listed and was unreachable on
+                      # 2026-07-25 (M-new-5) — the target was right, nothing was
+                      # routing the alert anywhere.
+                      #
+                      # CORRECTED 2026-08-26. This previously read "has in fact
+                      # been unreachable since at least 2026-07-25", which was
+                      # repeated as current fact a month later and is wrong:
+                      #   max_over_time(up{job="node-exporter-external"}[14d])
+                      # returned 1 for ALL nine targets, including .99 and .184,
+                      # so both were up at some point inside the last fortnight.
+                      # A comment describing a live outage acquires a tense it
+                      # cannot keep. Both boards are down again as of tonight —
+                      # duration unestablished, and Prometheus only retains ~14d
+                      # in practice (§3.14), so bracket it with 7d/3d/1d before
+                      # assuming anything about how long.
                       - 192.168.1.50:9100   # gitlab-1 (GitLab CE VM)
                       - 192.168.1.148:9100  # octopi (DNS primary, Pi-hole)
                       - 192.168.1.116:9100  # rpi4b (DNS secondary, Pi-hole)

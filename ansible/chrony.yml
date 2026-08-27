@@ -90,6 +90,56 @@
       when: not (_is_h4 | bool)
       notify: Restart chrony
 
+    # ── The return path ──────────────────────────────────────────────────────
+    #
+    # WHY THIS HOOK EXISTS. On 2026-08-26 at 06:11:38, n150-2 — an etcd voter —
+    # stopped synchronising time and stayed that way for 18 hours.
+    #
+    #   06:10:49  apt-daily-upgrade.service starts (unattended-upgrades)
+    #   06:11:37  systemd re-executes, pulled in by a package upgrade
+    #   06:11:38  Stopping systemd-networkd.service
+    #   06:11:38  chronyd: "Source <all 17> offline"
+    #
+    # chronyd marks a source OFFLINE when a transmit fails with ENETUNREACH,
+    # which is what every source returned the instant networkd tore down the
+    # addresses and routes. networkd came back one second later. **chrony did
+    # not**, because it never retries a source it has marked offline — it waits
+    # to be told, and on this host nobody could tell it:
+    #
+    #   - the chrony package ships its come-back-online hooks for ifupdown
+    #     (/etc/network/if-up.d/chrony) and dhclient
+    #     (/etc/dhcp/dhclient-exit-hooks.d/chrony)
+    #   - NEITHER is installed here: `dpkg -l ifupdown` reports `un`, there is no
+    #     /etc/network/interfaces, and isc-dhcp-client is absent
+    #   - networkd-dispatcher IS installed and every hook directory was EMPTY
+    #
+    # So the offline path fired and the online path did not exist. The files in
+    # /etc/network/if-*.d/ are dead remnants; do not "fix" this by editing them.
+    #
+    # `chronyc activity` reporting "0 sources online / 17 sources offline" is the
+    # value that can only be produced by this fault — Reach 0 alone also looks
+    # like a firewall, and ICMP to the internet worked throughout.
+    #
+    # onoffline, NOT online: it sets each source according to the CURRENT routing
+    # table, so it is correct on a host that genuinely has no route as well as one
+    # that just regained it.
+    #
+    # apt-daily-upgrade runs nightly on every Debian/Ubuntu host here, so this is
+    # reproducible fleet-wide. n150-1 escaped by timing, not by configuration —
+    # its chrony.conf is byte-identical (verified by diff on 2026-08-26).
+    - name: Install networkd-dispatcher hook to bring chrony back online
+      ansible.builtin.copy:
+        dest: /etc/networkd-dispatcher/routable.d/50-chrony
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          # Managed by Ansible (chrony.yml). See that file for why this exists.
+          # chronyd marks sources offline on ENETUNREACH and never retries them;
+          # this is the only thing that brings them back after networkd restarts.
+          [ -x /usr/bin/chronyc ] || exit 0
+          /usr/bin/chronyc onoffline >/dev/null 2>&1 || true
+      when: ansible_service_mgr == 'systemd'
+
     - name: Enable and start chrony
       ansible.builtin.systemd:
         name: chrony
@@ -106,15 +156,47 @@
       changed_when: false
       failed_when: false
 
+    # check_mode: false on the read-only verification commands below.
+    #
+    # Ansible SKIPS `command` tasks under --check, so without this the closing
+    # debug happily prints a success summary for a run that verified nothing.
+    # That mistake was made twice in one day on 2026-08-21 (promtail-remove and
+    # h4-dns-resolvers), the second time immediately after fixing the first.
+    # These are `chronyc` reads — they change nothing and are safe in check mode.
     - name: Report sync status
       ansible.builtin.command: chronyc tracking
       register: _tracking
       changed_when: false
       failed_when: false
+      check_mode: false
+
+    - name: Count sources chrony currently considers online
+      ansible.builtin.command: chronyc activity
+      register: _activity
+      changed_when: false
+      failed_when: false
+      check_mode: false
 
     - name: Show tracking output
       ansible.builtin.debug:
         msg: "{{ _tracking.stdout_lines }}"
+
+    # A number the failure case cannot produce. "0 sources online" is exactly
+    # what n150-2 reported for 18 hours while `systemctl is-active chrony` said
+    # "active", ICMP worked, and the config was identical to a healthy host.
+    # Assert on the count, not on the daemon being up.
+    - name: Fail if chrony has no sources online
+      ansible.builtin.assert:
+        that:
+          - _activity.stdout is search('sources online')
+          - not (_activity.stdout is search('^0 sources online', multiline=True))
+        fail_msg: >-
+          chrony reports no sources online on {{ inventory_hostname }}:
+          {{ _activity.stdout_lines | default([]) | join(' | ') }}
+          Run `chronyc onoffline` and check
+          /etc/networkd-dispatcher/routable.d/50-chrony exists.
+        success_msg: "chrony has sources online: {{ _activity.stdout_lines | first | default('') }}"
+      when: not ansible_check_mode
 
   handlers:
     - name: Restart chrony
