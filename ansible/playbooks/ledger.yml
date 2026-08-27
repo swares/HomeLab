@@ -1,0 +1,191 @@
+---
+# ledger.yml — install the lab ledger collectors on the H4.
+#
+# WHAT THIS IS
+#
+# An append-only JSONL record of timestamped facts: what changed, when, on which
+# host. See docs/LEDGER-DESIGN.md. It is NOT a log store — Loki has logs (30d)
+# and Prometheus has metrics (~14d in practice, BACKLOG §3.14). The ledger holds
+# the small set of events that must outlive both.
+#
+# WHY IT EXISTS, IN ONE EXAMPLE
+#
+# On 2026-08-27 a fifteen-day gap in lldap's backups was found by reading restic
+# snapshot timestamps. Every other record of it had expired: events within the
+# hour, metrics under retentionSize, Jobs under failedJobsHistoryLimit. Three
+# timestamps were the entire surviving evidence of a two-week outage of the
+# identity database's only backup. The ledger makes that the normal case rather
+# than a lucky one.
+#
+# SCOPE OF THIS PLAY — deliberately two collectors, not eight.
+#   restic snapshots  — backfills complete from existing repos, so absence is
+#                       meaningful from day one
+#   hosts             — reboots and package upgrades, the root cause of §1.13
+#
+# Alertmanager firings and Argo sync events are next (LEDGER-DESIGN §3.2) and are
+# left out on purpose: this play should be provable before it grows.
+#
+# Run:
+#   ansible-playbook -i inventory/hosts.yml playbooks/ledger.yml \
+#     --vault-password-file .vault_pass --check
+#   ansible-playbook -i inventory/hosts.yml playbooks/ledger.yml \
+#     --vault-password-file .vault_pass
+
+- name: Install the lab ledger collectors
+  hosts: h4-core
+  become: true
+
+  vars:
+    ledger_dir: /var/lib/lab-ledger
+    ledger_bin: /usr/local/sbin
+
+  tasks:
+    - name: Install jq (ledger-emit builds JSON with it, never by hand)
+      ansible.builtin.package:
+        name: jq
+        state: present
+
+    - name: Create the ledger directory
+      ansible.builtin.file:
+        path: "{{ ledger_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0750"
+
+    - name: Install the ledger scripts
+      ansible.builtin.copy:
+        src: "../../scripts/{{ item }}"
+        dest: "{{ ledger_bin }}/{{ item }}"
+        mode: "0755"
+        owner: root
+        group: root
+      loop:
+        - ledger-emit.sh
+        - ledger-collect-restic.sh
+        - ledger-collect-hosts.sh
+
+    # Timers, not cron: systemd gives us Persistent=true, which matters because
+    # the H4 was down for three days in August. A missed collection should run
+    # on the next boot rather than leave a hole nobody notices.
+    - name: Install ledger collector units
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}.service"
+        mode: "0644"
+        content: |
+          # Managed by Ansible — ansible/playbooks/ledger.yml
+          [Unit]
+          Description={{ item.description }}
+          # The restic collector reads repos on the cold tiers. Without this it
+          # would run happily against an unmounted mountpoint and record nothing,
+          # which is the silent-success failure this repo keeps writing up.
+          {% if item.name == 'ledger-restic' %}
+          RequiresMountsFor=/mnt/cold-8t
+          {% endif %}
+
+          [Service]
+          Type=oneshot
+          ExecStart={{ ledger_bin }}/{{ item.script }}
+          Nice=10
+          IOSchedulingClass=idle
+      loop:
+        - name: ledger-restic
+          script: ledger-collect-restic.sh
+          description: Record restic snapshots into the lab ledger
+        - name: ledger-hosts
+          script: ledger-collect-hosts.sh
+          description: Record fleet reboots and package upgrades into the lab ledger
+      notify: Reload systemd
+
+    - name: Install ledger collector timers
+      ansible.builtin.copy:
+        dest: "/etc/systemd/system/{{ item.name }}.timer"
+        mode: "0644"
+        content: |
+          # Managed by Ansible — ansible/playbooks/ledger.yml
+          [Unit]
+          Description=Run {{ item.name }} {{ item.cadence }}
+
+          [Timer]
+          OnCalendar={{ item.oncalendar }}
+          # Deliberately offset from the backup window (02:30) so the restic
+          # collector never competes with a running backup, and from
+          # apt-daily-upgrade (~06:10) so the host collector sees the night's
+          # upgrades rather than racing them.
+          RandomizedDelaySec=300
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+      loop:
+        - name: ledger-restic
+          oncalendar: "*-*-* 04:15:00"
+          cadence: daily after the backup window
+        - name: ledger-hosts
+          oncalendar: "*-*-* 07:30:00"
+          cadence: daily after unattended-upgrades
+      notify: Reload systemd
+
+    - name: Flush handlers so the timers exist before enabling them
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable and start the ledger timers
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+        daemon_reload: true
+      loop:
+        - ledger-restic.timer
+        - ledger-hosts.timer
+
+    # ── Verification ────────────────────────────────────────────────────────
+    #
+    # Run the restic collector once, now, rather than waiting for 04:15. It is
+    # idempotent (dedups on snapshot id) and it backfills the entire existing
+    # history, so this both proves the pipeline and populates the ledger.
+    #
+    # check_mode: false on the reads below — Ansible skips `command` under
+    # --check, and a play whose closing debug asserts success during a run that
+    # verified nothing is a mistake this repo has now made three times.
+    - name: Backfill the ledger from existing restic snapshots
+      ansible.builtin.command: "{{ ledger_bin }}/ledger-collect-restic.sh"
+      register: _backfill
+      changed_when: "'emitted 0 new' not in _backfill.stdout"
+      when: not ansible_check_mode
+
+    - name: Count entries actually in the ledger
+      ansible.builtin.shell: |
+        cat {{ ledger_dir }}/*.jsonl 2>/dev/null | wc -l
+      args:
+        executable: /bin/bash
+      register: _ledger_count
+      changed_when: false
+      check_mode: false
+
+    - name: Show what the ledger holds
+      ansible.builtin.debug:
+        msg: >-
+          ledger: {{ _ledger_count.stdout | trim }} entries in {{ ledger_dir }}.
+          {{ _backfill.stdout | default('(backfill skipped in check mode)') }}
+
+    # A value the failure case cannot produce. An empty ledger after a backfill
+    # means the collector could not read the repos — which looks identical to
+    # "nothing has happened yet" in every other signal.
+    - name: Fail if the ledger is empty after backfill
+      ansible.builtin.assert:
+        that:
+          - (_ledger_count.stdout | trim | int) > 0
+        fail_msg: >-
+          The ledger is empty after backfilling from restic. The repos at
+          /mnt/cold-8t/restic and /mnt/cold-sec/restic hold months of snapshots,
+          so zero entries means the collector could not read them — check the
+          mounts and {{ ledger_bin }}/ledger-collect-restic.sh output.
+        success_msg: >-
+          ledger populated: {{ _ledger_count.stdout | trim }} entries
+      when: not ansible_check_mode
+
+  handlers:
+    - name: Reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
