@@ -112,9 +112,32 @@
     # the directory was correct, the service had been restarted — and the
     # consumer was still reading RAM. Checking the file we wrote would have
     # reported success on all nine.
+    # GATED ON OBSERVED STATE, NOT ON WHETHER WE EDITED ANYTHING.
+    #
+    # This first read `when: journald_conf.changed or journal_dir.changed` and
+    # skipped on every host that needed it. The hosts still logging to RAM were
+    # exactly the ones where the config had ALREADY been written by an earlier
+    # run — so nothing changed, so the flush never fired, and nine hosts stayed
+    # volatile across three consecutive runs while the playbook reported
+    # changed=0.
+    #
+    # Gating remediation on "did I just edit the file" assumes the file is the
+    # state. It is not: journald keeps writing to /run until it is told to
+    # migrate, whatever the config says. Ask the consumer where it is, then act
+    # on the answer.
+    - name: Ask journald where it is storing logs (before remediation)
+      ansible.builtin.shell: |
+        p=$(journalctl --header 2>/dev/null | grep -oE '/(var|run)/log/journal' | head -1)
+        echo "${p:-UNKNOWN}"
+      args:
+        executable: /bin/bash
+      register: _journal_path_pre
+      changed_when: false
+      check_mode: false
+
     - name: Flush the runtime journal into persistent storage
       ansible.builtin.command: journalctl --flush
-      when: journald_conf.changed or journal_dir.changed
+      when: "'/run/log/journal' in (_journal_path_pre.stdout | default(''))"
       changed_when: true
 
     - name: Vacuum journals to enforce new size limit immediately
