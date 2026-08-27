@@ -57,8 +57,22 @@ ExecStartPre=-/usr/bin/restic init
 #
 # Restore it by hand from a snapshot older than this change if it is ever wanted;
 # retention keeps monthlies for 6 months.
+# /var/lib/lab-ledger added 2026-08-27. The lab ledger (docs/LEDGER-DESIGN.md) is
+# append-only JSONL of timestamped facts — what changed, when, on which host. It
+# is kilobytes a day and it is the ONLY record designed to outlive Loki's 30d and
+# Prometheus's ~14d actual retention (BACKLOG §3.14).
+#
+# Backing it up here rather than giving it its own restic repo is deliberate: it
+# rides the existing chain to both cold mirrors and offsite, adds nothing to the
+# rotation, and touches neither the NAS data nor the cold disks directly — both
+# of which CLAUDE.md puts off-limits.
+#
+# The irony is the argument: a ledger that records backup outcomes and is not
+# itself backed up would be the first thing lost in the incident it exists to
+# explain.
 ExecStart=/usr/bin/restic backup {{ nas_mount }} \
   {{ cold_primary_mount }}/immich \
+  /var/lib/lab-ledger \
   --tag nas --host {{ inventory_hostname }}
 # Retention is policy-driven and lives HERE only — never run forget/prune by hand.
 ExecStartPost=/usr/bin/restic forget --prune \
