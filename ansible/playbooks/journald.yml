@@ -36,7 +36,33 @@
         owner: root
         group: root
 
-    - name: Write journald size cap drop-in
+    # Small-disk hosts (SBCs on SD/eMMC) get a much smaller cap. 500M of journal
+    # on a 16-32G SD card is both a space and a wear problem, and these hosts
+    # produce far less log volume than the cluster nodes.
+    - name: Decide the journal cap for this host
+      ansible.builtin.set_fact:
+        _journal_max: "{{ '100M' if ansible_architecture in ['aarch64', 'armv7l'] else '500M' }}"
+        _journal_keep_free: "{{ '200M' if ansible_architecture in ['aarch64', 'armv7l'] else '1G' }}"
+
+    # PERSISTENCE IS THE POINT OF THIS TASK, added 2026-08-27.
+    #
+    # `Storage=` was previously unset, which means the systemd default `auto`:
+    # persistent ONLY IF /var/log/journal already exists. On most Armbian images
+    # it does not, so those hosts logged to RAM (/run/log/journal) and
+    # **every reboot or power cut destroyed the entire journal**.
+    #
+    # That is not a tidiness issue, it is why a recurring fault has never been
+    # diagnosed. The Orange Pi Zero 2W boards (WiFi-only, .184 and .99) keep
+    # losing their IP and needing a power cycle — and the power cycle is also
+    # what erases the evidence of why. On 2026-08-27 both were recovered that
+    # way with nothing left to read. The fix for the symptom destroys the cause.
+    #
+    # Ordering matters: creating /var/log/journal is what actually makes
+    # persistence take effect, so it is a separate task below and both are
+    # required. Setting Storage=persistent without the directory works (journald
+    # creates it), but the explicit directory task makes the intent legible and
+    # survives someone later trimming the drop-in.
+    - name: Write journald drop-in (size cap + persistent storage)
       ansible.builtin.copy:
         dest: /etc/systemd/journald.conf.d/max-use.conf
         mode: "0644"
@@ -44,22 +70,78 @@
         group: root
         content: |
           # Managed by Ansible — ansible/playbooks/journald.yml
-          # Caps journal to 500M and keeps 1G free on filesystem.
-          # Without this, Ubuntu defaults to 10% of filesystem (4.9G on n150-1's
-          # 49G root) which caused disk pressure + pod eviction on 2026-07-23.
+          #
+          # SystemMaxUse: without a cap, Ubuntu defaults to 10% of the filesystem
+          # (4.9G on n150-1's 49G root) which caused disk pressure + pod eviction
+          # on 2026-07-23. ARM SBCs get a smaller cap for SD-card wear.
+          #
+          # Storage=persistent: the default `auto` keeps the journal in RAM
+          # unless /var/log/journal exists, so a power cycle takes the logs with
+          # it. See the playbook for why that matters here.
           [Journal]
-          SystemMaxUse=500M
-          SystemKeepFree=1G
+          Storage=persistent
+          SystemMaxUse={{ _journal_max }}
+          SystemKeepFree={{ _journal_keep_free }}
       register: journald_conf
+
+    - name: Create /var/log/journal so persistence actually takes effect
+      ansible.builtin.file:
+        path: /var/log/journal
+        state: directory
+        mode: "2755"
+        owner: root
+        group: systemd-journal
+      register: journal_dir
 
     - name: Restart systemd-journald to apply new limits
       ansible.builtin.systemd:
         name: systemd-journald
         state: restarted
-      when: journald_conf.changed
+      when: journald_conf.changed or journal_dir.changed
+
+    # RESTARTING JOURNALD IS NOT ENOUGH — it must be told to migrate.
+    #
+    # Found 2026-08-27. After Storage=persistent was written, /var/log/journal
+    # created, and systemd-journald restarted, NINE hosts were still reporting
+    # /run/log/journal. journald keeps writing to the runtime journal until
+    # something runs the flush; at boot that is systemd-journal-flush.service,
+    # and a plain restart does not do it. `journalctl --flush` moves /run to
+    # /var and switches over.
+    #
+    # This is the reason the verification below exists. The config was correct,
+    # the directory was correct, the service had been restarted — and the
+    # consumer was still reading RAM. Checking the file we wrote would have
+    # reported success on all nine.
+    # GATED ON OBSERVED STATE, NOT ON WHETHER WE EDITED ANYTHING.
+    #
+    # This first read `when: journald_conf.changed or journal_dir.changed` and
+    # skipped on every host that needed it. The hosts still logging to RAM were
+    # exactly the ones where the config had ALREADY been written by an earlier
+    # run — so nothing changed, so the flush never fired, and nine hosts stayed
+    # volatile across three consecutive runs while the playbook reported
+    # changed=0.
+    #
+    # Gating remediation on "did I just edit the file" assumes the file is the
+    # state. It is not: journald keeps writing to /run until it is told to
+    # migrate, whatever the config says. Ask the consumer where it is, then act
+    # on the answer.
+    - name: Ask journald where it is storing logs (before remediation)
+      ansible.builtin.shell: |
+        p=$(journalctl --header 2>/dev/null | grep -oE '/(var|run)/log/journal' | head -1)
+        echo "${p:-UNKNOWN}"
+      args:
+        executable: /bin/bash
+      register: _journal_path_pre
+      changed_when: false
+      check_mode: false
+
+    - name: Flush the runtime journal into persistent storage
+      ansible.builtin.command: journalctl --flush
+      when: "'/run/log/journal' in (_journal_path_pre.stdout | default(''))"
+      changed_when: true
 
     - name: Vacuum journals to enforce new size limit immediately
-      ansible.builtin.command: journalctl --vacuum-size=500M
+      ansible.builtin.command: "journalctl --vacuum-size={{ _journal_max }}"
       when: journald_conf.changed
       changed_when: true
 
@@ -67,7 +149,86 @@
       ansible.builtin.command: journalctl --disk-usage
       register: disk_usage
       changed_when: false
+      check_mode: false
 
-    - name: Show journal usage on {{ inventory_hostname }}
+    # VERIFY BY WHAT JOURNALD REPORTS, NOT BY THE FILE WE JUST WROTE.
+    #
+    # A drop-in saying Storage=persistent and a journal actually being persistent
+    # are different claims — this is the repo's recurring lesson (CLAUDE.md,
+    # "check the artifact the consumer reads"). journalctl's own header names the
+    # directory it is using: /var/log/journal for persistent, /run/log/journal
+    # for volatile. That string is the artifact.
+    # NO `set -o pipefail` HERE, and no `grep -m1`. The first version of this
+    # check used both, and reported UNKNOWN alongside a perfectly good answer:
+    # `grep -m1` exits after the first match, journalctl receives SIGPIPE, and
+    # under pipefail the whole pipeline returns non-zero — so the `|| echo
+    # UNKNOWN` fell through on hosts where grep had matched. Output read
+    # "/var/log/journal\nUNKNOWN" and the assert failed healthy hosts while
+    # burying the nine that were genuinely still volatile.
+    #
+    # A verification step that emits false failures is worse than none: it
+    # trains you to skim past the ones that are real. Take the first match with
+    # `head -1` and let the empty case speak for itself.
+    - name: Ask journald where it is actually storing logs
+      ansible.builtin.shell: |
+        p=$(journalctl --header 2>/dev/null | grep -oE '/(var|run)/log/journal' | head -1)
+        echo "${p:-UNKNOWN}"
+      args:
+        executable: /bin/bash
+      register: _journal_path
+      changed_when: false
+      check_mode: false
+
+    - name: Show journal storage and usage on {{ inventory_hostname }}
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: {{ disk_usage.stdout }}"
+        msg: >-
+          {{ inventory_hostname }}: {{ disk_usage.stdout }} |
+          storage={{ _journal_path.stdout | default('UNKNOWN') }}
+          {{ '(VOLATILE — logs will not survive a reboot)'
+             if '/run/log/journal' in (_journal_path.stdout | default('')) else '' }}
+
+    # A value the failure case cannot produce. /run/log/journal means the journal
+    # is still in RAM whatever the drop-in says — which is the exact condition
+    # that has made the Zero 2W dropouts undiagnosable.
+    # THE PATH IS NOT THE POINT — THE DURABILITY OF THE PATH IS.
+    #
+    # Found 2026-08-27, after the check above had already passed 16 hosts.
+    # opi5pro-2 refused to leave /run/log/journal, and the reason was:
+    #
+    #     /dev/zram1  188M  184M  0  100%  /var/log
+    #
+    # Armbian's ramlog puts /var/log on a zram device. journald was right to
+    # refuse it — persisting into RAM is not persisting — but the check as
+    # written would have reported "persistent" on any host where /var/log is
+    # zram or tmpfs and journald had gone there anyway. A green result on a host
+    # that still loses its journal on a power cut is the precise failure this
+    # playbook exists to prevent, so the check has to look one level deeper than
+    # the path string.
+    - name: Find out what filesystem /var/log actually lives on
+      ansible.builtin.command: findmnt -no SOURCE,FSTYPE --target /var/log
+      register: _varlog_fs
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Fail if the journal is still volatile
+      ansible.builtin.assert:
+        that:
+          - _journal_path.stdout | trim == '/var/log/journal'
+          - not (_varlog_fs.stdout | default('') is search('zram|tmpfs|ramfs'))
+        fail_msg: >-
+          {{ inventory_hostname }} journal is NOT durable.
+          journald path: '{{ _journal_path.stdout | trim }}';
+          /var/log lives on: '{{ _varlog_fs.stdout | default('?') | trim }}'.
+          — '/run/log/journal' means it is still in RAM; run `journalctl --flush`.
+          — a zram/tmpfs/ramfs /var/log means persistence is IMPOSSIBLE there
+            (Armbian ramlog). Disable the ramlog service, or accept it and rely
+            on shipping logs off-box; do not "fix" it by pointing journald at a
+            RAM disk.
+          — 'UNKNOWN' means the check could not read journalctl --header, which
+            is a different finding: investigate the check before the host.
+        success_msg: >-
+          {{ inventory_hostname }} journal is durable
+          ({{ _journal_path.stdout | trim }} on
+          {{ _varlog_fs.stdout | default('?') | trim }})
+      when: not ansible_check_mode
