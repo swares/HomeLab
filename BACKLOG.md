@@ -777,8 +777,22 @@ cannot produce.
 
 **Fixed** in `ansible/chrony.yml` — a `/etc/networkd-dispatcher/routable.d/50-chrony` hook
 running `chronyc onoffline` (not `online`: it reconciles against the current routing table,
-so it is correct on a host that genuinely has no route). Plus `LabClockUnsynced` in
-`gitops/workloads/monitoring/lab-alerts.yaml`, critical so it reaches the phone.
+so it is correct on a host that genuinely has no route), plus a `chrony-onoffline.service`
+oneshot bound to networkd's lifecycle for the seven hosts that have no dispatcher. And
+`LabClockUnsynced` in `gitops/workloads/monitoring/lab-alerts.yaml`, critical so it reaches
+the phone.
+
+**Verified the only way that counts:** `systemctl restart systemd-networkd` on n150-2,
+then `chronyc activity` → `17 sources online`. That is the exact test the pre-fix host
+failed.
+
+**A caution for whoever re-tests this.** The same test at `sleep 5` returned `0 sources
+online` and was briefly diagnosed as networkd-dispatcher being unable to observe a networkd
+restart. It was a five-second wait against an event that takes longer. Allow **at least 20
+seconds**. This was the fourth wrong cause proposed for this one fault — after the
+firewall reading of `Reach 0`, the ifupdown hook, and the choice of `routable.d` — and each
+was proposed from convention rather than from something measured on these hosts. The
+measurement that held up every time was: restart networkd, count sources online.
 
 **To do:**
 
