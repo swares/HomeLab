@@ -99,6 +99,24 @@
         state: restarted
       when: journald_conf.changed or journal_dir.changed
 
+    # RESTARTING JOURNALD IS NOT ENOUGH — it must be told to migrate.
+    #
+    # Found 2026-08-27. After Storage=persistent was written, /var/log/journal
+    # created, and systemd-journald restarted, NINE hosts were still reporting
+    # /run/log/journal. journald keeps writing to the runtime journal until
+    # something runs the flush; at boot that is systemd-journal-flush.service,
+    # and a plain restart does not do it. `journalctl --flush` moves /run to
+    # /var and switches over.
+    #
+    # This is the reason the verification below exists. The config was correct,
+    # the directory was correct, the service had been restarted — and the
+    # consumer was still reading RAM. Checking the file we wrote would have
+    # reported success on all nine.
+    - name: Flush the runtime journal into persistent storage
+      ansible.builtin.command: journalctl --flush
+      when: journald_conf.changed or journal_dir.changed
+      changed_when: true
+
     - name: Vacuum journals to enforce new size limit immediately
       ansible.builtin.command: "journalctl --vacuum-size={{ _journal_max }}"
       when: journald_conf.changed
@@ -117,10 +135,21 @@
     # "check the artifact the consumer reads"). journalctl's own header names the
     # directory it is using: /var/log/journal for persistent, /run/log/journal
     # for volatile. That string is the artifact.
+    # NO `set -o pipefail` HERE, and no `grep -m1`. The first version of this
+    # check used both, and reported UNKNOWN alongside a perfectly good answer:
+    # `grep -m1` exits after the first match, journalctl receives SIGPIPE, and
+    # under pipefail the whole pipeline returns non-zero — so the `|| echo
+    # UNKNOWN` fell through on hosts where grep had matched. Output read
+    # "/var/log/journal\nUNKNOWN" and the assert failed healthy hosts while
+    # burying the nine that were genuinely still volatile.
+    #
+    # A verification step that emits false failures is worse than none: it
+    # trains you to skim past the ones that are real. Take the first match with
+    # `head -1` and let the empty case speak for itself.
     - name: Ask journald where it is actually storing logs
       ansible.builtin.shell: |
-        set -o pipefail
-        journalctl --header 2>/dev/null | grep -m1 -oE '/(var|run)/log/journal' || echo UNKNOWN
+        p=$(journalctl --header 2>/dev/null | grep -oE '/(var|run)/log/journal' | head -1)
+        echo "${p:-UNKNOWN}"
       args:
         executable: /bin/bash
       register: _journal_path
@@ -141,12 +170,13 @@
     - name: Fail if the journal is still volatile
       ansible.builtin.assert:
         that:
-          - "'/run/log/journal' not in (_journal_path.stdout | default(''))"
-          - "'UNKNOWN' not in (_journal_path.stdout | default('UNKNOWN'))"
+          - _journal_path.stdout | trim == '/var/log/journal'
         fail_msg: >-
-          {{ inventory_hostname }} is still logging to RAM
-          ({{ _journal_path.stdout | default('UNKNOWN') }}). A reboot or power cut
-          will erase the journal. Check /var/log/journal exists and is owned by
-          root:systemd-journal, then restart systemd-journald.
-        success_msg: "{{ inventory_hostname }} journal is persistent ({{ _journal_path.stdout }})"
+          {{ inventory_hostname }} journal is at
+          '{{ _journal_path.stdout | trim }}' — expected /var/log/journal.
+          '/run/log/journal' means it is still in RAM and a reboot or power cut
+          will erase it; run `journalctl --flush`. 'UNKNOWN' means the check
+          itself could not read journalctl --header, which is not the same
+          finding — investigate the check before the host.
+        success_msg: "{{ inventory_hostname }} journal is persistent ({{ _journal_path.stdout | trim }})"
       when: not ansible_check_mode
