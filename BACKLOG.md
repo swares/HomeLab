@@ -2698,6 +2698,17 @@ positive in its own first version — `gitlab-runner` uses multi-source `sources
 
 ### 3.12 Four machines appear twice in the inventory under two names
 
+**Confirmed with evidence 2026-08-26.** A fleet-wide `chrony.yml` run printed byte-identical
+`chronyc tracking` output — same Reference ID, same offsets to the nanosecond — for three
+pairs: `dns-1`/`octopi-dns` (.148), `dns-3`/`rpi4b` (.116), `dns-4`/`opi-zero2w-3` (.217).
+`dns-2`/`opi-zero2w-1` (.184) both failed with the same `No route to host`. So the playbook
+configured, verified and reported on the same machines twice, and a run that says 13 hosts
+succeeded actually touched about 10.
+
+That is mostly cosmetic until something counts hosts — a rolling reboot, a quorum check, or
+an alert threshold — and then it is not.
+
+
 **Found 2026-08-21** while running `break-glass-key.yml` against `all`, which reported 18
 hosts for a 14-machine fleet:
 

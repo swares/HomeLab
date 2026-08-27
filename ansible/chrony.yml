@@ -217,24 +217,30 @@
         daemon_reload: true
       when: _networkd.stdout | default('') is search('^active')
 
-    # THE EXPOSURE LIST. A host is at risk of the 2026-08-26 failure when
-    # systemd-networkd drives the network but nothing can run `chronyc onoffline`
-    # after it restarts. Hosts on another stack (dhcpcd, NetworkManager,
-    # ifupdown) still have the chrony package's own hooks and are fine.
+    # WHICH MECHANISM COVERS THIS HOST.
     #
-    # This warns rather than fails: an un-hooked host is not broken today, and
-    # failing here would truncate the play exactly as the bad guard did.
-    - name: WARNING — networkd manages this host but no dispatcher hook is possible
+    # Reworded 2026-08-26, immediately after its first real run. It previously
+    # warned "chrony will be parked offline with nothing to bring it back" —
+    # under a `when:` IDENTICAL to the oneshot unit's. So it fired on dns-4 and
+    # opi-zero2w-3 in the same run that installed the backstop on both, alarming
+    # about the one case that is covered. A warning that cries wolf is not
+    # harmless: `lab-alerts.yaml` records LabExternalHostDown firing for three
+    # weeks against a decommissioned VM and training the eye to ignore it.
+    #
+    # There is no exposed case left, which is why this is now informational:
+    #   dispatcher dir present -> routable.d hook (primary, verified)
+    #   networkd active        -> chrony-onoffline.service (backstop)
+    #   neither                -> host is not on networkd; the chrony package's
+    #                             own ifupdown/dhclient hooks apply
+    - name: Report which chrony recovery mechanism covers this host
       ansible.builtin.debug:
         msg: >-
-          {{ inventory_hostname }} runs systemd-networkd but has no
-          /etc/networkd-dispatcher/routable.d. If networkd restarts (an
-          unattended systemd upgrade will do it), chrony will be parked offline
-          with nothing to bring it back — see BACKLOG.md §1.13. Fix by installing
-          the networkd-dispatcher package on this host, then re-running.
-      when:
-        - not (_nd_dir.stat.isdir | default(false))
-        - _networkd.stdout | default('') is search('^active')
+          {{ inventory_hostname }}:
+          {{ 'routable.d hook' if (_nd_dir.stat.isdir | default(false)) else '' }}
+          {{ 'chrony-onoffline.service' if (_networkd.stdout | default('') is search('^active')) else '' }}
+          {{ 'no networkd — package hooks apply' if not (_nd_dir.stat.isdir | default(false))
+             and not (_networkd.stdout | default('') is search('^active')) else '' }}
+      when: not ansible_check_mode
 
     - name: Enable and start chrony
       ansible.builtin.systemd:
