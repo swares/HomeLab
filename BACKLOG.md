@@ -621,6 +621,46 @@ rather than for the length of a ceremony.
 Related: §2.11 (cannot seal), §2.12 (version lag), §4.6 (Vault restore, now a verified
 manual procedure in `docs/BACKUP-RESTORE.md` §3.4).
 
+### 1.12 lldap had **no backup for 15 days** in August and nothing recorded it
+
+**Found 2026-08-26**, incidentally, while reading `restic snapshots` output during the H4
+recovery. The lldap repo's snapshot list has two holes:
+
+    fd2689a6  2026-07-31  /tmp/lldap.sql
+    ...
+    fe9f1e59  2026-08-04 15:28  /tmp/lldap.sql     <- last before the gap
+    4ad08fd9  2026-08-19 02:30  /dump/lldap.sql    <- first after it
+
+That is **15 days with no lldap backup**, plus a shorter 07-27 → 07-30 hole earlier. The
+path changes across the gap (`/data/users.db` → `/tmp/lldap.sql` → `/dump/lldap.sql`), so
+the boundaries look like job-spec rewrites rather than infrastructure failure — the 08-02
+hard-NFS incident in §1.8 sits immediately before the first one, and lldap's Argo app last
+synced **08-04 13:14**, two hours before the last good snapshot.
+
+**What makes this a §1 item rather than a monitoring one:** for 15 days the only copy of
+the lab's identity database was whatever `lldap-data` held on a single `local-path` PV. The
+directory service that every other service authenticates against had no copy-of-record.
+Nobody knew until three timestamps were read three weeks later, by accident, while looking
+for something else.
+
+**It is also no longer investigable.** Prometheus has evicted that window (§3.14), the
+Kubernetes events expired within the hour, and the Job objects rotated out. Three restic
+snapshot IDs are the entire surviving record of a two-week outage. This is the concrete
+case for `docs/LEDGER-DESIGN.md`: not "it would be nice to query history" but "a two-week
+failure of the identity database's only backup left no evidence anywhere except a file
+listing."
+
+**To do:**
+
+- [ ] `git log -- gitops/workloads/lldap/backup-cronjob.yaml` across 08-04 → 08-19 and
+      identify what changed. The answer is in git even though it is nowhere else.
+- [ ] Whatever broke it, add the failure mode to the CronJob's comments — this is the
+      second lldap backup outage in a month (§1.8 was the first) and both were found by
+      accident.
+- [ ] Decide whether §3.5's never-succeeded blind spot was the reason it went unseen. Do
+      **not** assume it was: the metric history that would prove it is gone, and the
+      2026-08-26 investigation nearly recorded that assumption as fact.
+
 ### 1.4 ~~`storage.yml` can `mkfs` a cold mirror by unstable device name~~ — **FIXED 2026-08-21, one step left**
 `docs/REVIEW-2026-07-24.md:291` (H15)
 
@@ -698,6 +738,77 @@ retention is deleting.
 `docs/REVIEW-2026-07-24.md` (M-new-4) — `TMPDIR` in `SOURCES` means the staging path
 varies per run, so `--group-by` never matches an existing series. Every cloud snapshot
 is kept forever, and the 10 GB free tier is the ceiling.
+
+### 1.13 An unattended upgrade silently stopped time sync on an etcd voter
+
+**Found 2026-08-26.** n150-2 ran **18 hours with no time synchronisation at all**, and the
+sequence is fully in the journal:
+
+    06:10:49  apt-daily-upgrade.service starts (unattended-upgrades)
+    06:11:37  systemd re-executes, pulled in by a package upgrade
+    06:11:38  Stopping systemd-networkd.service
+    06:11:38  chronyd: "Source <all 17> offline"
+
+chronyd marks a source offline when a transmit returns `ENETUNREACH`, which every source
+did the moment networkd tore down the addresses. networkd returned one second later.
+**chrony did not, and never would have** — it does not retry a source it has marked
+offline. It waits to be told, and nothing on this host could tell it: the chrony package
+ships its come-back-online hooks for **ifupdown** and **dhclient**, and neither is
+installed (`dpkg -l ifupdown` → `un`, no `/etc/network/interfaces`, no
+`isc-dhcp-client`). `networkd-dispatcher` *was* installed with **every hook directory
+empty**. The offline path fired; the online path did not exist.
+
+**Why this is a §1 item.** `apt-daily-upgrade` runs nightly on every Debian/Ubuntu host in
+the lab, so this is reproducible fleet-wide, on any package that restarts networking.
+n150-1 escaped by timing, not configuration — its `chrony.conf` is byte-identical (verified
+by `diff`). It is filed next to §1.7 because it is the same shape: **unattended upgrades
+change running behaviour with nothing watching**, and here the victim was an etcd voter.
+
+**How close it came to mattering, honestly:** the final offset was **4.9 microseconds**.
+Chrony's frequency estimate held the clock accurate for 18 undisciplined hours, so nothing
+broke. The exposure is the next reboot, a warm RTC, or a longer gap — and the fact that
+`systemctl is-active chrony` said `active`, ICMP worked, and the config was correct
+throughout.
+
+**The number that identified it:** `chronyc activity` → `0 sources online / 17 sources
+offline`. `Reach 0` on every source reads identically to a firewall blocking UDP 123, and
+that misreading cost a round trip; the online/offline count is the value the firewall case
+cannot produce.
+
+**Fixed** in `ansible/chrony.yml` — a `/etc/networkd-dispatcher/routable.d/50-chrony` hook
+running `chronyc onoffline` (not `online`: it reconciles against the current routing table,
+so it is correct on a host that genuinely has no route), plus a `chrony-onoffline.service`
+oneshot bound to networkd's lifecycle for the seven hosts that have no dispatcher. And
+`LabClockUnsynced` in `gitops/workloads/monitoring/lab-alerts.yaml`, critical so it reaches
+the phone.
+
+**Verified the only way that counts:** `systemctl restart systemd-networkd` on n150-2,
+then `chronyc activity` → `17 sources online`. That is the exact test the pre-fix host
+failed.
+
+**A caution for whoever re-tests this.** The same test at `sleep 5` returned `0 sources
+online` and was briefly diagnosed as networkd-dispatcher being unable to observe a networkd
+restart. It was a five-second wait against an event that takes longer. Allow **at least 20
+seconds**. This was the fourth wrong cause proposed for this one fault — after the
+firewall reading of `Reach 0`, the ifupdown hook, and the choice of `routable.d` — and each
+was proposed from convention rather than from something measured on these hosts. The
+measurement that held up every time was: restart networkd, count sources online.
+
+**To do:**
+
+- [ ] Run `chrony.yml` `--check` and then for real, so every host gets the hook — this is
+      §3.11 territory: merged is not applied, and nothing reports the gap.
+- [ ] Check whether other hosts are currently parked: `chronyc activity` fleet-wide. Any
+      host that hit an upgrade window since installing networkd-dispatcher could be sitting
+      in this state right now with a plausible-looking clock.
+- [ ] `systemd-networkd-wait-online` returned exit 1 on n150-2 at 06:11:19, *before* the
+      upgrade proceeded — a pre-existing condition, likely the bridge plus k8s veths never
+      reaching "online". Worth its own look; apt believing the network is not ready is not
+      harmless.
+- [ ] Consider whether cluster nodes should hold `systemd` out of unattended-upgrades, or
+      whether the dispatcher hook is sufficient. The hook fixes the symptom class; the
+      broader question is whether etcd voters should self-upgrade networking packages
+      unattended at all.
 
 ### 1.7 Nothing pins restic, so an unattended upgrade can change copy semantics
 **Reframed 2026-08-21 — the original heading described a requirement, not the risk.**
@@ -1022,6 +1133,95 @@ against the 25h threshold.*
 ### 3.5 A CronJob that has never succeeded is invisible
 `gitops/workloads/monitoring/lab-alerts.yaml:262-269` — `LabCronJobStale` keys off
 `kube_cronjob_status_last_successful_time`, which does not exist until the first success.
+
+**2026-08-26:** this is the obvious explanation for the 15-day lldap backup gap (§1.12),
+and it remains **unproven** — the metric history that would confirm or refute it has been
+evicted (§3.14). Recorded here so the next person does not mistake a plausible fit for a
+diagnosis. The fix is worth making on its own merits either way; the sketch is already in
+the rule's comment (`kube_cronjob_info unless on(namespace, cronjob) …`).
+
+### 3.14 Prometheus evicts well inside its nominal 30-day retention
+
+**Found 2026-08-26.** `gitops/apps/monitoring.yaml:156-157` sets `retention: 30d` and
+`retentionSize: "15GB"`. Whichever limit is reached first wins, and **`retentionSize` is
+winning by a wide margin**: a query for `up` at ~2026-08-11 — fifteen days back, half the
+nominal window — returned an empty vector. There is no data at all before roughly two
+weeks ago.
+
+This was found by running a control query, not by looking for it. An empty result for
+`kube_cronjob_status_last_successful_time` mid-August was about to be recorded as proof
+that §3.5's blind spot caused the §1.12 lldap gap. Querying `up` at the same instant
+returned empty as well, which meant the first query had proved nothing.
+
+**Why it matters beyond the one investigation:** `30d` appears in the config, in the docs
+and in everyone's head. The actual answer to "what did this look like two weeks ago" is
+*nothing*. Any post-incident analysis reaching back further than about a fortnight will
+silently return empty vectors that look like healthy zeroes or absent series — and an
+empty result from Prometheus is indistinguishable from a metric that never existed.
+
+**To do:**
+
+- [ ] Measure the real horizon rather than guessing:
+      `prometheus_tsdb_lowest_timestamp_seconds`, and
+      `prometheus_tsdb_storage_blocks_bytes` against the 15GB cap.
+- [ ] Decide which limit is the honest one and make the config say so. Either raise
+      `retentionSize` (needs PV headroom — check before, per §4's disk history) or lower
+      `retention` to the truth so the number in git matches the number in the TSDB.
+- [ ] Alert when the actual horizon falls below the intended one. A retention that quietly
+      shrinks is the same class of fault as a backup that quietly stops: the config keeps
+      claiming a guarantee the system stopped providing.
+- [ ] Feed the real number into `docs/LEDGER-DESIGN.md`. The ledger's premise is that
+      Prometheus covers the recent window and the ledger covers the durable one — the
+      boundary is ~14 days, not 30, and the design should say the measured figure.
+
+### 3.15 ~~The H4's node-exporter pod crashlooped for 19 days~~ — **FIXED 2026-08-27**
+
+`monitoring-prometheus-node-exporter-fmxwl` was in CrashLoopBackOff for **19 days**, 273
+restarts, firing `KubePodCrashLooping` and `KubeDaemonSetRolloutStuck` throughout. One log
+line was the entire diagnosis:
+
+    listen tcp 0.0.0.0:9100: bind: address already in use
+
+`ss -lntp` named the holder: `prometheus-node`, PID 986, the **Debian
+`prometheus-node-exporter` package** running as a host service from boot. It is not in the
+`node_exporter` inventory group — cluster nodes are meant to get metrics from the
+DaemonSet — so it was unmanaged drift, most likely a MicroShift-era leftover.
+
+**This was already written down, about a different host.** The comment excluding
+`gitlab-1` from the `node_exporter` group describes the identical collision: "GitLab
+Omnibus ships its own node_exporter already bound to 127.0.0.1:9100, so the Debian package
+can't bind 0.0.0.0:9100 and its unit dies on start." Same conflict, opposite winner, and
+nobody connected the two for nineteen days.
+
+**Two beliefs it corrects:**
+
+- It was recorded as "a monitoring blind spot on the most important host." It was not —
+  the host package was serving metrics the whole time, including `node_systemd_*`. The
+  cost was 19 days of alert noise, not missing data.
+- The 2026-08-02 and 08-07 DaemonSet work (D-Bus socket mount, `appArmorProfile:
+  Unconfined`, widening `--collector.systemd.unit-include`) was justified on the grounds
+  that "backup-nas.timer and backup-etcd.timer exist only on odroid-nas." Those series were
+  coming from the **host package**. That work was right for the other nodes and was never
+  what delivered the H4's timer metrics.
+
+**Verified before removing, and the control is the point.** With the host unit stopped and
+the pod deleted to clear its 5-minute backoff, the pod reached `1/1 Running` in 25 seconds
+and returned **52** `node_systemd_unit_state` series. The control on n150-1 returned **0** —
+correct, because the collector is scoped to `backup-.+\.(service|timer)` and those units
+exist only on odroid-nas. Without running the control, 52 was a number with no scale and 0
+would have looked like failure.
+
+A first attempt at this test returned 0 on the H4 and proved nothing: the host unit was
+stopped and the pod had not yet retried through its backoff, so **nothing was listening at
+all**. The check had two ways to produce a zero and only one was accounted for.
+
+**Fixed** in `ansible/playbooks/node-exporter.yml` — a new play removes the package from
+`k3s_server:k3s_agents`, then verifies by what is *listening* rather than by what the
+package manager said, and warns by name if a host process holds 9100 on a cluster node.
+
+- [ ] Run it, then confirm the H4 target is `up` in Prometheus and
+      `node_systemd_unit_state{name=~"backup-.+"}` still has series — those feed
+      `LabBackupUnitFailed` on the one host where backups run.
 
 ### 3.6 `.github/workflows/sync-check.yml` performs no sync check
 `:17-30` — named `Post-merge notice`, does nothing but `echo`, because hosted runners
@@ -2066,6 +2266,38 @@ configured Vault to accept it, while ESO carried on using the static token. Step
 with a **real login**, printed explicitly, so step 3 was taken on evidence rather than
 expectation.
 
+> **CORRECTION, 2026-08-26. Step 3 shipped broken, and the paragraph above is how it was
+> missed.** The `serviceAccountRef` was written without a `namespace`. A ClusterSecretStore
+> has no namespace of its own, so the reference resolved against *each ExternalSecret's*
+> namespace — ESO looked for an `external-secrets` ServiceAccount in `immich`, `monitoring`,
+> `semaphore`, `lldap` and the rest, and failed all sixteen:
+>
+>     cannot request Kubernetes service account token for service account
+>     "external-secrets": serviceaccounts "external-secrets" not found
+>
+> It surfaced only three days later, after the H4 recovery, as ten `Degraded` Argo
+> Applications.
+>
+> **The `refreshTime` evidence was wrong, and wrong in the way this entry warns about.**
+> Sixteen ExternalSecrets sharing a `refreshTime` inside two seconds proved the operator
+> reconciled them; it did not prove any of them *authenticated*. A reconcile that fails
+> stamps the same field as one that succeeds. The column that would have shown it was
+> `READY`, which read `SecretSyncedError`.
+>
+> So this section correctly rejected `Ready: True` as proof — and then substituted a
+> different signal that also could not distinguish success from failure. **"Verify by
+> content, not condition" is not a rule about which field to read; it is a rule about
+> finding a value that the failure case cannot produce.** `refreshTime` advances either way.
+>
+> The `ClusterSecretStore` also reported `Ready: True` throughout, because store validation
+> never exercises the ServiceAccount lookup — the health signal closest to the fault was
+> structurally incapable of seeing it.
+>
+> Fixed by adding `namespace: external-secrets`, with the reasoning inline at
+> `gitops/workloads/immich/external-secret.yaml`. All 16 now read `SecretSynced` / `True`.
+> Kubernetes auth itself was never the problem: the design was sound, the deadline is
+> genuinely gone, and one missing field made it inoperative for three days.
+
 - [x] **Cleanup done 2026-08-23.** Static token revoked (via the environment, never on a
       command line — §2.13), the `vault-token` Secret deleted, `secret/lab/eso` removed.
       No unused valid credential left behind.
@@ -2514,6 +2746,17 @@ positive in its own first version — `gitlab-runner` uses multi-source `sources
 ---
 
 ### 3.12 Four machines appear twice in the inventory under two names
+
+**Confirmed with evidence 2026-08-26.** A fleet-wide `chrony.yml` run printed byte-identical
+`chronyc tracking` output — same Reference ID, same offsets to the nanosecond — for three
+pairs: `dns-1`/`octopi-dns` (.148), `dns-3`/`rpi4b` (.116), `dns-4`/`opi-zero2w-3` (.217).
+`dns-2`/`opi-zero2w-1` (.184) both failed with the same `No route to host`. So the playbook
+configured, verified and reported on the same machines twice, and a run that says 13 hosts
+succeeded actually touched about 10.
+
+That is mostly cosmetic until something counts hosts — a rolling reboot, a quorum check, or
+an alert threshold — and then it is not.
+
 
 **Found 2026-08-21** while running `break-glass-key.yml` against `all`, which reported 18
 hosts for a 14-machine fleet:

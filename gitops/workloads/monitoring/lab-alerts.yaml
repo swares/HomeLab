@@ -286,6 +286,57 @@ spec:
               --sort-by=.metadata.creationTimestamp
 
     # -----------------------------------------------------------------------
+    # Time sync
+    # -----------------------------------------------------------------------
+    - name: lab.time
+      rules:
+        - alert: LabClockUnsynced
+          # Added 2026-08-26, after n150-2 — an etcd VOTER — ran 18 hours with no
+          # time sync at all.
+          #
+          # WHY THIS EXISTS ALONGSIDE THE BUILT-IN NodeClockNotSynchronising
+          #
+          # It does not, quite: this alerts on the same metric. What changes is
+          # `for:` and severity. The built-in is a warning, and warnings route to
+          # the m5stack display only — the same routing gap that let four failed
+          # backup Jobs sit unseen for days (see LabBackupJobFailed above). An
+          # etcd member losing time deserves the phone.
+          #
+          # What actually happened: unattended-upgrades restarted systemd-networkd,
+          # chronyd marked all 17 sources offline on ENETUNREACH, and nothing ever
+          # brought them back — the chrony package's come-back-online hooks target
+          # ifupdown and dhclient, neither of which is installed. Fixed in
+          # ansible/chrony.yml with a networkd-dispatcher routable.d hook.
+          #
+          # The lesson in the threshold: the CONDITION (no sources online) existed
+          # at 06:11:38. The SYMPTOM this metric measures took until roughly
+          # 00:30 the next day to be noticed, because the clock barely drifted —
+          # final offset was 4.9 MICROSECONDS. Chrony's frequency estimate held
+          # the clock accurate long after it stopped being disciplined. So the
+          # damage is not drift-so-far, it is that nothing is correcting it, and
+          # the next reboot or a warm RTC is where that bites. Alert on the state,
+          # not on how bad it has got.
+          #
+          # 15m rather than minutes: node_timex_sync_status legitimately reads 0
+          # during a reboot and for a short window on a cold start.
+          expr: |
+            node_timex_sync_status == 0
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $labels.instance }} is not synchronising time"
+            description: >
+              The kernel reports the clock as unsynchronised on
+              {{ $labels.instance }}. Check `chronyc activity` FIRST — "0 sources
+              online" means chrony was parked offline by a network event and is
+              not even trying, which reads identically to a firewall problem
+              (Reach 0 on every source) while ICMP still works. Recover with
+              `chronyc onoffline`, then confirm
+              /etc/networkd-dispatcher/routable.d/50-chrony exists.
+              On 2026-08-26 this state lasted 18 hours on an etcd voter.
+
+    # -----------------------------------------------------------------------
     # Disk headroom check — ansible/playbooks/disk-check-timer.yml on the H4
     #
     # Complements NodeFilesystemAlmostOutOfSpace (built-in, warns at 85%) rather

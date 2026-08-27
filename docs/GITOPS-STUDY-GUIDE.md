@@ -562,22 +562,48 @@ service VIP for Traefik). If an Ingress stops working, check DNS first.
 
 ### ArgoCD shows Progressing / Degraded
 
-```bash
-# 1. Find which resource is non-healthy (blank health = not computed yet)
-kubectl get application <name> -n argocd -o json | \
-  jq '.status.resources[] | {kind, name, health}'
+> **Do not start from `.status.resources[].health` — it is blank for everything.**
+>
+> This guide previously opened with a `jq` query over that field, annotated *"blank health
+> = not computed yet"*. That annotation is wrong, and it cost an hour on 2026-08-26.
+> **This Argo version does not persist per-resource health in the Application CR at all.**
+> Measured that day: `immich` (Degraded) returned blank for all 20 resources, and `alloy`
+> (Healthy) returned blank for all 8. A hard refresh did not populate it. Blank is not a
+> timing artifact and waiting does not help — per-resource health lives only in the
+> application controller's tree cache, which `kubectl` cannot read.
+>
+> The trap is that the query *succeeds* and prints resource names, so it looks like a
+> working diagnostic returning good news. Start with the sweep below instead.
 
-# 2. Force a hard refresh (triggers re-evaluation of all resource health)
+```bash
+# 1. Sweep every kind ArgoCD assigns health to, in ONE command.
+#    Do not test kinds one at a time — that is what produced nine wrong answers
+#    on 2026-08-26. The real cause was a failed Job, found only by enumerating.
+kubectl -n <namespace> get pvc,ingress,externalsecret,job,cronjob,deploy,sts,ds
+
+# 2. Ask ArgoCD directly which child resource is unhealthy. This is the ONLY
+#    view that names it — the UI tree, or the CLI:
+argocd app get <name>
+#    "token is expired" -> argocd login argocd.apps.lab.home.arpa --grpc-web --sso
+
+# 3. Force a hard refresh (only if you suspect stale state; it does NOT
+#    populate .status.resources[].health — see the warning above)
 kubectl annotate application <name> -n argocd \
   argocd.argoproj.io/refresh=hard --overwrite
 
-# 3. Check app controller logs for this app
+# 4. Check app controller logs for this app
 kubectl logs -n argocd statefulset/argocd-application-controller --since=5m \
   | grep '"application":"<name>"'
 
-# 4. Check events in the affected namespace
+# 5. Check events in the affected namespace — but note events live ~1 hour here.
+#    "Events: <none>" on a day-old object is expected, not a finding.
 kubectl get events -n <namespace> --sort-by='.lastTimestamp' | tail -20
 ```
+
+**Read `Synced` and `lastTransitionTime` carefully.** `Synced` means git matches the
+cluster; it says nothing about whether anything works. An *old*
+`.status.health.lastTransitionTime` means continuously degraded since that moment — the
+field moves only on change — so an old timestamp is not evidence of a stale status.
 
 Common causes:
 - **PVC Pending (no consumer)** — a PVC manifest exists in git but no pod mounts it.
@@ -589,6 +615,17 @@ Common causes:
   node affinity and that the storage path exists on the target node.
 - **ImagePullBackOff** — new image tag doesn't exist yet, or registry is unreachable
 - **CrashLoopBackOff** — check `kubectl logs <pod> --previous` for the crash reason
+- **A failed Job** — the one most often missed, because **every pod reads `Running` and
+  `kubectl get pods` shows nothing wrong**. A CronJob-generated Job that failed holds its
+  app Degraded until it rotates out per `failedJobsHistoryLimit`. This was the cause of
+  the 2026-08-26 `immich`/`lldap` degradation; both backup jobs write to the H4 and had
+  nowhere to write for three days. `kubectl -n <ns> get job` is the check. Deleting failed
+  Jobs is not GitOps drift — they are generated, not in git — but prove the job works with
+  a manual run first: `kubectl -n <ns> create job --from=cronjob/<name> <name>-manual`.
+- **ExternalSecret not syncing** — read the `READY` column, not `refreshTime`, which
+  advances on failed reconciles too. A ClusterSecretStore can report `Ready: True` while
+  every secret behind it fails, because store validation never exercises the
+  ServiceAccount lookup.
 - **Stale health** — ArgoCD health cache not refreshed; use the hard refresh above
 
 ---

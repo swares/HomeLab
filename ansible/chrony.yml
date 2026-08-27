@@ -90,6 +90,158 @@
       when: not (_is_h4 | bool)
       notify: Restart chrony
 
+    # ── The return path ──────────────────────────────────────────────────────
+    #
+    # WHY THIS HOOK EXISTS. On 2026-08-26 at 06:11:38, n150-2 — an etcd voter —
+    # stopped synchronising time and stayed that way for 18 hours.
+    #
+    #   06:10:49  apt-daily-upgrade.service starts (unattended-upgrades)
+    #   06:11:37  systemd re-executes, pulled in by a package upgrade
+    #   06:11:38  Stopping systemd-networkd.service
+    #   06:11:38  chronyd: "Source <all 17> offline"
+    #
+    # chronyd marks a source OFFLINE when a transmit fails with ENETUNREACH,
+    # which is what every source returned the instant networkd tore down the
+    # addresses and routes. networkd came back one second later. **chrony did
+    # not**, because it never retries a source it has marked offline — it waits
+    # to be told, and on this host nobody could tell it:
+    #
+    #   - the chrony package ships its come-back-online hooks for ifupdown
+    #     (/etc/network/if-up.d/chrony) and dhclient
+    #     (/etc/dhcp/dhclient-exit-hooks.d/chrony)
+    #   - NEITHER is installed here: `dpkg -l ifupdown` reports `un`, there is no
+    #     /etc/network/interfaces, and isc-dhcp-client is absent
+    #   - networkd-dispatcher IS installed and every hook directory was EMPTY
+    #
+    # So the offline path fired and the online path did not exist. The files in
+    # /etc/network/if-*.d/ are dead remnants; do not "fix" this by editing them.
+    #
+    # `chronyc activity` reporting "0 sources online / 17 sources offline" is the
+    # value that can only be produced by this fault — Reach 0 alone also looks
+    # like a firewall, and ICMP to the internet worked throughout.
+    #
+    # onoffline, NOT online: it sets each source according to the CURRENT routing
+    # table, so it is correct on a host that genuinely has no route as well as one
+    # that just regained it.
+    #
+    # apt-daily-upgrade runs nightly on every Debian/Ubuntu host here, so this is
+    # reproducible fleet-wide. n150-1 escaped by timing, not by configuration —
+    # its chrony.conf is byte-identical (verified by diff on 2026-08-26).
+    # The guard here matters, and got this wrong once. `ansible_service_mgr ==
+    # 'systemd'` was the first attempt: it tests for systemd, not for
+    # networkd-dispatcher, so on 2026-08-26 the copy failed on seven hosts with
+    # "Destination directory /etc/networkd-dispatcher/routable.d does not exist"
+    # — and because the task FAILED rather than skipped, those hosts never
+    # reached the chrony start or the verification assert below. A wrong guard
+    # does not just miss its own target, it truncates the rest of the play.
+    #
+    # Do not "fix" this by creating the directory: a hook in a directory no
+    # dispatcher reads is worse than no hook, because it looks handled.
+    - name: Check whether networkd-dispatcher is present
+      ansible.builtin.stat:
+        path: /etc/networkd-dispatcher/routable.d
+      register: _nd_dir
+      check_mode: false
+
+    - name: Is systemd-networkd actually managing this host?
+      ansible.builtin.command: systemctl is-active systemd-networkd
+      register: _networkd
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Install networkd-dispatcher hook to bring chrony back online
+      ansible.builtin.copy:
+        dest: /etc/networkd-dispatcher/routable.d/50-chrony
+        mode: "0755"
+        content: |
+          #!/bin/sh
+          # Managed by Ansible (chrony.yml). See that file for why this exists.
+          # chronyd marks sources offline on ENETUNREACH and never retries them;
+          # this is the only thing that brings them back after networkd restarts.
+          [ -x /usr/bin/chronyc ] || exit 0
+          /usr/bin/chronyc onoffline >/dev/null 2>&1 || true
+      when: _nd_dir.stat.isdir | default(false)
+
+    # BACKSTOP for hosts with no networkd-dispatcher. The hook above is the
+    # primary mechanism and it is VERIFIED WORKING — on 2026-08-26, with the hook
+    # installed on n150-2, `systemctl restart systemd-networkd` was followed by
+    # `chronyc activity` reporting "17 sources online".
+    #
+    # READ THE TIMING BEFORE YOU CHANGE ANYTHING HERE. The same test at `sleep 5`
+    # returned "0 sources online" and was briefly written up as proof that
+    # networkd-dispatcher cannot see a networkd restart (a D-Bus re-subscription
+    # theory — plausible, and wrong). At `sleep 20` it passes. The dispatcher
+    # simply takes longer than five seconds to emit the routable event after a
+    # restart. **Allow at least 20 seconds when testing this**, or you will
+    # measure your own impatience and call it a fault.
+    #
+    # So why keep this unit at all: seven hosts in this inventory have no
+    # /etc/networkd-dispatcher/routable.d (dns-1, dns-3, dns-4, octopi-dns,
+    # opi-zero2w-3, rpi4b, rpi5). Where networkd IS driving the network and the
+    # dispatcher is absent, nothing else brings chrony back. This unit binds to
+    # networkd's lifecycle directly and needs no dispatcher.
+    #
+    # Both are idempotent; running both on a host that has both is harmless.
+    #
+    # The ExecStartPre sleep matters for the same reason the test did: `onoffline`
+    # reconciles against the routing table, so running it before the links are
+    # routable leaves the sources offline — the bug wearing a hat.
+    - name: Install oneshot unit to re-enable chrony sources when networkd starts
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/chrony-onoffline.service
+        mode: "0644"
+        content: |
+          # Managed by Ansible (chrony.yml). See that file for why this exists.
+          [Unit]
+          Description=Re-enable chrony sources after systemd-networkd starts
+          Documentation=file:///etc/ansible/chrony.yml
+          After=systemd-networkd.service
+          PartOf=systemd-networkd.service
+
+          [Service]
+          Type=oneshot
+          # Let the links settle before reconciling against the routing table.
+          ExecStartPre=/bin/sleep 10
+          ExecStart=/usr/bin/chronyc onoffline
+          RemainAfterExit=no
+
+          [Install]
+          WantedBy=systemd-networkd.service
+      when: _networkd.stdout | default('') is search('^active')
+
+    - name: Enable chrony-onoffline
+      ansible.builtin.systemd:
+        name: chrony-onoffline.service
+        enabled: true
+        daemon_reload: true
+      when: _networkd.stdout | default('') is search('^active')
+
+    # WHICH MECHANISM COVERS THIS HOST.
+    #
+    # Reworded 2026-08-26, immediately after its first real run. It previously
+    # warned "chrony will be parked offline with nothing to bring it back" —
+    # under a `when:` IDENTICAL to the oneshot unit's. So it fired on dns-4 and
+    # opi-zero2w-3 in the same run that installed the backstop on both, alarming
+    # about the one case that is covered. A warning that cries wolf is not
+    # harmless: `lab-alerts.yaml` records LabExternalHostDown firing for three
+    # weeks against a decommissioned VM and training the eye to ignore it.
+    #
+    # There is no exposed case left, which is why this is now informational:
+    #   dispatcher dir present -> routable.d hook (primary, verified)
+    #   networkd active        -> chrony-onoffline.service (backstop)
+    #   neither                -> host is not on networkd; the chrony package's
+    #                             own ifupdown/dhclient hooks apply
+    - name: Report which chrony recovery mechanism covers this host
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ 'routable.d hook' if (_nd_dir.stat.isdir | default(false)) else '' }}
+          {{ 'chrony-onoffline.service' if (_networkd.stdout | default('') is search('^active')) else '' }}
+          {{ 'no networkd — package hooks apply' if not (_nd_dir.stat.isdir | default(false))
+             and not (_networkd.stdout | default('') is search('^active')) else '' }}
+      when: not ansible_check_mode
+
     - name: Enable and start chrony
       ansible.builtin.systemd:
         name: chrony
@@ -106,15 +258,47 @@
       changed_when: false
       failed_when: false
 
+    # check_mode: false on the read-only verification commands below.
+    #
+    # Ansible SKIPS `command` tasks under --check, so without this the closing
+    # debug happily prints a success summary for a run that verified nothing.
+    # That mistake was made twice in one day on 2026-08-21 (promtail-remove and
+    # h4-dns-resolvers), the second time immediately after fixing the first.
+    # These are `chronyc` reads — they change nothing and are safe in check mode.
     - name: Report sync status
       ansible.builtin.command: chronyc tracking
       register: _tracking
       changed_when: false
       failed_when: false
+      check_mode: false
+
+    - name: Count sources chrony currently considers online
+      ansible.builtin.command: chronyc activity
+      register: _activity
+      changed_when: false
+      failed_when: false
+      check_mode: false
 
     - name: Show tracking output
       ansible.builtin.debug:
         msg: "{{ _tracking.stdout_lines }}"
+
+    # A number the failure case cannot produce. "0 sources online" is exactly
+    # what n150-2 reported for 18 hours while `systemctl is-active chrony` said
+    # "active", ICMP worked, and the config was identical to a healthy host.
+    # Assert on the count, not on the daemon being up.
+    - name: Fail if chrony has no sources online
+      ansible.builtin.assert:
+        that:
+          - _activity.stdout is search('sources online')
+          - not (_activity.stdout is search('^0 sources online', multiline=True))
+        fail_msg: >-
+          chrony reports no sources online on {{ inventory_hostname }}:
+          {{ _activity.stdout_lines | default([]) | join(' | ') }}
+          Run `chronyc onoffline` and check
+          /etc/networkd-dispatcher/routable.d/50-chrony exists.
+        success_msg: "chrony has sources online: {{ _activity.stdout_lines | first | default('') }}"
+      when: not ansible_check_mode
 
   handlers:
     - name: Restart chrony
@@ -158,15 +342,43 @@
     - name: Flush handlers
       ansible.builtin.meta: flush_handlers
 
+    # check_mode: false — same reason as Play 1, and this play demonstrated the
+    # problem on 2026-08-26. A --check run of the version before this printed:
+    #
+    #     TASK [Show sync status]
+    #     ok: [opi-zero2w-2] => { "msg": [] }
+    #
+    # `ok`, with nothing in it. The command was skipped under check mode, the
+    # registered stdout_lines was empty, and the debug reported success having
+    # verified nothing at all. This is the third occurrence of the same defect in
+    # this repo (promtail-remove and h4-dns-resolvers, both 2026-08-21) and the
+    # second time it was reintroduced in the same edit that fixed it elsewhere —
+    # Play 1 above was corrected while this play was left as-is.
+    #
+    # timedatectl is a read. It is safe in check mode; that is the whole point.
     - name: Report sync status
       ansible.builtin.command: timedatectl timesync-status
       register: _status
       changed_when: false
       failed_when: false
+      check_mode: false
 
     - name: Show sync status
       ansible.builtin.debug:
-        msg: "{{ _status.stdout_lines }}"
+        msg: "{{ _status.stdout_lines | default(['(no output — timesyncd may not be running)']) }}"
+
+    # As in Play 1: assert on a value the failure case cannot produce. An empty
+    # or absent status is the shape this play was previously reporting as success.
+    - name: Fail if timesyncd is not synchronised
+      ansible.builtin.assert:
+        that:
+          - _status.stdout is defined
+          - _status.stdout | length > 0
+        fail_msg: >-
+          timedatectl timesync-status returned nothing on {{ inventory_hostname }};
+          timesyncd is not running or not configured.
+        success_msg: "timesyncd reported status on {{ inventory_hostname }}"
+      when: not ansible_check_mode
 
   handlers:
     - name: Restart timesyncd
