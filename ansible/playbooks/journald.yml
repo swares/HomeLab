@@ -248,6 +248,36 @@
       failed_when: false
       check_mode: false
 
+    # WHY THIS IS OPT-OUT PER HOST, not a blanket failure.
+    #
+    # After the durability check landed, three hosts failed every run — the two
+    # opi5pro agents and .217, all on Orange Pi ramlog. A playbook that is red on
+    # every run for a known, accepted condition is the LabExternalHostDown
+    # problem in `lab-alerts.yaml`: it fired for three weeks against a
+    # decommissioned VM and taught the eye to skip it.
+    #
+    # So durability is REQUIRED by default, and a host may opt out only by
+    # setting `journal_durable: false` in the inventory WITH a reason. That
+    # forces the decision to be made once and recorded, rather than re-litigated
+    # every run or silently ignored.
+    #
+    # Opting out is legitimate where the logs leave the box by another route:
+    # the opi5pro nodes are k3s agents running the Alloy DaemonSet, which ships
+    # their journal to Loki, so a local RAM journal costs nothing. It is NOT
+    # legitimate for a host you expect to power-cycle and then debug — which is
+    # the whole reason this playbook exists (BACKLOG §1.13 and the Zero 2W
+    # dropouts).
+    - name: Report accepted volatility (host has opted out)
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} journal is VOLATILE by choice
+          (/var/log on {{ _varlog_fs.stdout | default('?') | trim }}).
+          journal_durable is false for this host — logs must reach Loki or
+          another off-box sink, because a power cut takes the local copy.
+      when:
+        - not (journal_durable | default(true))
+        - _varlog_fs.stdout | default('') is search('zram|tmpfs|ramfs')
+
     - name: Fail if the journal is still volatile
       ansible.builtin.assert:
         that:
@@ -268,4 +298,6 @@
           {{ inventory_hostname }} journal is durable
           ({{ _journal_path.stdout | trim }} on
           {{ _varlog_fs.stdout | default('?') | trim }})
-      when: not ansible_check_mode
+      when:
+        - not ansible_check_mode
+        - journal_durable | default(true)
