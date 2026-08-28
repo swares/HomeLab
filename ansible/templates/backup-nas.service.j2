@@ -57,7 +57,8 @@ ExecStartPre=-/usr/bin/restic init
 #
 # Restore it by hand from a snapshot older than this change if it is ever wanted;
 # retention keeps monthlies for 6 months.
-# /var/lib/lab-ledger added 2026-08-27. The lab ledger (docs/LEDGER-DESIGN.md) is
+# /var/lib/lab-ledger added 2026-08-27 — on the eMMC root (/dev/mmcblk0p2), NOT the
+# NVMe; /var is part of the OS filesystem. The lab ledger (docs/LEDGER-DESIGN.md) is
 # append-only JSONL of timestamped facts — what changed, when, on which host. It
 # is kilobytes a day and it is the ONLY record designed to outlive Loki's 30d and
 # Prometheus's ~14d actual retention (BACKLOG §3.14).
