@@ -9,7 +9,22 @@
   hosts: dns
   become: true
   vars:
-    pihole_web_password_hash: ""     # double-sha256; source from Vault, NOT plaintext here
+    vault_addr: "http://192.168.1.128:8200"
+    # BACKLOG §2.1 — this used to be:
+    #   pihole_web_password_hash: ""   # double-sha256; source from Vault
+    # set to empty, never overridden anywhere in the repo, so it always rendered
+    # empty and both Pi-hole hosts deployed with no admin authentication.
+    #
+    # The variable's whole contract was also wrong, which is why "just source it
+    # from Vault" would not have fixed this. Double-sha256 is Pi-hole *v5*'s
+    # scheme (WEBPASSWORD in setupVars.conf). v6 stores a BALLOON-SHA256 hash at
+    # webserver.api.pwhash, and webserver.api.password — the key the template was
+    # writing — is the *plaintext* setup field. Filling the old variable in would
+    # have set the admin password to the literal text of a v5 hash, and looked fixed.
+    #
+    # The hash is now read from Vault at render time. Generate it on a Pi-hole host
+    # with `pihole setpassword <password>` and copy the resulting pwhash value out
+    # of /etc/pihole/pihole.toml into Vault — the plaintext never needs to be stored.
 
   pre_tasks:
     # Auto-select engine based on OS package manager if not set in inventory
@@ -17,6 +32,81 @@
       ansible.builtin.set_fact:
         dns_engine: "{{ 'dnsmasq' if ansible_pkg_mgr in ['pacman', 'portage', 'zypper'] else 'pihole' }}"
       when: dns_engine is not defined
+
+    # ---- Pi-hole admin credential (BACKLOG §2.1) -----------------------------
+    # Only demanded when a Pi-hole host is actually in this run, so a dnsmasq-only
+    # run (--limit dns-2, dns-4) still works with no Vault token. Evaluated after
+    # the set_fact above, so every host's dns_engine is settled by now.
+    - name: Determine whether any host in this run uses Pi-hole
+      ansible.builtin.set_fact:
+        pihole_in_run: >-
+          {{ ansible_play_hosts
+             | map('extract', hostvars, 'dns_engine')
+             | select('defined')
+             | select('equalto', 'pihole')
+             | list | count > 0 }}
+      run_once: true
+
+    # The Vault read below carries no_log, which hides the *error* as well as the
+    # secret — an expired token otherwise surfaces only as "censored due to
+    # no_log". These checks print no secret values and give a one-line diagnosis.
+    # Same shape as backup-offsite.yml, deliberately.
+    - name: Preflight — VAULT_TOKEN must be set to configure Pi-hole
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'VAULT_TOKEN') | length > 0
+        fail_msg: >-
+          VAULT_TOKEN is empty and this run includes a Pi-hole host. Pass a current
+          token: VAULT_TOKEN=<token> ansible-playbook -i inventory/hosts.yml
+          playbooks/dns.yml
+          Need one? docs/OPS.md -> "Get a Vault admin token".
+        quiet: true
+      when: pihole_in_run | bool
+      run_once: true
+
+    # The resolvers have no vault CLI; h4-core does. Read-only, so check_mode:
+    # false — otherwise --check skips it and every assertion below is vacuous.
+    - name: Read Pi-hole admin password hash from Vault
+      ansible.builtin.shell:
+        cmd: vault kv get -format=json secret/lab/pihole
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      register: vault_pihole_raw
+      delegate_to: h4-core
+      run_once: true
+      no_log: true
+      changed_when: false
+      check_mode: false
+      when: pihole_in_run | bool
+
+    - name: Set the Pi-hole pwhash fact
+      ansible.builtin.set_fact:
+        pihole_web_pwhash: "{{ (vault_pihole_raw.stdout | from_json).data.data['web-pwhash'] }}"
+      no_log: true
+      run_once: true
+      when: pihole_in_run | bool
+
+    # An empty or malformed hash renders an unauthenticated admin UI, which is the
+    # exact condition §2.1 records. Checking the shape rather than merely "is
+    # defined" is the point: the previous variable was always defined and always
+    # empty. The prefix is FTL's own algorithm marker, so it cannot be produced by
+    # a v5 hash, a plaintext password, or an empty string.
+    - name: Assert the Pi-hole hash is a v6 BALLOON-SHA256 hash, not empty or v5
+      ansible.builtin.assert:
+        that:
+          - pihole_web_pwhash is defined
+          - pihole_web_pwhash | length > 0
+          - pihole_web_pwhash.startswith('$BALLOON-SHA256$')
+        fail_msg: >-
+          secret/lab/pihole web-pwhash is missing, empty, or not a v6 hash.
+          Generate it on a Pi-hole host with `pihole setpassword <password>`, then
+          copy webserver.api.pwhash out of /etc/pihole/pihole.toml into Vault.
+          Refusing to render a Pi-hole config with no admin authentication.
+        success_msg: "Pi-hole admin hash present and well-formed"
+        quiet: true
+      when: pihole_in_run | bool
+      run_once: true
 
     # ---- Fix broken apt sources on EOL Raspbian/Debian Buster ----
     # Use distribution_release (not distribution name) — Ansible may report 'Debian' for Raspbian
