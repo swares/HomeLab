@@ -400,9 +400,18 @@ The Phase 1 capture work is engine-independent, which is why it goes first.
 
 ### 8.1 Storage, decided 2026-08-27 — JSONL on disk, engine still deferred
 
-Phase 2 writes **append-only JSONL to `/var/lib/lab-ledger/YYYY-MM.jsonl`** on the H4's
-NVMe, included in `backup-nas` so it reaches both cold mirrors and offsite through the
-existing chain.
+Phase 2 writes **append-only JSONL to `/var/lib/lab-ledger/YYYY-MM.jsonl`** on the H4,
+included in `backup-nas` so it reaches both cold mirrors and offsite through the existing
+chain.
+
+**On the eMMC, not the NVMe** — corrected 2026-08-27, having been written wrongly here
+first. `/var` is on the H4's 256 GB eMMC root (`/dev/mmcblk0p2`, 227 GiB); the 4 TB NVMe
+carries the LVM VG, the live NAS share and the k8s PVs. This is fine for the ledger — it
+is kilobytes a day and its durability comes from `backup-nas`, not from the device — but
+the distinction matters because `CLAUDE.md` treats the NVMe and the two cold disks as one
+failure domain, and the eMMC is a fourth device outside it. Worth stating accurately
+rather than approximately, since "the hot tier" is exactly the kind of phrase that
+becomes a wrong fact in a document six weeks later.
 
 This is not a decision *against* the engines above; it is what keeps the choice open.
 A file has three properties an engine has to earn:
