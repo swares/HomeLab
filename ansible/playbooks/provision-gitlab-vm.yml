@@ -19,6 +19,41 @@
 #
 # After completion, run install-gitlab.yml to install GitLab CE.
 
+- name: Preflight — the VM password must resolve before anything is built
+  hosts: localhost
+  become: false
+  gather_facts: false
+
+  tasks:
+    # BACKLOG §2.3. Fails closed: without this, an unresolvable variable would
+    # render `passwd: ""` into cloud-init and build a VM whose console account has
+    # no password at all — a worse outcome than the hardcoded one it replaced, and
+    # one that looks like success.
+    #
+    # The likeliest cause of it not resolving is §4.1c: ansible.cfg is only read
+    # from the current working directory, so running this from the repo root means
+    # `vault_password_file` is never applied and the vaulted variable cannot be
+    # decrypted. That produced "Attempting to decrypt but no vault secrets found"
+    # on 08-09. The message below names that cause rather than making someone
+    # rediscover it.
+    - name: Assert lab_user_password_hash resolved from Ansible Vault
+      ansible.builtin.assert:
+        that:
+          - lab_user_password_hash is defined
+          - lab_user_password_hash | length > 0
+          - lab_user_password_hash.startswith('$6$')
+          - "'labsalt' not in lab_user_password_hash"
+        fail_msg: >-
+          lab_user_password_hash did not resolve to a sha512 crypt hash (or is still
+          the retired hardcoded one). It lives vault-encrypted in
+          inventory/group_vars/all/secrets.yml. If this is a decryption failure, check
+          you ran from the ansible/ directory — ansible.cfg, and therefore
+          vault_password_file, is only read from the current working directory
+          (BACKLOG §4.1c). Refusing to build a VM with no console password.
+        success_msg: "VM console password hash resolved from Ansible Vault"
+        quiet: true
+      no_log: true
+
 - name: Provision gitlab-1 VM on n150-1
   hosts: n150-1
   become: true
@@ -92,8 +127,25 @@
               groups: [sudo, adm]
               shell: /bin/bash
               lock_passwd: false
-              passwd: "$6$rounds=4096$labsalt$3z6E9ML4tMNklYBkrmCPjO5nqFDEqAIPBZCk9t0RbGaS.7HsYI3o2P3C5Dk7XLJDdpJ5PmkAhVzrR1BGynX11"
-              # sha512 of 'LabTemp123!' — change immediately after first login
+              # BACKLOG §2.3 — this was a hardcoded sha512 crypt hash with a fixed salt
+              # (`labsalt`), and the line beneath it stated the plaintext. Every VM built
+              # from this playbook shipped with the same known password, and the salt
+              # being fixed meant the hash was identical across every build — so one
+              # disclosure covered all of them, past and future.
+              #
+              # Now sourced from `lab_user_password_hash`, the Ansible Vault variable in
+              # inventory/group_vars/all/secrets.yml that rotate-passwords.yml already
+              # resolves. Same credential the rest of the fleet uses, one place to rotate,
+              # and nothing about it is in git in the clear.
+              #
+              # Note: `--diff` on this task will print the rendered hash. It is a hash and
+              # not the plaintext, but it is still a credential — prefer running without
+              # --diff, or redirect, when someone is watching.
+              passwd: "{{ lab_user_password_hash }}"
+              # NOT changed here, deliberately: `NOPASSWD:ALL` means this password does not
+              # gate privilege escalation — it is console/rescue login only, since SSH uses
+              # the key below. Tightening it is a separate decision with its own blast
+              # radius on automation, and belongs in its own change.
               sudo: ALL=(ALL) NOPASSWD:ALL
               ssh_authorized_keys:
                 - {{ ansible_pub_key }}
