@@ -960,7 +960,43 @@ UI again.
 CI job pods get `/var/run/docker.sock` with `read_only: false` — that is node root for
 anything that can open a merge request. Also no CPU/memory limits on build pods.
 
-### 2.3 Plaintext credential in git
+### 2.3 ~~Plaintext credential in git~~ — **FIXED 2026-08-27; live exposure checked and absent**
+
+> `passwd` now renders `{{ lab_user_password_hash }}` — the Ansible Vault variable in
+> `inventory/group_vars/all/secrets.yml` that `rotate-passwords.yml` already resolves.
+> No new mechanism, same credential as the rest of the fleet, one place to rotate.
+> `LabTemp123` no longer appears anywhere in the repo outside this file.
+>
+> **A detail the entry missed: the salt was fixed** (`labsalt`), so the hash was
+> byte-identical in every VM ever built from this playbook. One disclosure covered all
+> of them, retroactively and going forward — the usual "each build gets its own hash"
+> intuition did not apply.
+>
+> **Fails closed now.** A `localhost` preflight play asserts the variable resolved to a
+> `$6$` hash that is not the retired one. Without it, an unresolvable variable renders
+> `passwd: ""` and builds a VM whose console account has *no* password — worse than the
+> hardcoded one, and indistinguishable from success. The failure message names §4.1c as
+> the likely cause, since running from the repo root skips `ansible.cfg` and therefore
+> `vault_password_file`, which is exactly the 08-09 decryption failure.
+>
+> **`NOPASSWD:ALL` deliberately left alone** and commented as such: this password gates
+> console/rescue login only, not privilege escalation — SSH uses the key. Tightening it
+> is a separate change with its own blast radius on automation.
+>
+> **The half this entry did not have.** Fixing the playbook only affects VMs built from
+> now on; `gitlab-1` already existed. Checked rather than assumed:
+> `getent shadow swares | cut -d: -f2` on gitlab-1 does **not** begin
+> `$6$rounds=4096$labsalt$`, so the published credential was never live there, or was
+> rotated off it. Note precisely what that establishes — the hash in git was not the
+> hash on the box. It says nothing about the strength of the one that is.
+>
+> gitlab-1 is in `gitlab_servers` and `standalone_vms`, and `rotate-passwords.yml`
+> targets `all:!x86_nodes:!embedded` (`x86_nodes` is only `n150-3`), so it was in scope
+> for rotation all along. Whether that playbook had *run* is not knowable from git —
+> §3.11 — which is why the check was one command against the host rather than an
+> inference from the inventory. That distinction is the whole reason this closed as a
+> build-time defect instead of an incident.
+
 `ansible/playbooks/provision-gitlab-vm.yml:95-96`
 
 A SHA-512 crypt hash with a hardcoded salt, and the line beneath it **states the
