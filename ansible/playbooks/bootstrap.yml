@@ -6,7 +6,7 @@
 # Usage:
 #   make bootstrap                    # all non-local hosts
 #   make bootstrap LIMIT=dns          # just the dns group
-#   make bootstrap LIMIT=dns-1        # single host
+#   make bootstrap LIMIT=octopi-dns   # single host
 - name: Bootstrap — SSH key + passwordless sudo
   hosts: "{{ target_hosts | default('all:!microshift') }}"
   gather_facts: false
