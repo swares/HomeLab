@@ -968,7 +968,7 @@ the primary from the secondary. Pin it.
 
 ## 2. Security
 
-### 2.1 Pi-hole admin UI deploys unauthenticated — **verified**
+### 2.1 ~~Pi-hole admin UI deploys unauthenticated~~ — **RESOLVED 2026-08-28; the primary really was, the secondary never was**
 `ansible/playbooks/dns.yml:12`, `ansible/templates/pihole.toml.j2:21` (H16)
 
 ```
@@ -1010,16 +1010,78 @@ presence, because the old variable was always *defined* and always empty. The te
 writes `pwhash` with no `default()`, so an unset variable cannot quietly deploy an open
 UI again.
 
-- [ ] **Populate Vault before merging — this fails closed.** `pihole setpassword <pw>` on
-      a Pi-hole host, copy `webserver.api.pwhash` out of `/etc/pihole/pihole.toml`, then
-      store it. Until that exists, `dns.yml` refuses to run against a Pi-hole host.
-- [ ] **Know what a run costs before making one.** The task named "(pihole) pre-seed
-      pihole.toml (REQUIRED before --unattended on a fresh host)" is not gated to fresh
-      hosts — it rewrites the entire live `pihole.toml` on every run, discarding anything
-      FTL or the web UI has written since. Pre-existing, and it matters now that there is
-      a reason to run it. `--check --diff` first, and do `dns-3` before `dns-1`: the
-      secondary is the cheaper place to be wrong about DNS (§4.11, §6.1 are both scars
-      from changing DNS on an assumption).
+- [x] **Populate Vault** — done 2026-08-28. `secret/lab/pihole` key `web-pwhash`, a
+      101-character BALLOON-SHA256 hash lifted from the live `rpi4b` config rather than
+      generated fresh, so no working credential was changed to store one.
+- [x] **The overwrite hazard** — fixed the same day, and it was worse than this entry
+      said. See the resolution below.
+
+---
+
+**RESOLVED 2026-08-28 — and the entry was half right, per host, which nobody had checked.**
+
+The claim "Pi-hole admin UI deploys unauthenticated" was about what the *template* would
+render. It was never checked against either live resolver. Checked now, they disagreed
+with each other:
+
+| host | live state before 2026-08-28 |
+|---|---|
+| `octopi-dns` (.148, **primary**) | **no admin password at all** — `pwhash=0` |
+| `rpi4b` (.116, secondary) | password set since ~July; `pihole.toml` carries FTL's own `### CHANGED, default = ""` annotation |
+
+So the lab's **primary** resolver really was serving an unauthenticated admin UI, and the
+secondary never was. A blanket claim was 50% right and 100% unverified — and the half that
+was true was the more important half.
+
+**Why they diverged: neither file was ever templated.** `rpi4b` was added to the `dns`
+group on 2026-07-27 and, as the inventory comment says, no playbook ever touched it. Its
+`pihole.toml` is 70,528 bytes written by FTL and the web UI. `octopi-dns` is the same
+shape. The template renders about thirty lines, so **a `dns.yml` run would have replaced a
+live resolver's entire configuration** — including `webserver.api.app_pwhash`, a second
+credential nothing in this repo manages. That is what the "pre-seed … on a fresh host"
+task did on every run, despite its name.
+
+**What shipped:**
+
+- `dns.yml` reads the hash from Vault via `h4-core` (the resolvers have no `vault` CLI),
+  gated so a dnsmasq-only `--limit` still runs without a token, and asserts the value
+  starts with `$BALLOON-SHA256$` — shape, not mere presence, because the variable this
+  replaced was always *defined* and always empty.
+- The seed task carries `force: false`, so it seeds a fresh host and never overwrites a
+  live one. Its name is now true.
+- A read-only check of the two facts that have actually caused outages here — that
+  `*.apps` answers `ingress_vip` and not `.160` (§6.1), and that `pwhash` is non-empty —
+  asserted against **the file FTL loads**, not the template that would have been written.
+
+**The check found the real instance on its first use.** Run against `octopi-dns` it failed
+with `pwhash=0`, naming the host and the remedy. After `pihole setpassword` there it
+returned `wildcard=1, stale160=0, pwhash=101` and passed. Both directions observed on the
+same host in the same hour, which is the only way to know a check can do more than be
+reliably angry.
+
+Also settled in passing: `wildcard=1, stale160=0` on **both** resolvers. The inventory's
+worry that `.116` "kept handing out 192.168.1.160 indefinitely" is no longer true of
+either host.
+
+**Deliberately not done:** the live hashes differ between the two hosts — same password,
+different salt — because each was set with `pihole setpassword` locally rather than
+templated. That is fine now that the file is not rendered; Vault's copy only feeds a
+fresh-host seed. Do not "fix" the divergence by templating the file.
+
+**Still open, small, and split out rather than buried here:**
+
+- [ ] `webserver.api.app_pwhash` on both hosts is a second credential nothing manages,
+      rotates, or records. It exists because FTL wrote it.
+- [ ] `secret/lab/pihole` version 1 (created 2026-07-17 by the `root` actor, before the
+      root token was revoked) held a key named `password` — plaintext, presumably for
+      `tofu/dns`'s `TF_VAR_pihole_password`. It survives in kv2 history. Establish whether
+      anything reads it, then decide whether a plaintext Pi-hole password should still be
+      in a Vault that serves HTTP in the clear (§2.6).
+- [ ] The `--check` also caught the playbook wanting to *widen* two permissions the hosts
+      had tighter (`/etc/pihole` 0755→0775, `lab-clients.sql` 0640→0644). Git was wrong,
+      the hosts were right; corrected in `fix/pihole-config-modes`.
+
+Original finding retained below.
 
 ### 2.2 GitLab runner mounts the host Docker socket read-write
 `gitops/workloads/gitlab-runner/values.yaml:40-45` (C5)
@@ -2413,6 +2475,26 @@ answers to a different name, and several of them own `local-path` PVs that canno
 follow. That is the `lldap`/n150-2 outage pattern from
 `gitops/workloads/lldap/postgres.yaml:6`, executed deliberately across the fleet.
 
+**Blocker cleared 2026-08-28, and it was never written down here.** This play could not
+have been written safely before §3.12 was fixed, for a reason neither entry mentioned:
+**`inventory_hostname` was ambiguous for four machines.** 192.168.1.116 answered to both
+`dns-3` and `rpi4b`, .148 to both `dns-1` and `octopi-dns`, and so on. A play setting
+`hostname` from `inventory_hostname` would have set each of those four twice per run, to
+two different values, last writer wins — non-deterministically, depending on play order.
+The dedupe removed that: one machine now has exactly one inventory name.
+
+**The danger it does not remove, restated because it is the one that matters.** The naive
+form of this play — `hostname: name={{ inventory_hostname }}` across the fleet — would
+rename the core of the lab. **`h4-core` is an inventory name; the machine's actual
+hostname is `odroid-nas`**, which is what k3s registered as its Node name and what six
+`kubernetes.io/hostname` selectors pin to. Running it would leave the old Node object
+`NotReady`, register a new empty one, and strand the `local-path` PVs that cannot follow.
+The same applies to `n150-1`/`n150-2` (12 selectors) and both opi5pro agents.
+
+So for the cluster nodes the mismatch is in the **inventory**, not on the machines, and
+the correct direction is to rename the inventory entry — not the host. That is a
+different, cheaper change, and it is not what this entry describes.
+
 **Scope it accordingly:**
 
 - [ ] **Non-cluster hosts only, to begin with** — the Pis and Zero 2Ws. They are the
@@ -3049,7 +3131,45 @@ positive in its own first version — `gitlab-runner` uses multi-source `sources
 
 ---
 
-### 3.12 Four machines appear twice in the inventory under two names
+### 3.12 ~~Four machines appear twice in the inventory under two names~~ — **FIXED 2026-08-28**
+
+> Collapsed to one entry per machine, under the **hardware** name — the `dns-N` aliases
+> were the duplicates, so they are the ones that went:
+>
+>     dns-1 -> octopi-dns     dns-2 -> opi-zero2w-1
+>     dns-3 -> rpi4b          dns-4 -> opi-zero2w-3
+>
+> **21 inventory entries described 17 machines. Now 17 entries, 17 distinct IPs.**
+> `dns_role` and `dns_engine` moved onto the surviving entries, so the `dns` group still
+> resolves the same four hosts with the same variables.
+>
+> **The proof is a count Ansible produces, not a claim about the file:**
+>
+>     ansible 'all:!x86_nodes:!embedded' -i inventory/hosts.yml --list-hosts | wc -l
+>     19 before  ->  15 after      (a header line plus 18 hosts, then 14)
+>
+> Down by exactly four. `ansible dns --list-hosts` returns the four hardware names, and
+> `ansible-inventory --list | grep -c 'dns-[1-4]'` returns 0. Confirmed again in a live
+> run the same day: `dns.yml --limit rpi4b` skipped *Set dns_engine from OS family*
+> because the deduped entry now carries `dns_engine` explicitly.
+>
+> **The entry called this "mostly cosmetic until something counts hosts". Something
+> already did.** Group memberships were disjoint, so no single-group play ever collided
+> — but **six plays target `all` and no exclusion caught these four**: `bootstrap.yml`,
+> `rotate-passwords.yml`, `break-glass-key.yml`, `apport.yml`, `journald.yml` and
+> `chrony.yml`, the last of which has two plays and therefore made **four passes** per
+> machine. Every task involved is idempotent, so nothing broke. What it would have broken
+> is §3.11's scheduled `--check` drift report: doubled `changed` counts on four hosts, in
+> the one mechanism built to detect disagreement between git and the machines.
+>
+> Only one *runnable* reference had to move — `update-non-apt.yml`'s `hosts: dns-1`.
+> `bootstrap.yml`'s usage example was corrected too, on the grounds that a comment
+> someone pastes is not really a comment. Old names are deliberately left in narrative
+> comments (`chrony.yml`, `node-dns.yml`, `docs/UPDATES.md`, `scripts/lab-check.sh`
+> labels); the mapping lives in the inventory now, and a mechanical diff is easier to
+> review when it is only mechanical.
+
+**Original finding, retained for the evidence it records:**
 
 **Confirmed with evidence 2026-08-26.** A fleet-wide `chrony.yml` run printed byte-identical
 `chronyc tracking` output — same Reference ID, same offsets to the nanosecond — for three
