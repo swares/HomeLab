@@ -229,15 +229,75 @@
         mode: "0775"
       when: dns_engine == 'pihole'
 
-    - name: (pihole) pre-seed pihole.toml (REQUIRED before --unattended on a fresh host)
+    # BACKLOG §2.1, template-overwrite hazard — found 2026-08-28.
+    #
+    # This task's name says "on a fresh host" and it ran on EVERY run, rendering a
+    # ~30-line template over whatever was there. On dns-3 (rpi4b, 192.168.1.116) the
+    # live file is 70,528 bytes — written by FTL and the web UI since July, including
+    # `webserver.api.app_pwhash` — because that host was added to the inventory on
+    # 2026-07-27 and, as the inventory comment says, no playbook ever touched it.
+    #
+    # A run would not have changed a password. It would have wiped the configuration
+    # of a live resolver, at whatever hour someone happened to run dns.yml.
+    #
+    # `force: false` makes the task's name true: seed a fresh host, never overwrite an
+    # existing file. The accepted cost is the §4.8 failure mode — a file that never
+    # self-corrects — which is why the check below exists. Silently diverging is not
+    # better than overwriting; it is the same fault one step later (§3.11). So the
+    # play reports the divergence instead of either ignoring or "fixing" it.
+    - name: (pihole) seed pihole.toml on a fresh host only (never overwrite a live one)
       ansible.builtin.template:
         src: ../templates/pihole.toml.j2
         dest: /etc/pihole/pihole.toml
         owner: pihole
         group: pihole
         mode: "0644"
+        force: false
       when: dns_engine == 'pihole'
       notify: restart pihole
+
+    # Read the artifact FTL actually loads, not the template we would have written.
+    # Two facts, because these are the two that have caused outages here:
+    #   wildcard — §6.1 / §4.11: `*.apps` pointing at 192.168.1.160 instead of the
+    #              ingress VIP took down every service URL in the lab. Finding .160
+    #              on the wildcard is the fault, not the fix.
+    #   pwhash   — §2.1: an empty value is an unauthenticated admin UI on the lab's
+    #              load-bearing resolver.
+    # check_mode: false because it is read-only and must run under --check, or the
+    # assertion below reports success having inspected nothing.
+    - name: (pihole) read the live config's load-bearing facts
+      ansible.builtin.shell:
+        executable: /bin/bash
+        cmd: |
+          set -o pipefail
+          f=/etc/pihole/pihole.toml
+          echo "wildcard=$(grep -c 'address=/apps\.{{ lab_domain }}/{{ ingress_vip }}' "$f" || true)"
+          echo "stale160=$(grep -c 'address=/apps\.{{ lab_domain }}/192\.168\.1\.160' "$f" || true)"
+          echo "pwhash=$(sed -n 's/^[[:space:]]*pwhash = "\([^"]*\)".*/\1/p' "$f" | tr -d '\n' | wc -c)"
+      register: pihole_live_facts
+      changed_when: false
+      check_mode: false
+      when: dns_engine == 'pihole'
+
+    - name: (pihole) assert the live config still says what it must
+      ansible.builtin.assert:
+        that:
+          - "'wildcard=1' in pihole_live_facts.stdout"
+          - "'stale160=0' in pihole_live_facts.stdout"
+          - "'pwhash=0' not in pihole_live_facts.stdout"
+        fail_msg: >-
+          {{ inventory_hostname }}'s live /etc/pihole/pihole.toml has drifted from what
+          this playbook guarantees: {{ pihole_live_facts.stdout_lines | join(', ') }}.
+          wildcard=0 or stale160=1 means *.apps.{{ lab_domain }} is not answering
+          {{ ingress_vip }} — see BACKLOG §6.1, the single A record whose loss took down
+          every service URL in the lab. pwhash=0 means the admin UI has no password
+          (§2.1). This file is no longer templated, so fix it on the host with
+          `pihole-FTL --config <key> <value>` and re-run — do NOT delete the file to
+          force a re-render, which would discard the rest of the live configuration.
+        success_msg: >-
+          {{ inventory_hostname }}: wildcard -> {{ ingress_vip }}, admin password set
+        quiet: true
+      when: dns_engine == 'pihole'
 
     - name: (pihole) unattended install (idempotent — skipped once FTL exists)
       ansible.builtin.shell:
