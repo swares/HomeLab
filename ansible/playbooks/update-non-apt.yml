@@ -18,8 +18,8 @@
 # ------------------------------------------------------------------------------
 # dns-2 (opi-zero2w-1) runs dnsmasq, not pi-hole — no pihole update needed there
 
-- name: Update Pi-hole - primary (dns-1 / octopi)
-  hosts: dns-1
+- name: Update Pi-hole - primary (octopi-dns)
+  hosts: octopi-dns
   become: true
   tags: [pihole]
   # TODO: remove the stat guard once pihole is installed (pending: flash octopi → Pi-hole v6)
