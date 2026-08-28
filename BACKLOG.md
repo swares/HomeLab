@@ -662,7 +662,84 @@ manual procedure in `docs/BACKUP-RESTORE.md` §3.4).
 - [ ] Establish why `2026-08-05..08` and `08-10..15` produced no snapshot while
       08-09 and 08-16 did. Intermittent success rules out a simple "job broken since
       08-04" story.
-- [ ] Find out why the backup job's own snapshot listing omitted 08-09 and 08-16.
+
+      **Hypothesis, not yet measured — 2026-08-27.** PRs #348 and #349 (both 08-04)
+      removed `apk add --no-cache restic`, which had made every 02:30 run depend on
+      `dl-cdn.alpinelinux.org`. Correct change, and its own commit message warns that
+      "an unpinned tag would reintroduce the class of external dependency this
+      removes." But both containers carry `imagePullPolicy: IfNotPresent`, and the
+      pod is deliberately unconstrained by node ("can run on any node"). On a node
+      where `restic/restic:0.17.3` is not already cached, the job needs **docker.io**
+      at 02:30. The external dependency was not removed so much as **moved from apk to
+      the image pull, and made node-dependent** — which is a mechanism that fails most
+      nights and succeeds occasionally, matching the observed shape better than
+      anything else in the file.
+
+      The measurement, on all five nodes (`k3s ctr`, not plain `ctr` — the opi5pro
+      boxes run a second containerd whose images no pod can use):
+
+          k3s ctr images ls | grep -c 'restic/restic:0.17.3'
+          k3s ctr images ls | grep -c 'postgres:16-alpine'    # control
+
+      Partial coverage on the first line is the finding. If the control is equally
+      patchy, the story is image caching generally and not this image. **Recorded as a
+      hypothesis on purpose** — the events and metrics that would confirm it are gone
+      (§3.14, §4.13), so this must be established forward rather than reconstructed,
+      and §3.5's blind spot was very nearly written down as a diagnosis on exactly
+      this entry once already.
+
+- [x] ~~Find out why the backup job's own snapshot listing omitted 08-09 and 08-16.~~
+      **SOLVED AND MEASURED 2026-08-27.**
+
+      `backup-cronjob.yaml:126` is `restic snapshots --tag lldap --latest 5`. Before
+      restic 0.19.0, **`--latest n` returns n snapshots per group, and the default
+      grouping is `host,paths`** — not the n most recent overall. The job pins
+      `restic/restic:0.17.3`, so it gets the per-group behaviour.
+
+      The repo holds three path groups across its history — `/data/users.db`,
+      `/tmp/lldap.sql`, `/dump/lldap.sql`. Three groups × 5 = 15 rows. Measured on the
+      H4:
+
+          snapshots --tag lldap --latest 5  ->  19 lines
+          snapshots --tag lldap            ->  28 lines
+          snapshots --tag lldap --json | jq length  ->  24
+
+      **24 snapshots exist; the job displays 15; nine are hidden.** And 15 is exactly
+      the count the 08-26 investigation read as a complete history. `/tmp`'s newest
+      five end 08-04, `/dump`'s newest five begin 08-19 — so the display jumps the gap
+      because **the path changed in the same 08-04 commit**, putting the group boundary
+      precisely where the outage appeared to start. Two unrelated-looking facts, one
+      commit.
+
+      This is the fourth time in two days that absence-in-a-view was read as
+      absence-in-the-world, and the first where the view's truncation rule is written
+      down in the file that produced it.
+
+      **Fix — needs its own verification before it lands.** Candidate is
+      `--group-by ''` beside `--latest 5`, making it "the 5 most recent" globally.
+      Check the flag against 0.17.3 first: the comment block at `:120-125` already
+      records one deprecated-flag trap (`--last 5` prefix-matching a snapshot ID and
+      silently ignoring `--tag`), and this would be the third in one line of shell.
+      The alternative that cannot develop new semantics is to drop `--latest`, print
+      the total count, and tail the table.
+
+      **Also a live upgrade trap:** restic 0.19.0 changed `--latest` to global. The pin
+      holds it stable, but any future bump silently changes what that line means — in
+      the direction of *more* correct, which is the kind of change nobody investigates.
+
+- [ ] **A zero that meant "the check could not speak", caught live 2026-08-27.** While
+      measuring the above:
+
+          restic -r /mnt/cold-8t/restic snapshots --tag lldap | wc -l
+          Fatal: unable to open repo ... /keys: permission denied
+          0
+
+      Without `sudo` the error went to stderr and `wc -l` printed `0` — indistinguishable
+      from "no lldap snapshots exist", which is the exact false conclusion this entry
+      exists to correct. Caught only because a human was watching the terminal. Any
+      pipeline of the form `restic ... | wc -l` in a script or a check has this failure
+      mode. Sweep for it: `set -o pipefail`, or count from `--json`, which cannot
+      produce a plausible number from a failed command.
 
 ---
 
