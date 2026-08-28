@@ -25,7 +25,23 @@ Last verified: 2026-07-18.
 | **Orange Pi Zero 2W #1** | H618 A53 4C | 4 GB | — | `192.168.1.184` | DNS secondary (dnsmasq) |
 | **Orange Pi Zero 2W #2** | H618 A53 4C | 4 GB | — | `192.168.1.188` | MQTT broker (Mosquitto) |
 | **Orange Pi Zero 2W #3** | H618 A53 4C | 4 GB | — | `192.168.1.217` | DNS secondary · Armbian Trixie (Debian 13) |
-| **Orange Pi Zero 2W #4** | H618 A53 4C | 4 GB | — | `192.168.1.99` | MQTT secondary broker |
+| **Orange Pi Zero 2W #4** | H618 A53 4C | 4 GB | — | `192.168.1.99` | MQTT secondary broker · OrangePi image (Debian) |
+
+> **Same board model, different distro, different package names.** Confirmed
+> 2026-08-27 while disabling RAM logging. The Zero 2W boards do not share an OS:
+> `.217` runs **Armbian Trixie** and uses `armbian-ramlog` /
+> `/etc/default/armbian-ramlog`; `.99` runs the **OrangePi image** and uses
+> `orangepi-ramlog` / `/etc/default/orangepi-ramlog`. `.99` also takes the
+> **Debian** path in `ansible/playbooks/node-exporter.yml`, not the Arch path the
+> playbook header claimed for it.
+>
+> "Same hardware" misled two separate fixes in one evening — a `systemctl
+> disable` and a `sed -i` each failed on a unit/file that exists on the other
+> board. Enumerate with `ls /etc/default/ | grep -iE 'zram|ramlog'` rather than
+> copying a command that worked on a sibling.
+>
+> Both are now on durable `/var/log` (`ENABLED=false` + reboot). `opi5pro-1/2`
+> deliberately remain on zram — see `journal_durable` in the inventory.
 | **M5Stack LLM** | ESP32-S3 | — | — | USB | Edge AI inference |
 | **HostMon** | ESP32-S3 (Waveshare 4.3") | 8 MB PSRAM | LAN | — | Host prober + status panel |
 
