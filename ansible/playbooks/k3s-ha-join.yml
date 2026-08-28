@@ -26,12 +26,28 @@
   vars:
     k3s_vip:      "192.168.1.200"
     k3s_api_url:  "https://{{ k3s_vip }}:6443"
-    k3s_version:  "{{ hostvars[inventory_hostname]['k3s_version'] | default('stable') }}"
+    # BACKLOG §4.4 — this line used to read:
+    #   k3s_version:  "{{ hostvars[inventory_hostname]['k3s_version'] | default('stable') }}"
+    # Same silent `stable` fallback as k3s-h4.yml, and worse here: this play is
+    # `serial: 1` across the etcd voters, so an unintended version would be carried
+    # into the control plane one node at a time. Inventory only; absence is fatal.
     k3s_node_ip:  "{{ node_ip }}"
     k3s_config_dir: /etc/rancher/k3s
     kubeconfig_dest: "/home/{{ ansible_user }}/.kube/config"
 
   pre_tasks:
+    - name: Assert k3s_version is pinned in inventory
+      ansible.builtin.assert:
+        that:
+          - k3s_version is defined
+          - k3s_version is match('^v\d+\.\d+\.\d+\+k3s\d+$')
+        success_msg: "k3s server will join at {{ k3s_version }}"
+        fail_msg: >-
+          k3s_version is unset or malformed. It is pinned in
+          ansible/inventory/group_vars/all/k3s.yml. Refusing to fall back to the
+          `stable` channel while joining an etcd voter — BACKLOG §4.4.
+      run_once: true
+
     - name: Verify VIP port 6443 is reachable before joining
       ansible.builtin.wait_for:
         host: "{{ k3s_vip }}"

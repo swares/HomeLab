@@ -13,10 +13,29 @@
   hosts: microshift          # h4-core lives here; rename the group later if desired
   become: true
   vars:
-    k3s_version: "{{ hostvars[inventory_hostname]['k3s_version'] | default('stable') }}"
+    # BACKLOG §4.4 — this line used to read:
+    #   k3s_version: "{{ hostvars[inventory_hostname]['k3s_version'] | default('stable') }}"
+    # The `stable` fallback is unreachable for the standard inventory, but it is a
+    # silent UPGRADE path on any run with a narrowed inventory — the opposite hazard
+    # to the agent playbook's downgrade, and the same defect. k3s_version now
+    # resolves from inventory only, and its absence is a hard failure.
     k3s_node_ip: "{{ node_ip }}"
     k3s_config_dir: /etc/rancher/k3s
     kubeconfig_dest: "/home/{{ ansible_user }}/.kube/config"
+
+  pre_tasks:
+    - name: Assert k3s_version is pinned in inventory
+      ansible.builtin.assert:
+        that:
+          - k3s_version is defined
+          - k3s_version is match('^v\d+\.\d+\.\d+\+k3s\d+$')
+        success_msg: "k3s server will install {{ k3s_version }}"
+        fail_msg: >-
+          k3s_version is unset or malformed. It is pinned in
+          ansible/inventory/group_vars/all/k3s.yml. Refusing to fall back to the
+          `stable` channel, which would upgrade the control plane unattended —
+          BACKLOG §4.4.
+      run_once: true
 
   tasks:
     - name: Ensure k3s config directory exists
