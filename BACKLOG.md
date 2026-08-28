@@ -855,7 +855,31 @@ measurement that held up every time was: restart networkd, count sources online.
       broader question is whether etcd voters should self-upgrade networking packages
       unattended at all.
 
-### 1.7 Nothing pins restic, so an unattended upgrade can change copy semantics
+### 1.7 ~~Nothing pins restic, so an unattended upgrade can change copy semantics~~ — **FIXED AND APPLIED 2026-08-27**
+
+> `backup.yml` now holds restic via `dpkg_selections` after installing it, and verifies
+> by reading dpkg's own record rather than trusting that the module reported `changed`.
+> Applied to h4-core the same day:
+>
+>     restic 0.12.1 compiled with go1.18.1 on linux/amd64 held (dpkg 'hi')
+>
+> The `h` prefix is the value that cannot be produced without the hold sticking — the
+> module reporting `changed` says only that it ran. 0.12.1 is well below the 0.14
+> boundary, so the held version is one both copy scripts already parse correctly.
+>
+> **Not pinned to a version string on purpose:** the available version differs by distro
+> and arch across this fleet, and a pin naming a version a host's repo does not carry
+> would fail the play on hosts that were previously fine.
+>
+> The `--check` run beforehand printed `dpkg 'ii' (NOT held; this run would apply the
+> hold)` — the control that proved the check could speak before the real run made it say
+> something different. Both read-only commands carry `check_mode: false` for that reason.
+>
+> **Found while doing it, and bigger than this entry:** the same `--check` reported
+> `backup-nas.service` as `changed` — the live unit was missing `/var/lib/lab-ledger`,
+> merged to main at 15:09 the same day and never applied. See §3.11. Original finding
+> below.
+
 **Reframed 2026-08-21 — the original heading described a requirement, not the risk.**
 
 The version guard the entry asks for **already exists** in both copy paths:
@@ -888,6 +912,47 @@ password = "{{ pihole_web_password_hash | default('') }}"
 Those are the only two occurrences in the entire repo — the variable is set to empty
 and never overridden, so it always renders empty. The template's own comment says
 empty = no auth. This is the lab's load-bearing resolver.
+
+**CORRECTION 2026-08-27 — the fix this entry prescribes would not have worked.** Checked
+against Pi-hole's v6 documentation before writing the change. Two defects in that one
+template line, and the entry only names the empty variable:
+
+- **`password` is the wrong key.** In v6 `webserver.api.password` is the *plaintext*
+  setup field; FTL consumes it and writes the hash to `webserver.api.pwhash`. The hash
+  field is the one a config file should carry.
+- **"Double-sha256" is the wrong algorithm.** That is Pi-hole **v5**'s scheme
+  (`WEBPASSWORD` in `setupVars.conf`). v6 uses BALLOON-SHA256:
+  `$BALLOON-SHA256$v=1$s=1024,t=32$<salt>$<hash>`.
+
+So "source `pihole_web_password_hash` from Vault", done literally, would have written a
+v5 hash into a plaintext field — setting the admin password to the literal text of a
+hash — and every status signal would have looked fixed. Recorded because the shape
+recurs: the entry was right that the value was empty and wrong about what the value was
+*for*, and only reading the current upstream docs separated the two.
+
+**Also wrong in this entry's framing:** `dns.yml`'s header calls the Pi-hole path
+"preserved for future use once octopi is upgraded to Bookworm". The inventory disagrees —
+`dns-1` (octopi, .148, primary) and `dns-3` (rpi4b, .116) both carry `dns_engine: pihole`.
+Two live resolvers, not zero. The header comment is stale (§6).
+
+**Fix written, on `feat/pihole-vault-password`, not yet merged.** `dns.yml` reads the
+hash from Vault (`secret/lab/pihole`, key `web-pwhash`) delegated to `h4-core`, since the
+resolvers have no `vault` CLI; gated so a dnsmasq-only `--limit` still runs without a
+token; and asserts the value starts with `$BALLOON-SHA256$` — shape rather than mere
+presence, because the old variable was always *defined* and always empty. The template
+writes `pwhash` with no `default()`, so an unset variable cannot quietly deploy an open
+UI again.
+
+- [ ] **Populate Vault before merging — this fails closed.** `pihole setpassword <pw>` on
+      a Pi-hole host, copy `webserver.api.pwhash` out of `/etc/pihole/pihole.toml`, then
+      store it. Until that exists, `dns.yml` refuses to run against a Pi-hole host.
+- [ ] **Know what a run costs before making one.** The task named "(pihole) pre-seed
+      pihole.toml (REQUIRED before --unattended on a fresh host)" is not gated to fresh
+      hosts — it rewrites the entire live `pihole.toml` on every run, discarding anything
+      FTL or the web UI has written since. Pre-existing, and it matters now that there is
+      a reason to run it. `--check --diff` first, and do `dns-3` before `dns-1`: the
+      secondary is the cheaper place to be wrong about DNS (§4.11, §6.1 are both scars
+      from changing DNS on an assumption).
 
 ### 2.2 GitLab runner mounts the host Docker socket read-write
 `gitops/workloads/gitlab-runner/values.yaml:40-45` (C5)
@@ -1508,6 +1573,33 @@ one layer and false of the other, with no marker at the boundary.
 The boot-ordering fix is the illustrative case rather than the worst case: it is
 invisible until a reboot, and the H4 has a reboot pending from §4.12.
 
+**Second instance, 2026-08-27 — and the victim was the ledger.** A `--check` of
+`backup.yml`, run to verify the §1.7 restic hold, reported `backup-nas.service` as
+`changed`:
+
+    ExecStart=/usr/bin/restic backup /srv/nas \
+      /mnt/cold-8t/immich \
+    + /var/lib/lab-ledger \
+
+`/var/lib/lab-ledger` entered the template with PR #474 at **15:09**; the live unit did
+not have it at **17:00**. Hours, not weeks — so this is a near miss rather than a hole,
+and it is recorded as one. But nothing was going to close it: the next `backup-nas` at
+01:30 would have run without the ledger, successfully, and reported success.
+
+Three things make it worth an entry rather than a footnote:
+
+- **It was found by accident**, during a `--check` run for an unrelated item. The
+  detection method was luck, which is the same detection method as §1.12 and §3.15.
+- **The gap is invisible from either side.** Git says the ledger is backed up. The
+  timer says the backup succeeded. Both are true statements about different objects.
+- **The ledger is the one file designed to outlive everything else.** The template's own
+  comment argues it: a ledger that records backup outcomes and is not itself backed up
+  is the first thing lost in the incident it exists to explain. That was the live state
+  for two hours, on the day the ledger was built.
+
+Applied the same day; `changed=2` (the hold, and the unit). This is the concrete cost
+case for the scheduled `--check` below — the run that found it took under a minute.
+
 **To do:**
 
 - [ ] **Run every playbook in `--check` on a schedule** and report non-zero changed
@@ -1629,7 +1721,24 @@ fixed:
 `ansible/templates/orchestrator.service.j2:14` — falls back to the whole LAN, while
 line 2 claims the unit is "fail-closed".
 
-### 4.4 k3s version — pinned for servers, but agents hardcode a five-minor-old downgrade
+### 4.4 ~~k3s version — pinned for servers, but agents hardcode a five-minor-old downgrade~~ — **FIXED 2026-08-27**
+
+> All three fallbacks removed, not just the agent's. `k3s_version` now resolves from
+> `inventory/group_vars/all/k3s.yml` only — the pattern `update-non-apt.yml` already
+> used — and each play asserts it is present and matches `^v\d+\.\d+\.\d+\+k3s\d+$`
+> before doing anything.
+>
+> **It was three fallbacks pointing in two directions**, which the entry had as one:
+> `k3s-agent.yml` fell back to `v1.31.4+k3s1` (a *downgrade*, five minors behind the
+> pin, on both inference nodes), while `k3s-h4.yml` and `k3s-ha-join.yml` fell back to
+> the `stable` channel (an *upgrade*, on the control plane — and `k3s-ha-join.yml` is
+> `serial: 1` across the etcd voters, so it would have been carried in one node at a
+> time). Fixing only the agent would have left two open paths looking closed — the
+> §4.1 trap, where one of two broken refs gets fixed and CI looks repaired.
+>
+> **Nothing to apply:** these playbooks execute only during an install or a join, so
+> the guard is live on merge. Unlike §1.7, there is no host-layer gap here.
+
 **Reframed 2026-08-21.** The `default('stable')` fallbacks at `k3s-h4.yml:16` and
 `k3s-ha-join.yml:29` are real but unreachable for the standard inventory:
 `ansible/inventory/group_vars/all/k3s.yml:7` has pinned `k3s_version: "v1.36.2+k3s1"` for all
@@ -2722,6 +2831,39 @@ SSH CAs and X.509 CAs are different trust roots and should not be conflated),
 ---
 
 ## 7. Repo hygiene
+
+- **There are three checkouts of this repo, and audits traverse all of them.**
+  Found 08-09 while grepping for `ldap.yml`, which returned every hit twice:
+
+      ~/lab/homelab/homelab                                        H4 working copy
+      ~/lab/homelab/homelab/actions-runner/_work/HomeLab/HomeLab   runner checkout
+      C:\Users\wares\Downloads\files (25)\homelab\homelab          Windows working copy
+
+  The GitHub Actions runner is installed **inside** the repo, so its workspace holds a
+  second, stale copy nested within the first. Correctly gitignored (`.gitignore:25`), so
+  nothing reaches git — but every `grep -rn`, `find` and audit walks it and reports stale
+  content as if it were live. That is exactly how the `ldap.yml` sweep doubled.
+
+  Move the runner outside the repo (`~/actions-runner`), or at minimum pass
+  `--exclude-dir=actions-runner` in any sweep. CLAUDE.md already warns that the two
+  checkouts are invisible to each other; a third nested inside one of them is worse,
+  because it is invisible to `git status` in *both*.
+
+  **Recovered 2026-08-27 from a stash that was nearly dropped**, and it existed nowhere
+  else — `grep -c "three checkouts of this repo"` against `origin/main:BACKLOG.md`
+  returned 0. A finding parked in `git stash` is one `git stash drop` from gone, and the
+  stash list is not a place anyone looks. If it is worth keeping, it goes in a file.
+
+  Scope, checked 2026-08-27: **the Windows copy has no `actions-runner/` and no nested
+  `HomeLab/`**, so sweeps run there are clean. This bites sweeps run on the H4.
+
+- **`ansible/playbooks/sandbox-vm-update.yml` references `bootstrap-lldap.yml`** in a
+  comment (1 hit, confirmed still present 2026-08-27). That playbook was deleted on
+  08-03. Cosmetic, but it is the kind of stale pointer that sends someone looking for a
+  file that has not existed for weeks.
+
+- **`Makefile:2` still lists `ldap` in `.PHONY`** though the target was removed on
+  08-09 and the file carries a comment explaining the removal. Harmless; finish the job.
 
 - **`FETCH_HEAD` is tracked in git** — a git internal committed by accident.
 - **Duplicated, drifted CI config under `ansible/`** — `ansible/.gitlab-ci.yml`,
