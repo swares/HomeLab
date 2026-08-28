@@ -621,125 +621,115 @@ rather than for the length of a ceremony.
 Related: §2.11 (cannot seal), §2.12 (version lag), §4.6 (Vault restore, now a verified
 manual procedure in `docs/BACKUP-RESTORE.md` §3.4).
 
-### 1.12 lldap's backups failed intermittently through August — ~~15-day gap~~ **CORRECTED 2026-08-27**
+### 1.12 ~~lldap's backups failed intermittently through August~~ — **NO FAILURE EXISTED. RESOLVED 2026-08-27**
 
-> **CORRECTION, and the ledger's first act was to make it.** This entry was written
-> hours earlier claiming a single continuous **15-day gap, 2026-08-04 → 08-19**. That is
-> wrong. Querying `/var/lib/lab-ledger` — populated the same evening by backfilling every
-> restic snapshot — produced:
+> **Third correction, and the last one. The premise was wrong, not the numbers.**
 >
->     2026-08-04 15:28  fe9f1e59  /tmp/lldap.sql
->     2026-08-09 02:30  7f8b5e42  /dump/lldap.sql     <- absent from the listing I read
->     2026-08-16 02:30  c519b63f  /dump/lldap.sql     <- absent from the listing I read
->     2026-08-17 … 08-22  daily
+> This entry has now claimed, in order: a continuous 15-day outage; then two gaps of 5
+> and 7 days with intermittent success; then an image-pull hypothesis. All three were
+> wrong, and all three were wrong the same way — **reading the residue of a retention
+> policy as the record of a job**.
 >
-> Confirmed directly against the repo: `restic snapshots --tag lldap` shows both.
->
-> **The real shape is two gaps of 5 and 7 days, not one of 15** — plus two-day gaps on
-> 07-27 and 07-30 that nobody noticed at all. That is a materially different diagnosis:
-> **intermittent failure, not a sustained outage**, which points away from "the 08-04
-> Argo sync broke it and it stayed broken" and toward something that fails most nights
-> and occasionally succeeds.
->
-> **How the error was made.** The evidence was the backup job's own
-> "Recent lldap snapshots" output, which showed 15 snapshots jumping 08-04 → 08-19. I
-> read absence *in that listing* as absence *of backups*, without establishing that the
-> listing was complete. It was not. Why the job prints an incomplete list is itself an
-> open question and worth chasing — a backup job that under-reports its own history is a
-> trap for the next person.
->
-> This is the same failure as `findmnt`, `Reach 0`, and the empty Prometheus vector:
-> **absence in a view is not absence in the world, until you have shown the view can
-> see everything.** It is now recorded four times in one day across three files.
->
-> **What the ledger changes:** the corrected timeline came from one `jq` query against a
-> store that did not exist twelve hours earlier, on data it backfilled for free. The
-> design argued this in the abstract (§6, contradiction detection); this is the first
-> instance, and the record it contradicted was fresh, confident, and mine.
+> **What actually happened: nothing failed.** `restic forget --prune` has been thinning
+> lldap's snapshots every night since the repo was created, because the host policy is
+> not scoped to the host.
 
-**To do (revised):**
+**The line that did it** — `ansible/templates/backup-nas.service.j2:78`:
 
-- [ ] Establish why `2026-08-05..08` and `08-10..15` produced no snapshot while
-      08-09 and 08-16 did. Intermittent success rules out a simple "job broken since
-      08-04" story.
+    ExecStartPost=/usr/bin/restic forget --prune \
+      --keep-daily 7 --keep-weekly 4 --keep-monthly 6
 
-      **Hypothesis, not yet measured — 2026-08-27.** PRs #348 and #349 (both 08-04)
-      removed `apk add --no-cache restic`, which had made every 02:30 run depend on
-      `dl-cdn.alpinelinux.org`. Correct change, and its own commit message warns that
-      "an unpinned tag would reintroduce the class of external dependency this
-      removes." But both containers carry `imagePullPolicy: IfNotPresent`, and the
-      pod is deliberately unconstrained by node ("can run on any node"). On a node
-      where `restic/restic:0.17.3` is not already cached, the job needs **docker.io**
-      at 02:30. The external dependency was not removed so much as **moved from apk to
-      the image pull, and made node-dependent** — which is a mechanism that fails most
-      nights and succeeds occasionally, matching the observed shape better than
-      anything else in the file.
+No `--tag`, no `--host`, no `--group-by`. restic's default grouping is `host,paths`, so
+this applies the NAS retention policy to **every group in the repository** — including
+`lldap-k8s` + `/dump/lldap.sql`. `backup-nas` runs at 01:30; the lldap CronJob writes the
+same repo at 02:30. Every night, a unit that does not know lldap exists prunes lldap's
+history.
 
-      The measurement, on all five nodes (`k3s ctr`, not plain `ctr` — the opi5pro
-      boxes run a second containerd whose images no pod can use):
+**The proof is arithmetic, and it is exact.** All 24 surviving `--tag lldap` snapshots
+(2026-08-27) decompose by path group, each group independently subject to the policy:
 
-          k3s ctr images ls | grep -c 'restic/restic:0.17.3'
-          k3s ctr images ls | grep -c 'postgres:16-alpine'    # control
+| group | surviving dates | count | why |
+|---|---|---|---|
+| `/data/users.db` | 07-19 … 07-26 | 8 | frozen group: last 7 daily + 1 weekly, preserved forever |
+| `/tmp/lldap.sql` | 07-28, 29, 31, 08-01 … 08-04 | 7 | frozen group: exactly `--keep-daily 7` |
+| `/dump/lldap.sql` | 08-09, 08-16, 08-18 … 08-22, 08-26, 08-27 | 9 | 7 daily + **2 weekly** |
 
-      Partial coverage on the first line is the finding. If the control is equally
-      patchy, the story is image caching generally and not this image. **Recorded as a
-      hypothesis on purpose** — the events and metrics that would confirm it are gone
-      (§3.14, §4.13), so this must be established forward rather than reconstructed,
-      and §3.5's blind spot was very nearly written down as a diagnosis on exactly
-      this entry once already.
+8 + 7 + 9 = 24, matching `restic snapshots --tag lldap --json | jq length`.
 
-- [x] ~~Find out why the backup job's own snapshot listing omitted 08-09 and 08-16.~~
-      **SOLVED AND MEASURED 2026-08-27.**
+**`08-09` and `08-16` are `--keep-weekly` picks, seven days apart.** They are the entire
+evidentiary basis for "intermittent success", and they are an artefact of retention. The
+older groups look dense because they are frozen — no new snapshots arrive to push their
+dailies out — while the live group is continuously thinned. That contrast is what made
+July look healthy and August look broken.
 
-      `backup-cronjob.yaml:126` is `restic snapshots --tag lldap --latest 5`. Before
-      restic 0.19.0, **`--latest n` returns n snapshots per group, and the default
-      grouping is `host,paths`** — not the n most recent overall. The job pins
-      `restic/restic:0.17.3`, so it gets the per-group behaviour.
+**Direct proof the backups ran.** Loki still held the 08-12 job's own output, and its
+snapshot listing showed five consecutive nights inside what this entry called a gap:
 
-      The repo holds three path groups across its history — `/data/users.db`,
-      `/tmp/lldap.sql`, `/dump/lldap.sql`. Three groups × 5 = 15 rows. Measured on the
-      H4:
+    e6c33bc9  2026-08-08 02:30:13  /dump/lldap.sql
+    7f8b5e42  2026-08-09 02:30:05  /dump/lldap.sql
+    3c436b8c  2026-08-10 02:30:04  /dump/lldap.sql
+    80d85dc8  2026-08-11 02:30:04  /dump/lldap.sql
+    4261428a  2026-08-12 02:30:05  /dump/lldap.sql
 
-          snapshots --tag lldap --latest 5  ->  19 lines
-          snapshots --tag lldap            ->  28 lines
-          snapshots --tag lldap --json | jq length  ->  24
+Those snapshots existed on 08-12 and are gone now. Nothing deleted them but the nightly
+`forget`.
 
-      **24 snapshots exist; the job displays 15; nine are hidden.** And 15 is exactly
-      the count the 08-26 investigation read as a complete history. `/tmp`'s newest
-      five end 08-04, `/dump`'s newest five begin 08-19 — so the display jumps the gap
-      because **the path changed in the same 08-04 commit**, putting the group boundary
-      precisely where the outage appeared to start. Two unrelated-looking facts, one
-      commit.
+**The one genuine gap, and it is already documented.** `/dump` is missing **08-23, 08-24,
+08-25**. That cannot be retention: `--keep-daily 7` keeps the seven most recent days *that
+have snapshots*, so had those nights produced snapshots they would have been kept and
+08-18/19/20 evicted instead. 08-18/19/20 survived, so those three nights genuinely
+produced nothing — which is the **H4 boot incident** (§0,
+`docs/INCIDENT-2026-08-23-h4-boot.md`). The restic repo is an NFS export from the H4; the
+H4 was down; the job had nowhere to write. Expected, explained, not an lldap defect.
 
-      This is the fourth time in two days that absence-in-a-view was read as
-      absence-in-the-world, and the first where the view's truncation rule is written
-      down in the file that produced it.
+**Also disposed of:** the "two-day gaps on 07-27 and 07-30 that nobody noticed at all."
+Aged past their group's `--keep-daily 7`. Nobody noticed them because there was nothing
+to notice.
 
-      **Fix — needs its own verification before it lands.** Candidate is
-      `--group-by ''` beside `--latest 5`, making it "the 5 most recent" globally.
-      Check the flag against 0.17.3 first: the comment block at `:120-125` already
-      records one deprecated-flag trap (`--last 5` prefix-matching a snapshot ID and
-      silently ignoring `--tag`), and this would be the third in one line of shell.
-      The alternative that cannot develop new semantics is to drop `--latest`, print
-      the total count, and tail the table.
+**Retracted by name, so it is not re-proposed:** the image-pull hypothesis recorded here
+on 2026-08-27 — that `imagePullPolicy: IfNotPresent` plus an unpinned node made the job
+depend on docker.io at 02:30. It was measured and it does not hold: `k3s ctr images ls`
+across all five nodes returned `restic=1` everywhere except n150-1, and `postgres=1`
+everywhere except n150-2. Three of five nodes need no pull at all, which cannot produce an
+80% failure rate — and there was no failure to explain in the first place. The sweep also
+showed the control image is patchy in a *different* place, which is a real finding about
+image-cache variance and belongs somewhere other than here.
 
-      **Also a live upgrade trap:** restic 0.19.0 changed `--latest` to global. The pin
-      holds it stable, but any future bump silently changes what that line means — in
-      the direction of *more* correct, which is the kind of change nobody investigates.
+**What is actually open now.** Both halves must land together or one silent fault is
+traded for another:
 
-- [ ] **A zero that meant "the check could not speak", caught live 2026-08-27.** While
-      measuring the above:
+- [ ] **Scope the host `forget` to its own data** — `--tag nas --host {{ inventory_hostname }}`
+      on `backup-nas.service.j2:78`. Alone this is *dangerous*: lldap would then never be
+      forgotten at all, and its snapshots would grow without bound in the repository that
+      is the copy-of-record for the cold tier.
+- [ ] **Give lldap its own retention, in the same PR.** It has never had one. Its entire
+      retention policy to date has been accidental — inherited from a unit that does not
+      know it exists — and nobody has ever chosen it.
+- [ ] **Decide what that policy should be.** Nine snapshots for the lab's identity
+      database is a number that fell out of someone else's config. Every service that
+      authenticates in this lab depends on lldap; §1.12's original instinct that this
+      deserves §1 treatment was right even though its diagnosis was wrong.
+- [ ] **Check what else shares that repository.** Anything writing to
+      `/mnt/cold-8t/restic` under its own host or path is being thinned by this policy
+      right now, silently. lldap was found by accident; the sweep is
+      `restic snapshots --json | jq -r '.[] | .hostname + " " + (.paths|join(","))' | sort -u`.
 
-          restic -r /mnt/cold-8t/restic snapshots --tag lldap | wc -l
-          Fatal: unable to open repo ... /keys: permission denied
-          0
+**Three false diagnoses, three unscoped defaults.** Worth stating plainly because the
+pattern is the transferable part, not the incident:
 
-      Without `sudo` the error went to stderr and `wc -l` printed `0` — indistinguishable
-      from "no lldap snapshots exist", which is the exact false conclusion this entry
-      exists to correct. Caught only because a human was watching the terminal. Any
-      pipeline of the form `restic ... | wc -l` in a script or a check has this failure
-      mode. Sweep for it: `set -o pipefail`, or count from `--json`, which cannot
-      produce a plausible number from a failed command.
+- `restic snapshots --latest 5` — truncates per `host,paths` group, displayed 15 of 24
+  and looked like a complete history.
+- `restic ... | wc -l` — printed `0` on a permission error, indistinguishable from
+  "no snapshots exist".
+- `restic forget --prune` — applied to every group in the repo, not just its own.
+
+In each case the tool did exactly what it was told, the default scope was wider or
+narrower than assumed, and the output was *plausible*. A wrong answer that looks wrong
+costs minutes. These cost three investigations across two days, and the last one was
+nearly written up as a fix to a job that was working correctly the whole time.
+
+**And the cheapest thing that would have prevented all of it:** `restic snapshots --tag lldap`
+with no flags, run once, on 08-26. The full listing was always one command away.
 
 ---
 
