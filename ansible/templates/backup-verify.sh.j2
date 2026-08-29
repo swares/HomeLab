@@ -65,6 +65,74 @@ for repo in "$PRIMARY" "$COPY"; do
   fi
 done
 
+# ---- 2b. lldap has a recent snapshot too -----------------------------------
+# Added 2026-08-28. Every freshness check above filters `--tag nas`, so for as
+# long as this script has existed it has verified the NAS stream and said nothing
+# about the identity database sharing the same repository. §1.12 was diagnosed
+# three times without this check existing to contradict it.
+for repo in "$PRIMARY" "$COPY"; do
+  latest_epoch=$(restic -r "$repo" --password-file "$PW" snapshots --tag {{ lldap_snapshot_tag }} --json 2>/dev/null \
+    | tr ',' '\n' | grep -o '"time":"[^"]*"' | tail -1 | cut -d'"' -f4 \
+    | xargs -r -I{} date -d {} +%s 2>/dev/null)
+  if [ -z "${latest_epoch:-}" ]; then
+    fail "could not determine newest '{{ lldap_snapshot_tag }}' snapshot in $repo"
+  else
+    age=$(( $(date +%s) - latest_epoch ))
+    if [ "$age" -gt {{ verify_max_snapshot_age_seconds }} ]; then
+      fail "newest '{{ lldap_snapshot_tag }}' snapshot in $repo is ${age}s old (max {{ verify_max_snapshot_age_seconds }}s)"
+    else
+      pass "newest '{{ lldap_snapshot_tag }}' snapshot in $repo is ${age}s old"
+    fi
+  fi
+done
+
+# ---- 2c. No snapshot group escapes retention -------------------------------
+# Added 2026-08-28 alongside scoping the forget commands (BACKLOG §1.12).
+#
+# Retention is now expressed as two scoped rules per repo: `--tag nas --host
+# h4-core` and `--tag lldap --host lldap-k8s`. That is strictly safer than the
+# unscoped policy it replaces, except in one direction: a snapshot group matching
+# NEITHER rule is now never forgotten. It would grow forever, in the repository
+# that is the copy-of-record for the cold tier, and nothing else would notice.
+#
+# The likeliest cause is a cross-repo rename — gitops/workloads/lldap/backup-
+# cronjob.yaml changing its `--tag` or `--host` without ansible/playbooks/backup.yml
+# following. A comment cannot enforce that. This can.
+#
+# Read-only: it lists, it does not forget.
+EXPECTED_GROUPS="{{ inventory_hostname }}|{{ nas_snapshot_tag }}
+{{ lldap_snapshot_host }}|{{ lldap_snapshot_tag }}"
+
+for repo in "$PRIMARY" "$COPY"; do
+  groups=$(restic -r "$repo" --password-file "$PW" snapshots --json 2>/dev/null \
+    | python3 -c 'import json,sys
+for s in json.load(sys.stdin):
+    for t in (s.get("tags") or ["<untagged>"]):
+        print(s.get("hostname","<nohost>") + "|" + t)' 2>/dev/null | sort -u)
+
+  # An empty list is NOT "no unexpected groups". Both repos are known to hold
+  # snapshots, so empty means restic failed, the password was wrong, or the JSON
+  # did not parse — and reporting a pass there would be the exact fault this
+  # script exists to catch. Silence is treated as failure to verify.
+  if [ -z "$groups" ]; then
+    fail "could not enumerate snapshot groups in $repo — retention coverage UNVERIFIED"
+    continue
+  fi
+
+  unknown=0
+  while IFS= read -r grp; do
+    [ -z "$grp" ] && continue
+    if ! printf '%s\n' "$EXPECTED_GROUPS" | grep -qxF "$grp"; then
+      fail "unretained snapshot group '$grp' in $repo — matches no forget rule, will be kept forever"
+      unknown=1
+    fi
+  done <<< "$groups"
+
+  if [ "$unknown" -eq 0 ]; then
+    pass "all $(printf '%s\n' "$groups" | wc -l) snapshot group(s) in $repo are covered by a retention rule"
+  fi
+done
+
 # ---- 3. Cold etcd snapshots are real, not the 4 KB ghosts ------------------
 newest_etcd=$(ls -1t -- "$ETCD_DIR"/etcd-snapshot-* 2>/dev/null | head -n 1)
 if [ -z "$newest_etcd" ]; then

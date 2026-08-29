@@ -91,13 +91,34 @@ fi
 
 # ---- Retention on the copy --------------------------------------------------
 # Deliberately deeper than the primary's 7/4/6 — this repo is the long-history
-# archive. Default grouping (host,paths) is correct here: the h4-core NAS
-# snapshots and the lldap-k8s snapshots are retained as separate series.
-# Per CLAUDE.md, retention lives in the backup units and nowhere else. Never run
-# forget/prune against these repos by hand.
-restic -r "$DST" --password-file "$PW" forget --prune \
+# archive. Per CLAUDE.md, retention lives in the backup units and nowhere else.
+# Never run forget/prune against these repos by hand.
+#
+# SCOPED 2026-08-28 (BACKLOG §1.12). The previous comment here read:
+#
+#   "Default grouping (host,paths) is correct here: the h4-core NAS snapshots and
+#    the lldap-k8s snapshots are retained as separate series."
+#
+# That was true and beside the point. Grouping did keep them separate — but the
+# NAS *numbers* were being applied to the lldap series, and nobody had chosen
+# 14/8/12 for the identity database. The comment shows the situation was half
+# understood: the author knew lldap snapshots were in this repo and concluded the
+# grouping made it fine. Recorded rather than deleted, because "I knew it was
+# there and reasoned about the wrong property" is the more instructive mistake.
+#
+# Two scoped forgets, then one prune, matching backup-nas.service.
+restic -r "$DST" --password-file "$PW" forget \
+  --tag {{ nas_snapshot_tag }} --host {{ inventory_hostname }} \
   --keep-daily "$KEEP_DAILY" \
   --keep-weekly "$KEEP_WEEKLY" \
   --keep-monthly "$KEEP_MONTHLY"
+
+restic -r "$DST" --password-file "$PW" forget \
+  --tag {{ lldap_snapshot_tag }} --host {{ lldap_snapshot_host }} \
+  --keep-daily {{ lldap_keep_daily }} \
+  --keep-weekly {{ lldap_keep_weekly }} \
+  --keep-monthly {{ lldap_keep_monthly }}
+
+restic -r "$DST" --password-file "$PW" prune
 
 echo "copy + retention complete for $DST"
