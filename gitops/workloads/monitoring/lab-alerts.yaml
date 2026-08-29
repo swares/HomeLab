@@ -437,3 +437,86 @@ spec:
             description: >
               {{ $labels.name }} health is {{ $labels.health_status }}.
               Check: argocd app get {{ $labels.name }}
+
+    - name: lab.images
+      rules:
+        # Added 2026-08-28 as the "detect" half of a deliberate accept-and-detect
+        # decision on image-cache variance (BACKLOG §9).
+        #
+        # WHY THIS EXISTS
+        #
+        # registries.yaml mirrors only the lab Zot registry — docker.io and ghcr.io
+        # mirroring was removed on 2026-08-09 and deliberately not restored, because
+        # routing every pull through a registry that runs inside the cluster it serves
+        # is a cold-start dependency. So every public pull goes straight to the
+        # internet from whichever node needs it.
+        #
+        # Combined with imagePullPolicy defaulting to IfNotPresent, an image exists on
+        # a node only if that workload has already run there. Measured 2026-08-28
+        # across the five nodes: home-assistant:2026.7.2 and its busybox:1.38 init are
+        # cached on ONE node of five, immich-machine-learning on one, immich-server on
+        # two. All are replicas:1 Deployments with no scheduling constraint, so a
+        # reschedule has a good chance of needing a pull to start at all.
+        #
+        # Nothing has broken. This alert exists so that when it does, it surfaces in
+        # minutes rather than being discovered weeks later from three timestamps —
+        # which is exactly how §1.12 went.
+        #
+        # VERIFIED BOTH DIRECTIONS BEFORE MERGING, 2026-08-28.
+        #
+        # `count(kube_pod_container_status_waiting_reason)` returned nothing, which is
+        # the shape this lab has misread three times in a week. It was NOT a missing
+        # metric: kube-state-metrics emits this family only for containers currently
+        # waiting, so empty is the correct steady state. The control that established
+        # that was `count(kube_pod_info)` -> 93, proving KSM is scraped and healthy.
+        #
+        # Then a deliberate failure — a pod in a scratch namespace pulling
+        # ghcr.io/swares/does-not-exist:v0 — reached ImagePullBackOff and the series
+        # appeared with the labels these annotations use. So the expression matches
+        # something real, rather than being plausible and inert.
+        #
+        # (That test pod was first rejected by Kyverno's require-resource-limits in
+        # Enforce, which is an incidental confirmation that the policy blocks what it
+        # claims to — see §3.8, where real blocks are hard to see amid violations
+        # against dead ReplicaSets.)
+        #
+        # If this rule is ever edited, re-run that test. An alert on a metric that
+        # only exists during the failure it detects cannot be validated any other way.
+        - alert: LabImagePullFailing
+          # ErrImagePull is the first failure; ImagePullBackOff is the retry state.
+          # Both, because a fast-failing pull that never reaches backoff still means
+          # a container that cannot start.
+          expr: |
+            kube_pod_container_status_waiting_reason{reason=~"ImagePullBackOff|ErrImagePull"} > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} cannot pull {{ $labels.container }}"
+            description: >
+              Container {{ $labels.container }} has been in {{ $labels.reason }} for
+              10 minutes. With no pull-through cache, this usually means the image is
+              not cached on this node and the public registry is unreachable or rate
+              limiting. Check: kubectl -n {{ $labels.namespace }} describe pod
+              {{ $labels.pod }} — and `k3s ctr images ls | grep <image>` on the node.
+
+        # Same expression, longer fuse, critical — because warnings route to the
+        # m5stack display only, and a workload that has been unable to start for
+        # three quarters of an hour is an outage rather than a notice. This is the
+        # same split as LabClockUnsynced against the built-in NodeClockNotSynchronising:
+        # the metric is not the question, the routing is.
+        - alert: LabImagePullStuck
+          expr: |
+            kube_pod_container_status_waiting_reason{reason=~"ImagePullBackOff|ErrImagePull"} > 0
+          for: 45m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $labels.namespace }}/{{ $labels.pod }} still cannot pull after 45m"
+            description: >
+              {{ $labels.container }} in {{ $labels.namespace }}/{{ $labels.pod }} has
+              been unable to pull its image for 45 minutes and is not going to recover
+              on its own. If the node lacks the image and the registry is reachable,
+              `k3s ctr images pull <image>` on that node unblocks it (k3s ctr, not
+              plain ctr — the opi5pro boxes run a second containerd whose images no
+              pod can use).
