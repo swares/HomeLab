@@ -3245,6 +3245,43 @@ model is worth running · Home Assistant and LiteLLM SSO (not worth the complexi
 Zot OIDC (blocked on upstream provider naming) · Windows Update automation ·
 `externalTrafficPolicy: Local` on the Traefik VIP until Traefik runs 2+ replicas.
 
+### 8.1 kube-vip v1.x (Renovate PR #158) — parked deliberately, blocker under-recorded
+
+**Opened ~2026-07, still open 2026-08-29.** `chore(deps): update ghcr.io/kube-vip/kube-vip
+Docker tag to v1`, against the current pin `v0.9.2` in
+`gitops/workloads/kube-vip/daemonset.yaml:32`.
+
+**It is parked, not forgotten.** The PR was raised before there was appetite to work it,
+and the check performed at the time concluded the lab does not support the newer API
+version kube-vip v1.x requires.
+
+**What is not recorded, and should have been: which API, and which version.** "Newer API
+version not supported" is the whole of the surviving detail. That is enough to justify not
+merging and not enough for the next person — or the same person in three months — to
+evaluate it without repeating the work. The cluster runs `k3s v1.36.2+k3s1`
+(`inventory/group_vars/all/k3s.yml:7`), which is recent, so the constraint is probably
+narrower than a cluster-version floor: a specific API group/version, a CRD, or a k3s
+feature gate. Nobody wrote down which.
+
+**Why it deserves the care rather than a merge-and-see.** kube-vip owns **both** VIPs —
+`api.lab.home.arpa` → `192.168.1.200` (control plane) and `*.apps.lab.home.arpa` →
+`192.168.1.201` (Traefik). §6.1 records that a single wrong DNS record for the second one
+took down every service URL in the lab. A major-version bump on the DaemonSet holding both
+is not a routine dependency update, and `requiredDuringScheduling` nodeAffinity puts it on
+all three control-plane nodes at once.
+
+**To do, in order of cost:**
+
+- [ ] **Cheapest, and do it first: comment the finding on PR #158 itself.** One line naming
+      the actual requirement puts the knowledge next to the thing it is about. Right now it
+      exists only in memory, and a parked PR with no stated reason is indistinguishable from
+      an abandoned one — which is how it read when it surfaced in `gh pr list` on 08-29.
+- [ ] Capture the specific floor (API group/version or feature gate) here when it is next
+      looked at, so the revisit trigger below can actually be evaluated.
+- [ ] **Revisit at the next k3s upgrade.** `docs/UPDATES.md` §2 already gates those and
+      already carries the §2.13 token rotation; this belongs in the same checklist, since a
+      cluster-version change is the most likely thing to move the blocker.
+
 **If remote access is ever un-deferred, read §4.12 and §4.16 first.** Tailscale's
 MagicDNS installs itself as a resolver and rewrites systemd-resolved state — the exact
 layer that produced three separate merge bugs on 2026-08-21 (netplan merging nameserver
