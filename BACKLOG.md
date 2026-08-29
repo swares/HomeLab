@@ -2580,6 +2580,96 @@ than just breaking lab-name resolution — a strictly larger blast radius than t
 and an arbitrary omission. Worth deciding when there is appetite to test it, not while
 closing something else.
 
+### 4.17 Container images exist only where a workload has already run — **ACCEPTED 2026-08-28, with detection**
+
+**Measured 2026-08-28**, while chasing a hypothesis about §1.12 that turned out to be
+wrong. The lldap backups were never failing, so this is not the cause of anything. It is a
+real latent condition found by accident on the way to a different answer.
+
+**Why it exists.** `registries.yaml` mirrors only the lab Zot registry; docker.io and
+ghcr.io mirroring was removed on 2026-08-09 and deliberately not restored, because routing
+every pull through a registry that runs *inside* the cluster it serves is a cold-start
+dependency (see `k3s-registry.yml`'s own comment — that reasoning still holds and this
+entry does not reopen it). Every public pull therefore goes straight to the internet from
+whichever node needs it. Combined with `imagePullPolicy` defaulting to `IfNotPresent`, an
+image is present on a node **only if that workload has already run there**.
+
+**14 of 20 workload directories pin to a node** via `kubernetes.io/hostname`, so their
+images only ever need to exist in one place. The exposure is the mobile set — `replicas: 1`
+Deployments with no scheduling constraint at all:
+
+| image | cached on | of 5 |
+|---|---|---|
+| `home-assistant:2026.7.2` | opi5pro-2 only | 1 |
+| `busybox:1.38` (its init container) | opi5pro-2 only | 1 |
+| `immich-machine-learning:v2.7.5` | h4-core only | 1 |
+| `immich-server:v2.7.5` | h4-core, opi5pro-2 | 2 |
+| `lldap:v0.6.3` | n150-2, opi5pro-1, opi5pro-2 | 3 |
+| `authelia:4.39` | all but n150-1 | 4 |
+| `postgres:16-alpine` | all but n150-2 | 4 |
+| `restic:0.17.3` | all but n150-1 | 4 |
+| `redis:6.2-alpine` | all but n150-1 | 4 |
+
+**Home Assistant is the sharpest case:** both its image and its init container are cached
+on one node of five, so losing opi5pro-2 gives it a 4-in-5 chance of needing two public
+pulls before it can start. `postgres:16-alpine` backs Authelia's database, and Authelia is
+what everything else authenticates through.
+
+**A wrong alarm, recorded so it is not raised again.** `kube-vip:v0.9.2` was initially
+flagged as the worst case — a DaemonSet missing from two nodes. It is not a gap:
+`kube-vip/daemonset.yaml` carries `requiredDuringScheduling` nodeAffinity on
+`node-role.kubernetes.io/control-plane`, so it only ever runs on the three servers, and it
+is cached on all three. The error came from testing for `kubernetes.io/hostname` alone and
+treating everything else as unpinned. **A workload can be constrained by something other
+than the selector you grepped for.**
+
+**DECISION: accept, and detect.** Taken deliberately rather than by default. Nothing has
+broken; the condition is invisible until a reschedule coincides with a registry being
+unreachable or rate-limiting anonymous pulls. The alternatives were weighed:
+
+- *Pre-stage the mobile images with a play.* Works, adds no runtime dependency, but drifts
+  every time Renovate bumps a tag — so it belongs in the upgrade flow, not as a one-off.
+- *Constrain scheduling.* Pinning HA and Immich removes the pull and removes the
+  availability those unpinned Deployments presumably exist to have.
+- *Zot as a pull-through cache.* Already rejected 2026-08-09 for cold-start reasons that
+  have not changed.
+
+**The detection**, in `gitops/workloads/monitoring/lab-alerts.yaml` group `lab.images`:
+`LabImagePullFailing` (10m, warning) and `LabImagePullStuck` (45m, critical). Two
+severities because warnings route to the m5stack display only — a workload that has been
+unable to start for three quarters of an hour is an outage, not a notice. Same split as
+`LabClockUnsynced` against the built-in: the metric is not the question, the routing is.
+
+**Validated in both directions before merging**, which is the part worth copying.
+`count(kube_pod_container_status_waiting_reason)` returned nothing — the shape this lab has
+misread three times in a week. It was *not* a missing metric: kube-state-metrics emits that
+family only for containers currently waiting, so empty is the correct steady state. The
+control that established it was `count(kube_pod_info)` -> **93**. Then a deliberate failure
+— a pod pulling `ghcr.io/swares/does-not-exist:v0` in a scratch namespace — reached
+`ImagePullBackOff` and produced the series with the labels the annotations use.
+
+**Revisit if any of these become true:**
+
+- [ ] A pull failure actually causes an outage (the alerts exist to tell you).
+- [ ] Any mobile workload stops being `replicas: 1` — coverage gaps matter more when
+      several pods must schedule at once.
+- [ ] docker.io rate limiting starts biting. Anonymous pulls are the current posture and
+      nothing tracks how close the lab runs to the limit.
+- [ ] A node is rebuilt or added. It starts with an empty image store, and every mobile
+      workload that lands on it needs the internet.
+
+**Open, and not about caching:**
+
+- [ ] **Does `immich-machine-learning:v2.7.5` have an arm64 manifest at all?** It is cached
+      only on h4-core (amd64) and has therefore never run on an opi5pro. Nothing constrains
+      it by architecture, so if it reschedules onto an arm64 node and no manifest exists it
+      fails regardless of what is cached. `home-assistant` and `immich-server` are proven
+      multi-arch by their presence on opi5pro-2. Answer it with `k3s ctr images pull` on an
+      arm64 node.
+- [ ] **`busybox:1.38` keeps turning up.** It is the Home Assistant init container, it is
+      the workload exploiting §4.10's Kyverno resource-limits hole, and it is cached on one
+      node. Three separate entries, one container.
+
 ---
 
 ## 5. Scheduled / time-bound
