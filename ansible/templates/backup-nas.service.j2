@@ -55,8 +55,30 @@ ExecStartPre=-/usr/bin/restic init
 # spent uploading it. /srv/nas and the immich library are both still empty pending
 # migration, which is why the repository looked large and was almost entirely inert.
 #
-# Restore it by hand from a snapshot older than this change if it is ever wanted;
-# retention keeps monthlies for 6 months.
+# Restore it by hand from a snapshot older than this change if it is ever wanted.
+#
+# CORRECTION 2026-08-29: the line here used to end "retention keeps monthlies for
+# 6 months", which is wrong, and wrong in the direction that matters. Dropping a
+# path from this ExecStart starts a NEW retention series, because restic groups by
+# host+paths. The old path set becomes a frozen group with no new snapshots — and
+# `--keep-daily 7` keeps the seven most recent days *that have snapshots*, not the
+# last seven calendar days. A frozen group therefore has its entire tail preserved
+# indefinitely, not aged out.
+#
+# Measured with `forget --dry-run` on 2026-08-29: all 13 VMs-era snapshots are
+# kept — 2 in the `VMs + /srv/nas` group and 11 in `VMs + immich + /srv/nas` —
+# because the union of daily-7, weekly-4 and monthly-6 covers every distinct day
+# those frozen groups contain.
+#
+# So removing the path stopped new copies and freed nothing. The 224.7 GiB image
+# still sits in the primary, in cold-sec, and in R2, and will remain there until
+# somebody forgets those groups deliberately. The ~$3/month it was removed to stop
+# paying is still being paid. See BACKLOG §1.10 — reclaiming it is an irreversible
+# deletion of the only copies of that image, so it is a decision, not a cleanup.
+#
+# The same mechanism is why lldap's July snapshots looked dense while its live
+# group was being thinned (§1.12). Changing a backup's path list is a retention
+# event, and nothing in this lab announces it.
 # /var/lib/lab-ledger added 2026-08-27 — on the eMMC root (/dev/mmcblk0p2), NOT the
 # NVMe; /var is part of the OS filesystem. The lab ledger (docs/LEDGER-DESIGN.md) is
 # append-only JSONL of timestamped facts — what changed, when, on which host. It
