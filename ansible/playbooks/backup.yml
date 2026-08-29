@@ -210,6 +210,23 @@
       ansible.builtin.systemd:
         daemon_reload: true
 
+    # `backup-offsite.timer` is deliberately NOT in this list — removed 2026-08-29.
+    #
+    # It was, and this play enabled it unconditionally while `backup-offsite.yml`
+    # sets it from `offsite_timer_enabled` (default false). Two playbooks owning one
+    # unit with opposite intent: whichever ran last won, so the timer flipped state
+    # depending on the order of unrelated runs. §1.9's "remove the timer once the
+    # chain has a week of evidence" could never have stayed done — every backup.yml
+    # run put it back, including the one that applied the §1.12 retention scoping.
+    #
+    # `backup-offsite.yml` renders that unit and owns its state. This play does not.
+    #
+    # Nothing is lost by the timer being off: `backup-nas.service` carries
+    # `OnSuccess=backup-offsite.service`, and the journal shows the offsite copy
+    # starting 4.4-6.1 ms after backup-nas finishes on every night it ran — the chain
+    # fires inside one systemd transaction, which a timer cannot imitate. The chain is
+    # also strictly better, because it waits for the source repo lock however long the
+    # nightly takes; the timer racing that lock is what cost four nights in August 2026.
     - name: Enable backup timers
       ansible.builtin.systemd:
         name: "{{ item }}"
@@ -218,5 +235,4 @@
       loop:
         - backup-nas.timer
         - backup-etcd.timer
-        - backup-offsite.timer
         - backup-verify.timer
