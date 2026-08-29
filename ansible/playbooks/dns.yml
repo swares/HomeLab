@@ -226,7 +226,13 @@
         state: directory
         owner: pihole
         group: pihole
-        mode: "0775"
+        # 0755, not 0775. A --check against rpi4b on 2026-08-28 reported this as
+        # `changed`: the live directory is 0755 and the playbook wanted to add group
+        # write. Nothing needs it — /etc/pihole is owned by pihole (uid 995), which is
+        # the only account that writes there. The host was stricter than git, so git
+        # was corrected rather than the host. Drift caught by a dry run is the cheap
+        # kind; a real run would have widened it and reported success.
+        mode: "0755"
       when: dns_engine == 'pihole'
 
     # BACKLOG §2.1, template-overwrite hazard — found 2026-08-28.
@@ -317,7 +323,11 @@
         dest: /etc/pihole/lab-clients.sql
         owner: pihole
         group: pihole
-        mode: "0644"
+        # 0640, not 0644. Same 2026-08-28 --check: the live file is 0640, and the diff
+        # showed mode only, so the content already matched. This file enumerates the
+        # lab's clients by name and address — not a secret, but there is no reason for
+        # it to be world-readable, and the host had it right.
+        mode: "0640"
       when: dns_engine == 'pihole'
       register: lab_clients_sql
 
