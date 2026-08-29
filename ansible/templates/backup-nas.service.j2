@@ -76,8 +76,32 @@ ExecStart=/usr/bin/restic backup {{ nas_mount }} \
   /var/lib/lab-ledger \
   --tag nas --host {{ inventory_hostname }}
 # Retention is policy-driven and lives HERE only — never run forget/prune by hand.
-ExecStartPost=/usr/bin/restic forget --prune \
+#
+# SCOPED 2026-08-28 (BACKLOG §1.12). This was one unscoped command:
+#
+#   ExecStartPost=/usr/bin/restic forget --prune \
+#     --keep-daily 7 --keep-weekly 4 --keep-monthly 6
+#
+# restic's default grouping is host,paths, so that applied the NAS policy to EVERY
+# group in the repository. The lldap CronJob writes the identity database to this
+# same repo at 02:30; this ran at 01:30 and thinned it nightly. The survivors —
+# dailies for a week, then one per week — were read as an intermittently failing
+# backup job, three separate times, across two days of investigation. The job had
+# never failed.
+#
+# Two scoped forgets, then ONE prune. Pruning is the expensive part and there is no
+# reason to do it twice; systemd runs ExecStartPost lines in order, so the prune
+# sees both forgets' work.
+#
+# The scoping is only safe because the repository contains exactly these two groups
+# — verified 2026-08-28: 23 h4-core/nas, 25 lldap-k8s/lldap, nothing else. A group
+# matching neither rule would never be forgotten again. backup-verify checks for
+# that condition weekly rather than trusting this comment to stay true.
+ExecStartPost=/usr/bin/restic forget --tag {{ nas_snapshot_tag }} --host {{ inventory_hostname }} \
   --keep-daily 7 --keep-weekly 4 --keep-monthly 6
+ExecStartPost=/usr/bin/restic forget --tag {{ lldap_snapshot_tag }} --host {{ lldap_snapshot_host }} \
+  --keep-daily {{ lldap_keep_daily }} --keep-weekly {{ lldap_keep_weekly }} --keep-monthly {{ lldap_keep_monthly }}
+ExecStartPost=/usr/bin/restic prune
 # Redundancy: replicate the primary repo to the 6TB disk (two-disk safety, no RAID
 # needed), then bound the copy's retention. Deliberately NOT prefixed with '-' —
 # a failed replication must fail this unit so hc-ping is skipped and

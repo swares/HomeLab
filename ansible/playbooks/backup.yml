@@ -32,6 +32,38 @@
     copy_keep_weekly: 8
     copy_keep_monthly: 12
 
+    # --- Retention for the lldap dump (BACKLOG §1.12) ------------------------
+    # Until 2026-08-28 the forget commands in all three repos were UNSCOPED, so
+    # the NAS policy was applied to every group in the repository — including
+    # lldap's. Nobody chose 7/4/6 for the identity database; it inherited them,
+    # and the survivors (one per week beyond the daily window) were misread three
+    # separate times as an intermittently failing backup job.
+    #
+    # These numbers are deliberate. The dump is ~17.5 KiB and changes little, so
+    # restic dedup makes depth almost free — the storage economics that justify
+    # 7/4/6 on 225 GiB of NAS data simply do not apply here. Two years of monthly
+    # restore points for the directory every other service authenticates against
+    # costs kilobytes.
+    #
+    # Same numbers in all three repos, for the same reason: there is no tiering
+    # argument at this size.
+    lldap_keep_daily: 30
+    lldap_keep_weekly: 12
+    lldap_keep_monthly: 24
+
+    # The snapshot identity the lldap CronJob writes with. THIS IS A CROSS-REPO
+    # COUPLING: gitops/workloads/lldap/backup-cronjob.yaml passes
+    # `--tag lldap --host lldap-k8s`. If either changes there and not here, lldap
+    # snapshots stop matching any forget rule and are then kept FOREVER — silently,
+    # in the repository that is the copy-of-record for the cold tier. backup-verify
+    # guards against exactly that; see its unknown-group check.
+    lldap_snapshot_tag: lldap
+    lldap_snapshot_host: lldap-k8s
+
+    # The NAS side of the same split. Named rather than inlined so the two forget
+    # invocations below are visibly symmetric.
+    nas_snapshot_tag: nas
+
     # --- Weekly verification ---
     cloud_env_file: /etc/restic/cloud.env   # written by backup-cloud.yml
     # Written by backup-offsite.yml (separate playbook — it needs a Vault token).

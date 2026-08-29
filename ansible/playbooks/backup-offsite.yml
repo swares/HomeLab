@@ -49,6 +49,28 @@
     offsite_keep_weekly: 4
     offsite_keep_monthly: 6
 
+    # --- Retention for the lldap dump (BACKLOG §1.12) ------------------------
+    # `restic copy` here is unfiltered, so R2 receives BOTH groups from the
+    # primary — and the forget below was unscoped, applying the offsite NAS policy
+    # to the identity database as well. Third instance of the same defect; the
+    # primary and cold-sec are the other two.
+    #
+    # Depth genuinely costs money here, unlike on the cold disks. It is still the
+    # right call at this size: the dump is ~17.5 KiB and dedups against its own
+    # near-identical predecessors, so 24 monthly restore points is a rounding error
+    # on an R2 bill. Kept identical to the other two repos so there is one lldap
+    # retention policy to reason about rather than three.
+    lldap_keep_daily: 30
+    lldap_keep_weekly: 12
+    lldap_keep_monthly: 24
+
+    # Cross-repo coupling — see the fuller note in backup.yml. These must match
+    # `--tag lldap --host lldap-k8s` in gitops/workloads/lldap/backup-cronjob.yaml,
+    # or lldap snapshots match no forget rule here and are kept forever.
+    lldap_snapshot_tag: lldap
+    lldap_snapshot_host: lldap-k8s
+    nas_snapshot_tag: nas
+
     # KiB/s, 0 = unlimited. 2500 KiB/s ~= 20 Mbit/s. Set to leave headroom on the
     # uplink; the nightly incremental is small, but the initial seed is not.
     offsite_limit_upload_kib: 2500
