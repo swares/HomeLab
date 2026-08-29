@@ -474,25 +474,40 @@ is the real check: it proves systemd *parsed* the directive rather than that the
 merely contains the text. Compare `Docs=` in `microshift-lvm-loop.service`, which sat
 there looking correct and meant nothing (§3.11).
 
-- [ ] **Remove `backup-offsite.timer` once the chain has a week of evidence.** It is
-      deliberately retained for now as a fallback; a duplicate run is cheap because
-      `restic copy` finds nothing new and exits in seconds. The evidence is the journal,
-      not the config:
+- [x] **`backup-offsite.timer` removed 2026-08-29, on journal evidence.** The entry
+      demanded the journal rather than the config, and the journal is unambiguous — the
+      gap between `backup-nas` finishing and `backup-offsite` starting, four nights:
 
-          journalctl -u backup-nas -u backup-offsite --since '01:00' -o short-precise \
-            | grep -E 'Starting|Finished|Succeeded|Failed'
+          Aug 23  01:30:34.507098 -> 01:30:34.511941    4.8 ms
+          Aug 27  01:30:38.955609 -> 01:30:38.961735    6.1 ms
+          Aug 28  01:30:20.372400 -> 01:30:20.376809    4.4 ms
+          Aug 29  01:30:25.183937 -> 01:30:25.188767    4.8 ms
 
-      `backup-offsite` starting seconds after `backup-nas` finishes = the chain works.
-      Starting at 02:30:09 = it does not, and the timer is covering for it — which looks
-      identical in every summary view. Do not remove it on the strength of the config
-      alone — CLAUDE.md.
+      **Millisecond gaps are `OnSuccess=` inside one systemd transaction. A timer cannot
+      produce that.** The separate 02:30:00 entries on the 27th, 28th and 29th are the
+      timer's duplicate run — 9-10 seconds each, finding nothing new, exactly as this
+      entry predicted a redundant copy would look. Aug 24-25 are absent because the H4
+      was down (§0); Aug 26 19:08 is the hand-run during recovery.
 
-- [ ] **Known, accepted divergence until then:** `backup-offsite.service.j2`'s comment
-      block was updated 2026-08-21 but not applied. `backup-offsite.yml` requires a
-      `VAULT_TOKEN` and re-renders the R2 credentials env file, which is a
-      disproportionate ceremony for a comment-only change on the backup path. It will
-      sync when that playbook runs for the timer removal above. Recorded here so it is
-      a known divergence rather than the unnoticed kind (§3.11).
+      This is the check `systemctl show -p OnSuccess` could not perform. That command
+      proves systemd *parsed* the directive; only the timestamps prove it *fired*, and
+      the entry was right to insist on the difference.
+
+      **How it actually happened is worth recording, because it was not a decision.**
+      `backup-offsite.yml` manages the timer through `offsite_timer_enabled`, which
+      defaults to false — so running that playbook to apply the §1.12 retention scoping
+      disabled the timer as a side effect. The playbook was right and the enabled timer
+      was the drift, but nobody chose the moment. It was then re-enabled by hand while
+      the journal was still being read, creating fresh §3.11 drift minutes after the run,
+      and disabled again once the evidence was in. Live state and git now agree:
+      `systemctl is-enabled backup-offsite.timer` -> `disabled`.
+
+- [x] **The comment-only divergence closed with it.** `backup-offsite.service.j2`'s
+      comment block, updated 2026-08-21 and never applied, synced when `backup-offsite.yml`
+      ran on 2026-08-29 — as this entry predicted it would, on the run that removed the
+      timer. Recorded as closed rather than deleted: a divergence that was declared, dated,
+      and then resolved by the exact mechanism named is the good outcome, and the contrast
+      with §3.11's unnoticed kind is the whole point.
 
 - [ ] **Optional, later: re-init `cold-sec` with `--copy-chunker-params`** to match
       the primary. It would align all three repos, improve dedup between primary and
