@@ -19,10 +19,17 @@
     zswap_max_pool_percent: "20"
 
   tasks:
+    # check_mode: false on both read-only probes in this play — 2026-08-29,
+    # BACKLOG §3.11. `command` is skipped under --check, so these registers were
+    # never populated and the "Show ..." debugs that consume `.stdout` failed with
+    # "dict object has no attribute 'stdout'". This playbook could not complete a
+    # dry run at all, which blocks the scheduled --check that §3.11 asks for.
+    # Both commands only read: `uname -r` and a sysfs cat.
     - name: Check current kernel version
       command: uname -r
       register: kernel_version
       changed_when: false
+      check_mode: false
 
     - name: Show kernel version
       debug:
@@ -81,6 +88,7 @@
       command: cat /sys/module/zswap/parameters/enabled
       register: zswap_status
       changed_when: false
+      check_mode: false
 
     - name: Show zswap status
       debug:

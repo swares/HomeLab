@@ -95,12 +95,16 @@
         cmd: "{{ runner_home }}/svc.sh start"
         chdir: "{{ runner_home }}"
 
+    # check_mode: false — 2026-08-29, BACKLOG §3.11. Skipped under --check, so
+    # `runner_status` was never set and "Show runner status" errored on `.stdout`;
+    # this play could not finish a dry run. `svc.sh status` only reports.
     - name: Confirm runner service is active
       ansible.builtin.shell:
         cmd: "{{ runner_home }}/svc.sh status"
         chdir: "{{ runner_home }}"
       register: runner_status
       changed_when: false
+      check_mode: false
 
     - name: Show runner status
       ansible.builtin.debug:
