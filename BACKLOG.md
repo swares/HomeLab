@@ -543,9 +543,51 @@ data and it restores.
 from installation media and does not justify 224 GiB of offsite storage (~$3/month,
 and three days of seeding).
 
+> **CORRECTION 2026-08-29 — "it will linger until roughly 2027-02" is wrong. It will
+> linger forever.** Measured with `forget --dry-run` while validating §1.12's scoping
+> change, and the mechanism is the same one that made lldap's history unreadable.
+>
+> restic groups snapshots by **host + paths**. Dropping `/mnt/cold-8t/VMs` from the
+> `ExecStart` did not shorten the retention of the old snapshots — it started a *new*
+> series and froze the old one. And `--keep-daily 7` keeps the seven most recent days
+> **that have snapshots**, not the last seven calendar days. A group receiving no new
+> writes therefore never ages out at all.
+>
+> The dry-run keeps **all 13** VMs-era snapshots: 2 in `VMs + /srv/nas`, 11 in
+> `VMs + immich + /srv/nas`. The union of daily-7, weekly-4 and monthly-6 covers every
+> distinct day those frozen groups contain, and always will.
+>
+> **So the removal freed nothing.** It stopped new copies. The 224.7 GiB image is still
+> in the primary, in cold-sec, and in R2, and the ~$3/month it was removed to stop
+> paying is still being paid — not until 2027-02, but indefinitely.
+>
+> The same arithmetic explains what `nas` retention actually looks like today. Four
+> path groups exist, each with its own independent 7/4/6:
+>
+>     /mnt/cold-8t/VMs + /srv/nas                             2   Jun 24-25   frozen
+>     /mnt/cold-8t/VMs + immich + /srv/nas                   11   Jun 29-Aug 13  frozen
+>     /mnt/cold-8t/immich + /srv/nas                          8   Aug 16-27   frozen
+>     /mnt/cold-8t/immich + /srv/nas + /var/lib/lab-ledger    2   Aug 28-29   LIVE
+>
+> **Adding `/var/lib/lab-ledger` on 08-27 silently reset the NAS retention series.**
+> The live path set is two snapshots deep. The seven-day guarantee everyone believes
+> in will be true in a week; it is not true now, and nothing said so.
+>
+> **The transferable rule: editing a backup's path list is a retention event.** It
+> creates a new series with no history and freezes the old one with permanent history.
+> Nothing in this lab announces either half.
+
+- [ ] **Reclaiming the VHDX is now a deliberate deletion, not a wait.** Since those
+      groups never age out, the only way to remove 224.7 GiB from three repositories is
+      an explicit `restic forget` targeting them by path. That is irreversible removal
+      of the only remaining copies of that image, against this entry's own advice to
+      "restore it by hand from a snapshot older than this change if it is ever wanted."
+      Decide which of those two you mean — both are defensible, but they are not
+      compatible and the current state quietly chose the expensive one.
+
 - [ ] **Reset the offsite repo while it is cheap.** Existing snapshots still contain
-      the VHDX and retention keeps monthlies for 6 months, so it will linger — and be
-      billed — until roughly 2027-02. With the VHDX excluded, the real data is
+      the VHDX, so it is billed indefinitely (see the correction above). With the VHDX
+      excluded, the real data is
       ~250 MiB: emptying the `homelab-nas` bucket and letting the next run re-seed
       takes minutes instead of days, and the script re-inits with
       `--copy-chunker-params` automatically.
