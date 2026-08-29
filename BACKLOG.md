@@ -776,24 +776,42 @@ everywhere except n150-2. Three of five nodes need no pull at all, which cannot 
 showed the control image is patchy in a *different* place, which is a real finding about
 image-cache variance and belongs somewhere other than here.
 
-**What is actually open now.** Both halves must land together or one silent fault is
-traded for another:
+**All four closed 2026-08-29** — merged in #489 and applied to the H4 the same day. Both
+halves landed together, as this entry required.
 
-- [ ] **Scope the host `forget` to its own data** — `--tag nas --host {{ inventory_hostname }}`
-      on `backup-nas.service.j2:78`. Alone this is *dangerous*: lldap would then never be
-      forgotten at all, and its snapshots would grow without bound in the repository that
-      is the copy-of-record for the cold tier.
-- [ ] **Give lldap its own retention, in the same PR.** It has never had one. Its entire
-      retention policy to date has been accidental — inherited from a unit that does not
-      know it exists — and nobody has ever chosen it.
-- [ ] **Decide what that policy should be.** Nine snapshots for the lab's identity
-      database is a number that fell out of someone else's config. Every service that
-      authenticates in this lab depends on lldap; §1.12's original instinct that this
-      deserves §1 treatment was right even though its diagnosis was wrong.
-- [ ] **Check what else shares that repository.** Anything writing to
-      `/mnt/cold-8t/restic` under its own host or path is being thinned by this policy
-      right now, silently. lldap was found by accident; the sweep is
-      `restic snapshots --json | jq -r '.[] | .hostname + " " + (.paths|join(","))' | sort -u`.
+- [x] **Scope the host `forget` to its own data.** Done in **all three repositories**, not
+      just the primary: `backup-nas.service.j2` (primary), `backup-nas-copy.sh.j2`
+      (cold-sec) and `backup-offsite.sh.j2` (R2). All three carried the same unscoped
+      command; fixing only the one that caused this entry would have left the identical
+      defect in two places looking fixed — the §4.1 trap. Each is now two scoped forgets
+      followed by a single `prune`, since pruning is the expensive part and doing it twice
+      buys nothing.
+- [x] **lldap has its own retention: 30 daily / 12 weekly / 24 monthly.** Identical in all
+      three repos, because there is no tiering argument at this size.
+- [x] **The policy was chosen, not inherited.** The dump is ~17.5 KiB and changes little,
+      so restic dedup makes depth almost free — the storage economics behind 7/4/6 on
+      225 GiB of NAS data simply do not apply. Two years of monthly restore points for the
+      directory every other service authenticates against costs kilobytes. On R2 depth does
+      cost money, and it is still a rounding error at this size.
+- [x] **Swept, and the answer made the scoping safe rather than merely plausible.** Exactly
+      two groups exist in every repository — primary 23 `h4-core/nas` + 25
+      `lldap-k8s/lldap`, cold-sec 35 + 34, R2 23 + 24 — so nothing escapes the two rules.
+      **That guarantee is now enforced rather than remembered:** `backup-verify` §2c
+      enumerates the groups weekly and fails on any that matches no forget rule, because
+      the likeliest way to break this is a `--tag`/`--host` rename in
+      `gitops/workloads/lldap/backup-cronjob.yaml` that `backup.yml` does not follow. It
+      also treats an empty enumeration as *failure to verify* rather than as a pass.
+
+**Verified before applying, with a falsifiable prediction.** `forget --dry-run` under the
+new policy was predicted to remove nothing, on the grounds that `--keep-daily n` keeps the
+most recent snapshot for each of the last *n days that have snapshots* — so a deeper policy
+keeps a superset. Result: **25 of 25 lldap kept, 23 of 23 nas kept, zero removals.** The
+applied run then converged to `changed=0`.
+
+**One number is the proof this landed on the host and not merely in git**, and it is the
+number this entry was always about: the lldap snapshot count should now *climb* nightly
+instead of holding flat while quietly rotating. It was 24, then 25, and 2026-08-18 was taken
+by the unscoped policy overnight while this fix was being written.
 
 **Three false diagnoses, three unscoped defaults.** Worth stating plainly because the
 pattern is the transferable part, not the incident:
