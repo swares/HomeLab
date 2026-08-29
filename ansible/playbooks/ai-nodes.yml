@@ -403,10 +403,15 @@
         update_cache: true
       when: ansible_os_family == 'Archlinux'
 
+    # check_mode: false on both version probes below — 2026-08-29, BACKLOG §3.11.
+    # `command` is skipped under --check, so these registers stayed empty and the
+    # "Show ..." debugs consuming `.stdout` errored, meaning this playbook could not
+    # complete a dry run. `node --version` and `claude --version` only read.
     - name: Confirm Node.js version
       ansible.builtin.command: node --version
       register: node_ver
       changed_when: false
+      check_mode: false
 
     - name: Show Node.js version
       ansible.builtin.debug:
@@ -424,6 +429,7 @@
       register: claude_ver
       changed_when: false
       failed_when: false    # non-fatal — binary location may vary
+      check_mode: false
 
     - name: Show Claude Code version
       ansible.builtin.debug:

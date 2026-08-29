@@ -252,11 +252,18 @@
     - name: Flush handlers
       ansible.builtin.meta: flush_handlers
 
+    # check_mode: false added 2026-08-29 (BACKLOG §3.11). Ansible skips `command`
+    # tasks under --check, so this — the only task that confirms chrony actually
+    # resynced — has never run in a dry run. Every --check of this playbook has
+    # reported success having verified nothing, which is the sentence §3.11 uses.
+    # `chronyc waitsync` only polls; it changes no state, so running it under
+    # --check is safe and is the whole point of the task.
     - name: Wait for initial sync (up to 15 s)
       ansible.builtin.command: chronyc waitsync 3 0.1 0 5
       register: _wait
       changed_when: false
       failed_when: false
+      check_mode: false
 
     # check_mode: false on the read-only verification commands below.
     #

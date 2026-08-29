@@ -125,10 +125,15 @@
       ansible.builtin.command: virsh pool-autostart libvirt-shared
       changed_when: false
 
+    # check_mode: false — 2026-08-29, BACKLOG §3.11. `virsh pool-info` only reads,
+    # but `command` is skipped under --check, so `pool_info` was unset and the
+    # "Show pool status" debug errored on `.stdout`. This play could not complete a
+    # dry run, which blocks the scheduled --check §3.11 asks for.
     - name: Verify pool is active
       ansible.builtin.command: virsh pool-info libvirt-shared
       register: pool_info
       changed_when: false
+      check_mode: false
 
     - name: Show pool status
       ansible.builtin.debug:
@@ -203,10 +208,15 @@
       ansible.builtin.command: virsh pool-autostart libvirt-shared
       changed_when: false
 
+    # check_mode: false — 2026-08-29, BACKLOG §3.11. `virsh pool-info` only reads,
+    # but `command` is skipped under --check, so `pool_info` was unset and the
+    # "Show pool status" debug errored on `.stdout`. This play could not complete a
+    # dry run, which blocks the scheduled --check §3.11 asks for.
     - name: Verify pool is active
       ansible.builtin.command: virsh pool-info libvirt-shared
       register: pool_info
       changed_when: false
+      check_mode: false
 
     - name: Show pool status
       ansible.builtin.debug:
@@ -272,10 +282,17 @@
         content: "written by n150-2 at {{ ansible_date_time.iso8601 | default('now') }}"
         mode: "0644"
 
+    # check_mode: false AND failed_when: false — 2026-08-29, BACKLOG §3.11.
+    # This reads a file the PRECEDING task writes, and that writer is skipped under
+    # --check. On a host that has never had a real run the file is absent, so the
+    # read must be allowed to fail rather than abort the dry run; "Show test result"
+    # then reports the true state of the round-trip instead of the play dying.
     - name: Read test file back (confirms NFS round-trip)
       ansible.builtin.command: cat /srv/libvirt-shared/.migration-test
       register: test_read
       changed_when: false
+      failed_when: false
+      check_mode: false
 
     - name: Show test result
       ansible.builtin.debug:
@@ -298,10 +315,18 @@
       become_user: "{{ ansible_user }}"
       register: ssh_test
       changed_when: false
+      # check_mode: false — 2026-08-29, BACKLOG §3.11. A connectivity probe that
+      # changes nothing, and the one task proving the live-migration transport
+      # actually works. Skipped under --check it verified nothing and left
+      # `ssh_test` unset, so the debug below errored. failed_when: false so a broken
+      # transport is REPORTED by the summary rather than aborting the dry run —
+      # a failed probe is the finding, not a reason to stop looking.
+      failed_when: false
+      check_mode: false
 
     - name: Show SSH test result
       ansible.builtin.debug:
-        msg: "{{ ssh_test.stdout }}"
+        msg: "{{ ssh_test.stdout | default('(no output)') }} (rc={{ ssh_test.rc | default('?') }})"
 
     - name: Summary
       ansible.builtin.debug:
