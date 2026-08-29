@@ -557,9 +557,33 @@ and three days of seeding).
 > `VMs + immich + /srv/nas`. The union of daily-7, weekly-4 and monthly-6 covers every
 > distinct day those frozen groups contain, and always will.
 >
-> **So the removal freed nothing.** It stopped new copies. The 224.7 GiB image is still
-> in the primary, in cold-sec, and in R2, and the ~$3/month it was removed to stop
-> paying is still being paid — not until 2027-02, but indefinitely.
+> **So the removal freed nothing.** It stopped new copies. Measured on R2, 2026-08-29:
+>
+>     restic stats --mode raw-data
+>     Snapshots processed:   47
+>     Total Size:            203.579 GiB
+>
+> At R2's $0.015/GB-month that is **≈ $3.05/month, indefinitely** — not until 2027-02.
+> The bill this removal was meant to stop is still being paid in full, and will be
+> until somebody forgets those groups deliberately.
+>
+> The figure is a measurement rather than the inference it replaced. The original
+> version of this correction reasoned that the image *must* still be there, because the
+> offsite seed predated the 08-13 removal and frozen groups never age out. That chain
+> was sound and it was still only a chain; `stats --mode raw-data` is the number it was
+> predicting.
+>
+> **Group coverage verified in all three repositories the same day**, which is what
+> made scoping the `forget` commands safe rather than merely plausible:
+>
+>     primary   23 h4-core/nas   25 lldap-k8s/lldap
+>     cold-sec  35 h4-core/nas   34 lldap-k8s/lldap
+>     R2        23 h4-core/nas   24 lldap-k8s/lldap
+>
+> Two groups everywhere, nothing else — so no snapshot escapes the two scoped rules.
+> R2 trailing the primary by one lldap snapshot is the expected lag: the offsite copy
+> chains off `backup-nas` at 01:30 and lldap writes at 02:30, so the newest lldap
+> snapshot always goes over on the following night.
 >
 > The same arithmetic explains what `nas` retention actually looks like today. Four
 > path groups exist, each with its own independent 7/4/6:
