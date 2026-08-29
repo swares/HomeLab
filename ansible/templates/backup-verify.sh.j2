@@ -70,7 +70,25 @@ done
 # long as this script has existed it has verified the NAS stream and said nothing
 # about the identity database sharing the same repository. §1.12 was diagnosed
 # three times without this check existing to contradict it.
+# THE COPY LAGS BY A FULL DAY, BY CONSTRUCTION. Corrected 2026-08-29, the same day
+# this check was written, before it ever cried wolf.
+#
+# lldap writes at 02:30. backup-nas copies to cold-sec at 01:30. So the newest lldap
+# snapshot reaching the copy is already ~23h old when it arrives, then ages another
+# 24h before the next copy — a peak of ~47h against the 48h NAS threshold. One hour
+# of margin, on a host where docs/BACKUP-RESTORE.md records backup-nas taking hours
+# during a large Immich import. It would have failed on a perfectly healthy system,
+# at whatever hour the weekly verify timer happened to land.
+#
+# The `nas` check above needs no such allowance: those snapshots are created at
+# 01:30 and copied in the same run, seconds apart — the live run showed 44620s on
+# the primary against 44621s on the copy.
 for repo in "$PRIMARY" "$COPY"; do
+  if [ "$repo" = "$COPY" ]; then
+    max_age={{ verify_max_snapshot_age_seconds + 86400 }}   # + one copy cycle
+  else
+    max_age={{ verify_max_snapshot_age_seconds }}
+  fi
   latest_epoch=$(restic -r "$repo" --password-file "$PW" snapshots --tag {{ lldap_snapshot_tag }} --json 2>/dev/null \
     | tr ',' '\n' | grep -o '"time":"[^"]*"' | tail -1 | cut -d'"' -f4 \
     | xargs -r -I{} date -d {} +%s 2>/dev/null)
@@ -78,10 +96,10 @@ for repo in "$PRIMARY" "$COPY"; do
     fail "could not determine newest '{{ lldap_snapshot_tag }}' snapshot in $repo"
   else
     age=$(( $(date +%s) - latest_epoch ))
-    if [ "$age" -gt {{ verify_max_snapshot_age_seconds }} ]; then
-      fail "newest '{{ lldap_snapshot_tag }}' snapshot in $repo is ${age}s old (max {{ verify_max_snapshot_age_seconds }}s)"
+    if [ "$age" -gt "$max_age" ]; then
+      fail "newest '{{ lldap_snapshot_tag }}' snapshot in $repo is ${age}s old (max ${max_age}s)"
     else
-      pass "newest '{{ lldap_snapshot_tag }}' snapshot in $repo is ${age}s old"
+      pass "newest '{{ lldap_snapshot_tag }}' snapshot in $repo is ${age}s old (max ${max_age}s)"
     fi
   fi
 done
