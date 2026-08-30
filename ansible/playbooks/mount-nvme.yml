@@ -1,13 +1,37 @@
 ---
-# mount-nvme.yml — Mount NVMe on OPi 5 Pro nodes and relocate Ollama model dir.
+# mount-nvme.yml — Mount the NVMe on the OPi 5 Pro nodes.
 #
-# Idempotent: safe to re-run. Models are moved only if not already on NVMe.
+# Idempotent: safe to re-run.
 #
 # Usage:
 #   ansible-playbook -i inventory/hosts.yml playbooks/mount-nvme.yml \
 #     --vault-password-file .vault_pass
+#
+# THE OLLAMA RELOCATION TASKS WERE REMOVED 2026-08-30 (BACKLOG §3.11).
+#
+# They described a HOST-level Ollama install that no longer exists. Ollama now runs
+# as a k3s workload (gitops/workloads/ai-backends/ollama.yaml, image
+# ollama/ollama:0.32.1) and its models live in a local-volume PV on this same NVMe:
+#
+#     /mnt/nvme/pvc-c749f4b8-...-0e1cd4512570_ai-gateway_ollama-models
+#
+# Measured on opi5pro-1, 2026-08-30: no `ollama` user, `systemctl is-active ollama`
+# returns inactive, and /mnt/nvme/ollama/models does not exist. The play was creating
+# a directory owned by a user that does not exist and then symlinking to a path
+# nothing writes.
+#
+# HOW IT WAS FOUND, because the mechanism matters more than the tasks:
+# §3.11's drift check reported mount-nvme as CHECK FAILED. Under --check the
+# `file: state=directory` task reports `changed` without creating anything, so the
+# following `state: link` task failed on a missing src — a check-mode cascade, the
+# same class as github-runner.yml's get_url -> unarchive. That failure was masking a
+# reported `changed=3` / `changed=2` on the two nodes, which the drift metric was
+# correctly refusing to count as drift.
+#
+# The NVMe mount below is real and load-bearing: nvme0n1p1 (476.9 GB, ext4) carries
+# both /mnt/nvme and the kubelet's local-volume PVs. Only the Ollama half was dead.
 
-- name: Mount NVMe and relocate Ollama models
+- name: Mount NVMe on the OPi 5 Pro nodes
   hosts: opi5pro-1,opi5pro-2
   become: true
   gather_facts: true
@@ -15,8 +39,6 @@
   vars:
     nvme_device: /dev/nvme0n1p1
     nvme_mount: /mnt/nvme
-    ollama_src: /usr/share/ollama/.ollama/models
-    ollama_dst: /mnt/nvme/ollama/models
 
   tasks:
     - name: Ensure mount point exists
@@ -33,36 +55,6 @@
         opts: defaults,noatime
         state: mounted
 
-    - name: Create Ollama model dir on NVMe
-      ansible.builtin.file:
-        path: "{{ ollama_dst }}"
-        state: directory
-        mode: '0755'
-        owner: ollama
-        group: ollama
-
-    - name: Check if Ollama model dir is already on NVMe
-      ansible.builtin.stat:
-        path: "{{ ollama_src }}"
-      register: ollama_src_stat
-
-    - name: Move existing models to NVMe
-      ansible.builtin.shell: |
-        mv {{ ollama_src }}/* {{ ollama_dst }}/ 2>/dev/null || true
-      when: ollama_src_stat.stat.exists and not ollama_src_stat.stat.islnk
-
-    - name: Remove old model dir
-      ansible.builtin.file:
-        path: "{{ ollama_src }}"
-        state: absent
-      when: ollama_src_stat.stat.exists and not ollama_src_stat.stat.islnk
-
-    - name: Symlink Ollama model dir to NVMe
-      ansible.builtin.file:
-        path: "{{ ollama_src }}"
-        src: "{{ ollama_dst }}"
-        state: link
-
     - name: Report
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: NVMe mounted at {{ nvme_mount }}, Ollama models at {{ ollama_dst }}"
+        msg: "{{ inventory_hostname }}: NVMe mounted at {{ nvme_mount }}"
