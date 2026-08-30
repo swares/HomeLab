@@ -232,15 +232,72 @@
     #   networkd active        -> chrony-onoffline.service (backstop)
     #   neither                -> host is not on networkd; the chrony package's
     #                             own ifupdown/dhclient hooks apply
+    #
+    # THE THIRD BRANCH WAS AN ASSERTION, NOT A MEASUREMENT — corrected 2026-08-29.
+    #
+    # "package hooks apply" was printed for any host without networkd, without ever
+    # looking for a package hook. That is the same claim §1.13 disproved on n150-2:
+    # chrony ships its come-back-online hooks for ifupdown and dhclient, and on that
+    # host `dpkg -l ifupdown` returned `un` and neither existed — which is why chrony
+    # sat with 17 sources offline for 18 hours while `systemctl is-active` said
+    # `active`. A host in that state would have been reported here as covered.
+    #
+    # Found on opi-zero2w-4, where the message happened to be TRUE — ifupdown is
+    # installed and /etc/network/if-up.d/chrony exists. True by that host's package
+    # set, not by anything this play checked. Same message, opposite reality, and no
+    # way to tell them apart.
+    #
+    # So look for the hook instead of assuming it. Read-only, hence check_mode: false
+    # — a coverage check that skips under --check reports coverage it did not verify,
+    # which is the fault this block is being fixed for (BACKLOG §3.11).
+    - name: Look for a chrony come-back-online hook shipped by the package
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/network/if-up.d/chrony                        # ifupdown
+        - /etc/NetworkManager/dispatcher.d/20-chrony         # NetworkManager
+        - /etc/NetworkManager/dispatcher.d/20-chrony-onoffline
+        - /etc/dhcp/dhclient-exit-hooks.d/chrony             # dhclient
+      register: _chrony_pkg_hooks
+      changed_when: false
+      check_mode: false
+
+    # NOTE: this must be a single quoted expression, NOT a `>-` folded block. A
+    # folded scalar renders the list to a STRING, so `| length` would count
+    # characters — "[]" has length 2, so the "nothing covers this host" warning
+    # below could never fire and the report would print an empty list as if it
+    # were a hook. Caught before merge on 2026-08-29; the shape is worth knowing,
+    # because it fails in the safe-looking direction.
+    - name: Determine which package hooks actually exist on disk
+      ansible.builtin.set_fact:
+        _chrony_pkg_hook_paths: "{{ _chrony_pkg_hooks.results | selectattr('stat.exists') | map(attribute='item') | list }}"
+
     - name: Report which chrony recovery mechanism covers this host
       ansible.builtin.debug:
         msg: >-
           {{ inventory_hostname }}:
           {{ 'routable.d hook' if (_nd_dir.stat.isdir | default(false)) else '' }}
           {{ 'chrony-onoffline.service' if (_networkd.stdout | default('') is search('^active')) else '' }}
-          {{ 'no networkd — package hooks apply' if not (_nd_dir.stat.isdir | default(false))
-             and not (_networkd.stdout | default('') is search('^active')) else '' }}
-      when: not ansible_check_mode
+          {{ ('package hook: ' ~ (_chrony_pkg_hook_paths | join(', ')))
+             if (_chrony_pkg_hook_paths | length > 0) else '' }}
+
+    # A host matching none of the three has no way back from an ENETUNREACH parking
+    # event. That is §1.13 exactly, and it is the one state this block used to
+    # describe as covered. Not fatal — the clock keeps its frequency estimate for a
+    # long time and n150-2 survived 18 hours at 4.9 microseconds — so this warns
+    # rather than fails, and LabClockUnsynced is the backstop that reaches the phone.
+    - name: Warn if NOTHING would bring chrony back online after a network restart
+      ansible.builtin.debug:
+        msg: >-
+          WARNING {{ inventory_hostname }}: no networkd-dispatcher hook, no
+          chrony-onoffline.service, and no package hook on disk. After a network
+          restart chrony will mark every source offline and nothing will bring them
+          back — see BACKLOG §1.13. `chronyc activity` is the check; `systemctl
+          is-active chrony` will say `active` throughout.
+      when:
+        - not (_nd_dir.stat.isdir | default(false))
+        - not (_networkd.stdout | default('') is search('^active'))
+        - _chrony_pkg_hook_paths | length == 0
 
     - name: Enable and start chrony
       ansible.builtin.systemd:
