@@ -113,16 +113,27 @@
     # then merge the gitops change. Argo reconciles within ~30s of merge, so the
     # reverse order guarantees a window of errors.
     #
-    # 0755 and root-owned: node_exporter runs as UID 65534 in the pod and only
-    # READS these files, while the writers are root-run systemd units on the host.
-    # Nothing unprivileged needs to write here.
+    # OWNERSHIP CORRECTED 2026-08-30. The first version of this task was root:root
+    # 0755, with the comment "nothing unprivileged needs to write here". That was
+    # an assumption, it was untested, and designing the §3.11 drift check disproved
+    # it the same evening: the check must run as {{ ansible_user }} — it needs that
+    # user's SSH keys, ansible.cfg and .vault_pass — so it cannot publish a metric
+    # into a root-only directory.
+    #
+    # root-owned, group-writable by the ansible user, world-readable:
+    #   node_exporter reads as UID 65534 in the pod  -> needs r-x on the dir
+    #   drift check writes as {{ ansible_user }}     -> needs w via group
+    #   root-run units may also write                -> owner
+    #
+    # Recorded rather than quietly amended, because the comment asserting a
+    # requirement nobody had checked is the same shape as the rest of §3.11.
     - name: Create the node_exporter textfile collector directory
       ansible.builtin.file:
         path: /var/lib/node_exporter/textfile_collector
         state: directory
         owner: root
-        group: root
-        mode: "0755"
+        group: "{{ ansible_user }}"
+        mode: "0775"
 
     # Read-only, so it must run under --check as well — otherwise a dry run
     # reports success having confirmed nothing, which is the §3.11 fault this
