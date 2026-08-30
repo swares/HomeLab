@@ -63,7 +63,7 @@ cd "$ANSIBLE_DIR" || { echo "cannot cd to $ANSIBLE_DIR" >&2; exit 1; }
 PLAYBOOKS=(
 {% for pb in drift_playbooks %}
   {{ pb | quote }}
-{%- endfor %}
+{% endfor %}
 )
 
 # Playbooks knowingly not covered, published so the coverage gap is visible in the
@@ -72,11 +72,25 @@ PLAYBOOKS=(
 SKIPPED=(
 {% for pb in drift_playbooks_skipped %}
   {{ pb | quote }}
-{%- endfor %}
+{% endfor %}
 )
 
+# HELP TEXT CORRECTED 2026-08-30. It previously read "Hosts reporting changed",
+# which is wrong in three separate ways, all of them under-counting:
+#
+#   1. It is not hosts. It sums the `changed=N` FIELD across every host line in the
+#      PLAY RECAP, so it counts changed task-instances (host x task), and a single
+#      host with four changed tasks contributes 4, not 1.
+#   2. A looped task contributes 1 no matter how many items changed.
+#   3. `command`/`shell` tasks are SKIPPED under --check, so work they would do is
+#      invisible here. Measured 2026-08-30: mount-nvme.yml's `swapon` of an idle
+#      zram device was real, pending work that this gauge reported as 0.
+#
+# So the number is a floor on divergence, not a measurement of it. Treat non-zero as
+# "look here", never as "this many things are wrong" — and treat zero as "nothing
+# check-mode can see", which is not the same as "nothing".
 {
-  echo "# HELP lab_ansible_drift Hosts reporting changed under ansible-playbook --check."
+  echo "# HELP lab_ansible_drift Sum of changed= across hosts in this playbook's --check PLAY RECAP (a floor; see script comments)."
   echo "# TYPE lab_ansible_drift gauge"
 } > "$TMP"
 
