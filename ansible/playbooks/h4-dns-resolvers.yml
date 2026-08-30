@@ -154,12 +154,68 @@
           # and restores the nameservers block removed below.
           network: {config: disabled}
 
-    - name: Back up the cloud-init netplan before editing it
+    # ---- the pristine backup -------------------------------------------------
+    # REWRITTEN 2026-08-30, BACKLOG §3.11. This task previously wrote to
+    #
+    #     dest: /etc/netplan/50-cloud-init.yaml.bak-{{ ansible_date_time.date }}
+    #
+    # and carried `force: false` with the comment "never clobber an existing backup".
+    # The intent was right and the implementation guaranteed the opposite of
+    # idempotency: the DESTINATION PATH CHANGES EVERY DAY, so there is never an
+    # existing backup to protect, the task reports `changed` on every run forever, and
+    # a play run daily would accumulate one file per day. It was the sole reason
+    # lab_ansible_drift{playbook="h4-dns-resolvers"} sat permanently at 1 — the
+    # resolver tasks below have been reporting `ok` throughout. The drift was a
+    # calendar, not a DNS fault.
+    #
+    # THE SUBTLER BUG, which is why this is not simply a filename change:
+    # this task runs AFTER earlier runs have already rewritten 50-cloud-init.yaml, so
+    # every dated backup except the FIRST captures the already-modified file. Only the
+    # earliest is a real backup. Measured on h4-core 2026-08-30:
+    #
+    #     50-cloud-init.yaml.bak-2026-08-21   164 bytes, mtime Jun 24 — HAS nameservers
+    #     50-cloud-init.yaml                  568 bytes            — modified
+    #
+    # Switching to a fixed name naively would have captured the 568-byte modified file
+    # as ".orig" and then `force: false` would have protected THAT forever, quietly
+    # destroying the only pristine copy the lab has of this file.
+    #
+    # So the source is chosen at run time: promote the OLDEST existing dated backup if
+    # one exists (that is the pristine one), otherwise — on a rebuilt host, where the
+    # live file has not been touched yet — take the live file. `force: false` then
+    # means this is written exactly once, ever.
+    #
+    # The legacy dated file is deliberately NOT deleted. It is 164 bytes, and removing
+    # a backup to tidy up a metric is not a trade this lab makes.
+    - name: Find any legacy dated netplan backups
+      ansible.builtin.find:
+        paths: /etc/netplan
+        patterns: "50-cloud-init.yaml.bak-*"
+      register: legacy_netplan_backups
+      check_mode: false
+
+    - name: Report which file will be preserved as the pristine original
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            'Promoting oldest existing backup: '
+              ~ (legacy_netplan_backups.files | sort(attribute='mtime'))[0].path
+            if legacy_netplan_backups.files | length > 0
+            else 'No dated backup found — taking the live /etc/netplan/50-cloud-init.yaml
+                  as the original. This is correct ONLY on a host this play has never
+                  modified; if the resolver tasks below report ok on a fresh host,
+                  investigate before trusting this backup.'
+          }}
+
+    - name: Preserve the pristine cloud-init netplan (written once, never clobbered)
       ansible.builtin.copy:
-        src: /etc/netplan/50-cloud-init.yaml
-        dest: /etc/netplan/50-cloud-init.yaml.bak-{{ ansible_date_time.date }}
+        src: >-
+          {{ (legacy_netplan_backups.files | sort(attribute='mtime'))[0].path
+             if legacy_netplan_backups.files | length > 0
+             else '/etc/netplan/50-cloud-init.yaml' }}
+        dest: /etc/netplan/50-cloud-init.yaml.orig
         remote_src: true
-        force: false          # never clobber an existing backup
+        force: false          # never clobber — and the dest no longer moves
         mode: "0600"
 
     - name: Drop the hard-coded nameservers from enp2s0
