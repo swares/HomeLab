@@ -1,0 +1,149 @@
+#!/bin/bash
+# {{ ansible_managed | default('Managed by Ansible — do not edit by hand') }}
+#
+# Scheduled `ansible-playbook --check` across the steady-state playbooks, publishing
+# the result as node_exporter textfile metrics. BACKLOG §3.11.
+#
+# WHY THIS EXISTS
+#
+# Argo CD reconciles the cluster continuously with selfHeal, so a merged manifest
+# reaches the cluster within ~30 seconds whether anyone is watching or not. Ansible
+# reconciles NOTHING. A merged host-layer change takes effect only when a human
+# remembers to run the playbook, and until this script existed nothing reported the
+# gap. The repo's whole mental model — "change it in git and it happens" — is true of
+# one layer and false of the other, with no marker at the boundary.
+#
+# Every drift this lab has found was found by accident: a --check run made for an
+# unrelated reason. On 2026-08-29 alone that produced the ledger missing from
+# backup-nas, two Pi-hole permission widenings, the primary resolver with no admin
+# password, a timer owned by two playbooks, and a host that had never received its
+# chrony config and was syncing to a public NTP server. This turns that into a
+# schedule.
+#
+# NOTE FOR EDITORS: this is a Jinja2 template. Do NOT use bash's array-length syntax
+# (dollar-brace-hash-name) — brace followed by hash opens a Jinja comment and
+# rendering fails. Same trap documented in backup-verify.sh.j2.
+
+set -uo pipefail   # NOT -e: every playbook must be checked, then all results reported.
+
+REPO={{ drift_repo_dir | quote }}
+ANSIBLE_DIR="$REPO/ansible"
+OUT={{ drift_textfile_dir }}/ansible_drift.prom
+TMP="$OUT.tmp"
+START=$(date +%s)
+
+# ---- Pin the checkout before comparing anything against it -------------------
+# CLAUDE.md: the H4 checkout is run-only and is kept pinned to origin/main. That
+# matters more here than anywhere else: this script's entire output is "how far do
+# the hosts differ from git", and a stale clone reports ZERO drift precisely when
+# git and the hosts have diverged most. The commit checked is published as a metric
+# so a number can always be attributed to a revision.
+cd "$REPO" || { echo "cannot cd to $REPO" >&2; exit 1; }
+git fetch --quiet origin || echo "WARN: git fetch failed; checking against the local checkout" >&2
+git reset --quiet --hard origin/main || echo "WARN: git reset failed" >&2
+COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown)
+
+# §4.1c: ansible.cfg is read from the CURRENT WORKING DIRECTORY. Run from the repo
+# root and vault_password_file and pipelining both silently do nothing — which on
+# 2026-08-09 surfaced as "Attempting to decrypt but no vault secrets found".
+cd "$ANSIBLE_DIR" || { echo "cannot cd to $ANSIBLE_DIR" >&2; exit 1; }
+
+# ---- The playbooks this checks ----------------------------------------------
+# Steady-state only. Deliberately EXCLUDED:
+#   - one-shot provisioning (bootstrap*, create-vm, install-gitlab, k3s-h4,
+#     k3s-ha-join, k3s-agent, provision-*, sandbox-vm-update) — they describe an
+#     installation event, not an ongoing state, so "changed" there is meaningless
+#   - maintenance plays that mutate by design (update-*, rotate-passwords,
+#     break-glass-key)
+#   - anything needing VAULT_TOKEN (backup-cloud, backup-offsite, backup-vault,
+#     dns, healthchecks, sync-secrets-to-vault, vault-eso-k8s-auth, vault-policies).
+#     token-admin is deliberately allowed to lapse (§5, §1.11), so no standing admin
+#     credential exists for an unattended run. Those playbooks are therefore NOT
+#     covered, and that gap is real rather than hidden — see lab_ansible_drift_skipped.
+PLAYBOOKS=(
+{% for pb in drift_playbooks %}
+  {{ pb | quote }}
+{%- endfor %}
+)
+
+# Playbooks knowingly not covered, published so the coverage gap is visible in the
+# same place as the results. A drift report that silently omits a third of the
+# playbooks is the §1.12 shape: a truncated view read as a complete one.
+SKIPPED=(
+{% for pb in drift_playbooks_skipped %}
+  {{ pb | quote }}
+{%- endfor %}
+)
+
+{
+  echo "# HELP lab_ansible_drift Hosts reporting changed under ansible-playbook --check."
+  echo "# TYPE lab_ansible_drift gauge"
+} > "$TMP"
+
+failed_lines=""
+skipped_lines=""
+
+for pb in "${PLAYBOOKS[@]}"; do
+  name=$(basename "$pb" .yml)
+
+  # timeout: a hung play must not wedge the weekly run forever. 300s is generous —
+  # the slowest of these takes well under a minute against 13 hosts.
+  out=$(timeout 300 ansible-playbook -i inventory/hosts.yml "$pb" --check 2>&1)
+  rc=$?
+
+  # Sum `changed=N` across every host in the PLAY RECAP.
+  changed=$(printf '%s\n' "$out" \
+    | awk '/: *ok=/ {for (i=1;i<=NF;i++) if ($i ~ /^changed=/) {split($i,a,"="); s+=a[2]}} END {print s+0}')
+
+  # And `failed=N`, because a play can exit 0 having failed a host in some paths.
+  hostfail=$(printf '%s\n' "$out" \
+    | awk '/: *ok=/ {for (i=1;i<=NF;i++) if ($i ~ /^failed=/) {split($i,a,"="); s+=a[2]}} END {print s+0}')
+
+  if [ "$rc" -ne 0 ] || [ "$hostfail" -gt 0 ]; then
+    # The check itself could not complete. This is NOT drift and must not be
+    # reported as zero drift — "could not look" and "looked, found nothing" are
+    # different states and only one of them is reassuring.
+    failed_lines="${failed_lines}lab_ansible_check_failed{playbook=\"$name\"} 1"$'\n'
+    echo "lab_ansible_drift{playbook=\"$name\"} 0" >> "$TMP"
+    echo "DRIFT-CHECK $name: CHECK FAILED rc=$rc host_failures=$hostfail" >&2
+    printf '%s\n' "$out" | tail -20 >&2
+  else
+    failed_lines="${failed_lines}lab_ansible_check_failed{playbook=\"$name\"} 0"$'\n'
+    echo "lab_ansible_drift{playbook=\"$name\"} $changed" >> "$TMP"
+    [ "$changed" -gt 0 ] && echo "DRIFT-CHECK $name: $changed changed" >&2
+  fi
+done
+
+for pb in "${SKIPPED[@]}"; do
+  name=$(basename "$pb" .yml)
+  skipped_lines="${skipped_lines}lab_ansible_drift_skipped{playbook=\"$name\"} 1"$'\n'
+done
+
+{
+  echo "# HELP lab_ansible_check_failed 1 if ansible-playbook --check could not complete for this playbook."
+  echo "# TYPE lab_ansible_check_failed gauge"
+  printf '%s' "$failed_lines"
+  echo "# HELP lab_ansible_drift_skipped Playbook knowingly not covered by the drift check."
+  echo "# TYPE lab_ansible_drift_skipped gauge"
+  printf '%s' "$skipped_lines"
+  echo "# HELP lab_ansible_drift_commit_info The git commit the hosts were compared against."
+  echo "# TYPE lab_ansible_drift_commit_info gauge"
+  echo "lab_ansible_drift_commit_info{commit=\"$COMMIT\"} 1"
+  echo "# HELP lab_ansible_drift_duration_seconds How long the drift check took."
+  echo "# TYPE lab_ansible_drift_duration_seconds gauge"
+  echo "lab_ansible_drift_duration_seconds $(( $(date +%s) - START ))"
+  # LAST, and the most important metric here. Without it a dead timer freezes every
+  # gauge above at its last value and the lab looks calm forever — which is exactly
+  # what LabBackupEtcdSilent exists to catch on the backup timers. Alert on this
+  # going stale, not just on drift being non-zero.
+  echo "# HELP lab_ansible_drift_last_run_seconds Unix time the drift check last completed."
+  echo "# TYPE lab_ansible_drift_last_run_seconds gauge"
+  echo "lab_ansible_drift_last_run_seconds $(date +%s)"
+} >> "$TMP"
+
+# Atomic publish. node_exporter reads this directory on every scrape and a partial
+# file yields a parse error and a wrong number, so never write $OUT in place.
+mv -f "$TMP" "$OUT"
+chmod 0644 "$OUT"
+
+echo "drift check complete against $COMMIT"
