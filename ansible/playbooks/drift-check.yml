@@ -33,6 +33,15 @@
     # (changed is meaningless there), maintenance plays that mutate by design, and
     # anything needing VAULT_TOKEN — token-admin is deliberately allowed to lapse
     # (§5, §1.11) so no standing credential exists for an unattended run.
+    # NOT COVERED, and deliberately not listed as "skipped" either — the skipped list
+    # is for steady-state plays blocked by a missing VAULT_TOKEN, which is a coverage
+    # gap worth publishing. These are simply not steady-state:
+    #
+    #   playbooks/k8s-secrets.yml  — removed 2026-08-30. Its own header says "run this
+    #     immediately after ArgoCD is back up" after a cluster rebuild: an installation
+    #     event, not an ongoing state, so `changed` there means nothing. Same call as
+    #     github-runner.yml. It was ALSO failing every run for an unrelated reason —
+    #     see the guard added in that file the same day.
     drift_playbooks:
       - playbooks/apport.yml
       - playbooks/argocd.yml
@@ -43,7 +52,6 @@
       - playbooks/home-assistant.yml
       - playbooks/journald.yml
       - playbooks/k3s-registry.yml
-      - playbooks/k8s-secrets.yml
       - playbooks/ledger.yml
       - playbooks/libvirt-exporter.yml
       - playbooks/mount-nvme.yml
