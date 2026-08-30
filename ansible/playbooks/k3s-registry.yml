@@ -132,11 +132,39 @@
           }
       notify: restart docker
 
+    # CHECK-MODE ACCURACY, not just check-mode honesty — 2026-08-29, BACKLOG §3.11.
+    #
+    # `ansible.builtin.user` with `append: true` cannot reliably determine existing
+    # supplementary group membership under --check, and reports `changed` even when
+    # the user is already a member. Verified on h4-core the same day: this task
+    # reported changed in a dry run while `getent group docker` returned
+    #     docker:x:124:swares
+    # — swares was already in the group. A false positive, not drift.
+    #
+    # That distinction matters more than it looks. The §3.11 drift check publishes
+    # lab_ansible_drift from summed `changed` counts, so a task that is permanently
+    # and wrongly `changed` puts a non-zero FLOOR under the metric. An alert that can
+    # never go green is an alert that gets ignored — which is exactly what
+    # LabExternalHostDown did for three weeks against a decommissioned VM, and the
+    # reason lab-alerts.yaml carries a note about it.
+    #
+    # So: read the group first, and only touch the user if the membership is really
+    # missing. The getent is read-only and carries check_mode: false, because a guard
+    # that skips under --check makes the task below unconditional again.
+    - name: Read the docker group's current members
+      ansible.builtin.getent:
+        database: group
+        key: docker
+      check_mode: false
+
     - name: Add ansible user to docker group
       ansible.builtin.user:
         name: "{{ ansible_user }}"
         groups: docker
         append: true
+      when: >-
+        ansible_user not in
+        (ansible_facts.getent_group.get('docker', ['', '', ''])[2] | default('')).split(',')
 
   handlers:
     - name: restart docker
