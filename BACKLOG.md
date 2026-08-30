@@ -1903,16 +1903,66 @@ alert that can never go green is an alert that gets ignored. `lab-alerts.yaml` a
 records `LabExternalHostDown` firing for three weeks against a decommissioned VM and
 training the eye past it. So the alert rules are deliberately NOT written yet.
 
-- [ ] **Drive the floor to zero before alerting.** Known contributors:
-      `h4-dns-resolvers` reports 1 permanently *by design* — §4.12 says that playbook
-      "writes the netplan override but does not apply it", the apply being a deliberate
-      manual `netplan try`. That is not drift and must not be counted as it. Either
-      exclude it, split the write from the apply, or baseline it explicitly.
-- [ ] **Audit the checked set for other `user`/`group`-module tasks** and anything else
-      that reports changed while converged. The static audit looked for check-mode
-      *honesty*; nothing has yet looked for *accuracy*.
-- [ ] **Then write the alert rules** — drift non-zero, `check_failed` non-zero, and
-      `last_run_seconds` going stale. Not before the floor is zero.
+- [x] **Drive the floor to zero before alerting.** Done 2026-08-30.
+      **The diagnosis written above was WRONG and is left in place as the record.**
+      `h4-dns-resolvers` did *not* report 1 "by design"; the deliberate
+      write-without-apply had nothing to do with it. Its netplan tasks reported `ok`
+      throughout — the config on disk already matched git. The entire drift was one
+      task backing up the cloud-init netplan to
+      `…50-cloud-init.yaml.bak-{{ ansible_date_time.date }}`, whose `force: false`
+      ("never clobber an existing backup") was defeated by a **destination path that
+      moves every midnight**. There was never an existing backup to protect. No DNS
+      decision was required and no baseline exclusion was needed.
+- [x] **Audit the checked set for accuracy, not just honesty.** Answered empirically
+      rather than statically: all 21 covered playbooks now report 0 against real hosts
+      (commit `98be83e`), which is a stronger result than an audit — a permanently-wrong
+      `changed` cannot hide in a set that sums to zero.
+- [x] **Then write the alert rules.** Done 2026-08-30, group `lab.ansible-drift` in
+      `lab-alerts.yaml`, and only after the floor hit zero. Four rules, not three:
+      `LabAnsibleDrift`, `LabAnsibleCheckFailed`, `LabAnsibleDriftStale` (>10 days on a
+      weekly timer), and `LabAnsibleDriftMetricMissing` — `absent()`, because a rule on
+      a gauge cannot fire when the gauge stops existing. Verified before merge that
+      Prometheus was already scraping the series from `192.168.1.160:9100`, so the
+      alerts would not arrive pre-firing.
+
+**CLOSED 2026-08-30. 21 playbooks, 0 drift, 0 check failures, 4 alerts watching.**
+
+**The finding that matters is what it found.** All seven items the check surfaced were
+**broken automation, not drifted hosts** — the opposite of what this entry was written
+to catch:
+
+| playbook | what it actually was |
+|---|---|
+| `home-assistant` | used `community.docker`, undeclared in `requirements.yml` — never parsed, ever. Would have installed Docker + a second HA onto rpi4b, the **live Pi-hole secondary DNS**. HA has run in k3s for 50 days. Deleted. |
+| `k8s-secrets` | templated `authelia_storage_pg_password`, commented out in the vault file. `failed_when: false` does not rescue a *templating* error and `no_log: true` censored it. Same defect as `zot_admin_password` (2026-08-09). |
+| `mount-nvme` | check-mode cascade hiding `changed=3`/`changed=2`; its Ollama half described a host install that moved into k3s. |
+| `mqtt` | could not be run without accepting an unattended `pacman -Syu` on a rolling distro. |
+| `github-runner` | one-shot provisioning, miscategorised. |
+| `shared-storage` | `ansible_date_time.iso8601` in file **content** + the play deleted the file it then read back. |
+| `h4-dns-resolvers` | `ansible_date_time.date` in a backup **filename**. |
+
+Two consequences worth carrying forward:
+
+1. **Both floor items were the same bug: a date rendered into a path or a payload.**
+   If a newly-covered playbook pins the gauge at a constant non-zero, look for a
+   timestamp before looking for a drifted host.
+2. **Non-zero drift is not a licence to apply.** Three of four non-zero readings meant
+   *git* was wrong. `mount-nvme.yml` would have stripped `nofail` from a headless SBC's
+   fstab and replaced a UUID with a device path — to add one `noatime` it was missing.
+   The alert annotation says this in as many words.
+
+Both permanent-`changed` bugs were also **masking a real defect underneath**, which is
+the argument against tolerating a non-zero floor rather than merely disliking it:
+`shared-storage`'s NFS round-trip assertion had **never once passed** — it read a file
+the play deleted at the end of every real run, failing silently into `failed_when: false`
+— and `h4-dns-resolvers` was re-defining "the original" every day it ran, so only the
+earliest dated backup held the pristine file. Both now verified: the round-trip prints
+real content, and `50-cloud-init.yaml.orig` is the 164-byte Jun 24 file that still
+contains the `nameservers` block.
+
+**Its yield should now fall.** The check was built to answer "have the hosts diverged
+from git" and mostly answered "which of your playbooks are fiction". That backlog is
+finite, and a quiet weekly run will start meaning something once it is cleared.
 
 ### 3.16 The systemd collector exports ONLY backup units, so every other failed unit is invisible
 
