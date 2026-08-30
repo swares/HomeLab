@@ -42,6 +42,35 @@ Last verified: 2026-07-18.
 >
 > Both are now on durable `/var/log` (`ENABLED=false` + reboot). `opi5pro-1/2`
 > deliberately remain on zram — see `journal_durable` in the inventory.
+
+> **`swapon -a` silently destroys zram swap on the OPi 5 Pro boards.** Read this
+> before editing `/etc/fstab` on `opi5pro-1` or `opi5pro-2`.
+>
+> `/usr/lib/orangepi/orangepi-zram-config` calls `swapon` on `/dev/zram0`
+> **directly**, so zram swap has no `/etc/fstab` record. `swapoff -a && swapon -a`
+> — the obvious thing to run after adding a swap entry — therefore drops zram and
+> brings back only what fstab lists. `systemctl status` keeps reporting the unit
+> `active (exited)` the whole time, because the unit is `Type=oneshot` with
+> `RemainAfterExit=yes` and it did run; the device stays created and correctly
+> formatted, just never activated. Every status signal is green.
+>
+> This is how the two boards diverged on 2026-06-29 and it went unnoticed until
+> 2026-08-30: `opi5pro-2` was paging **867 MB onto the NVMe** — the same partition
+> serving the `ollama-models` local-volume PV — while `opi5pro-1` used zram and
+> paged nothing. There was no memory pressure on either (14 GiB available); the
+> boards ship `vm.swappiness=100`, which is a sensible number *for zram*, where
+> paging is compression rather than IO. Pointed at a file on flash it is simply
+> aggressive flash writing.
+>
+> Diagnose with `zramctl` — **not** `systemctl status`. The tell is a `zram0` row
+> with a blank `MOUNTPOINT` column where a working node shows `[SWAP]`.
+>
+> Recovery is `swapon --priority 5 /dev/zram0` (priority 5 matches what the script
+> sets). Do **not** `systemctl restart orangepi-zram-config`: its `ExecStop` tears
+> down every zram device, and `zram1` carries `/var/log` on these boards.
+>
+> `ansible/playbooks/mount-nvme.yml` now owns this policy and converges both nodes
+> on zram-only, so a weekly `--check` will catch a recurrence.
 | **M5Stack LLM** | ESP32-S3 | — | — | USB | Edge AI inference |
 | **HostMon** | ESP32-S3 (Waveshare 4.3") | 8 MB PSRAM | LAN | — | Host prober + status panel |
 

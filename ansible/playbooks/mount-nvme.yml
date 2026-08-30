@@ -321,8 +321,24 @@
         state: absent
       when: nvme_swapfile not in (swap_before_delete.stdout | default(''))
 
+    # Read the swap table ONE MORE TIME. The Report below previously used
+    # swap_after_zram, which is captured BEFORE the swapoff and the delete — so on
+    # 2026-08-30 the first real run closed with
+    #     "swap = /mnt/nvme/swapfile\n/dev/zram0"
+    # on a node where the swapfile had just been deactivated and deleted three tasks
+    # earlier. A closing summary asserting a state that stopped being true mid-play is
+    # the same defect as an Ansible summary that claims success under --check
+    # (CLAUDE.md). Report what is true when the play ends, not what was true when it
+    # was convenient to measure.
+    - name: Read the final swap state
+      ansible.builtin.command: swapon --show=NAME,SIZE,PRIO --noheadings
+      register: swap_final
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
     - name: Report
       ansible.builtin.debug:
         msg: >-
           {{ inventory_hostname }}: NVMe mounted at {{ nvme_mount }}
-          (UUID={{ nvme_uuid.stdout | trim }}); swap = {{ swap_after_zram.stdout | trim | default("none", true) | replace("\n", " ") }}
+          (UUID={{ nvme_uuid.stdout | trim }}); swap = {{ swap_final.stdout | trim | default("none", true) | replace("\n", " / ") }}
