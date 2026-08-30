@@ -29,12 +29,34 @@
         - /usr/lib/firmware/nvidia/ad107
       when: ansible_os_family == 'Archlinux'
 
+    # `tags: never` added 2026-08-30 (BACKLOG §3.11). This task performs an UNATTENDED
+    # FULL SYSTEM UPGRADE — `pacman -Syu --noconfirm` — on a rolling-release distro, as
+    # part of a playbook whose job is configuring an MQTT broker.
+    #
+    # Found because the drift check reported mqtt at 1: four orphaned nvidia firmware
+    # symlinks on opi-zero2w-2, removable by the task above. There was no way to apply
+    # that four-line fix without also upgrading every package on both Arch hosts, since
+    # the playbook carried no tags at all. A config playbook you cannot run without
+    # accepting a system upgrade is a playbook that does not get run.
+    #
+    # `never` means it is skipped unless explicitly requested:
+    #     ansible-playbook playbooks/mqtt.yml --tags upgrade
+    #
+    # Package updates are `update-hosts.yml`'s job — it has its own Arch pacman path and
+    # its own gating. This duplicated that responsibility while hiding it inside an
+    # unrelated play.
+    #
+    # Kept rather than deleted because the task above genuinely depends on it: the
+    # orphaned dirs exist to be cleared *before* an upgrade, so the two belong together
+    # when an upgrade is actually wanted. The `--ignore libcamera,libcamera-ipa` is
+    # itself routing around a broken package and deserves its own look.
     - name: Full system upgrade before install (skip broken libcamera)
       ansible.builtin.shell:
         cmd: "pacman -Syu --noconfirm --ignore libcamera,libcamera-ipa"
       register: pacman_upgrade
       changed_when: "'there is nothing to do' not in pacman_upgrade.stdout"
       when: ansible_os_family == 'Archlinux'
+      tags: [upgrade, never]
 
     - name: Install Mosquitto (pacman)
       community.general.pacman:
