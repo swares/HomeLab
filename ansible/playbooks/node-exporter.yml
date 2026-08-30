@@ -102,6 +102,50 @@
         - _port9100.stdout is search('prometheus-node')
         - not ansible_check_mode
 
+    # ---- Textfile collector directory (BACKLOG §3.11) -----------------------
+    # Added 2026-08-29, ahead of enabling --collector.textfile.directory on the
+    # node-exporter DaemonSet. This MUST exist before that flag is turned on: a
+    # missing directory makes node_exporter log a read error on every scrape, on
+    # every node, forever — noise that trains the eye to ignore the exporter's
+    # logs, which is how §3.15's 19-day crashloop stayed unexamined.
+    #
+    # Ordering is therefore deliberate and one-way: apply this playbook FIRST,
+    # then merge the gitops change. Argo reconciles within ~30s of merge, so the
+    # reverse order guarantees a window of errors.
+    #
+    # 0755 and root-owned: node_exporter runs as UID 65534 in the pod and only
+    # READS these files, while the writers are root-run systemd units on the host.
+    # Nothing unprivileged needs to write here.
+    - name: Create the node_exporter textfile collector directory
+      ansible.builtin.file:
+        path: /var/lib/node_exporter/textfile_collector
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # Read-only, so it must run under --check as well — otherwise a dry run
+    # reports success having confirmed nothing, which is the §3.11 fault this
+    # whole line of work exists to remove.
+    - name: Confirm the textfile directory exists and is readable
+      ansible.builtin.stat:
+        path: /var/lib/node_exporter/textfile_collector
+      register: _tfdir
+      check_mode: false
+
+    - name: Assert the textfile directory is present
+      ansible.builtin.assert:
+        that:
+          - _tfdir.stat.exists
+          - _tfdir.stat.isdir
+        success_msg: "{{ inventory_hostname }}: textfile collector dir ready"
+        fail_msg: >-
+          {{ inventory_hostname }}: /var/lib/node_exporter/textfile_collector is
+          missing. Do NOT enable --collector.textfile.directory until this exists
+          on every node — see BACKLOG §3.11.
+        quiet: true
+      when: not ansible_check_mode
+
 - name: Install and enable node_exporter on non-cluster hosts
   hosts: node_exporter
   become: true
