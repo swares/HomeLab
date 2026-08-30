@@ -368,6 +368,28 @@ spec:
             # runs with ARGS="" and therefore includes every unit by default —
             # which is why that one was visible while the H4's were not.
             - --collector.systemd.unit-include=backup-.+\.(service|timer)
+            # Textfile collector, added 2026-08-29 for BACKLOG §3.11 — the
+            # scheduled `ansible-playbook --check` drift report needs somewhere to
+            # publish, and this is the path that already delivers to the phone via
+            # node_exporter -> Prometheus -> Alertmanager.
+            #
+            # ORDERING WAS DELIBERATE AND ONE-WAY. The directory was created on all
+            # five nodes by ansible/playbooks/node-exporter.yml (#500) and applied
+            # BEFORE this flag was enabled. Pointing the collector at a missing
+            # directory makes node_exporter log a read error on every scrape, on
+            # every node — the sort of permanent low-grade noise that trains the eye
+            # to skip exporter logs, which is how §3.15's 19-day crashloop went
+            # unexamined. If this ever lands on a NEW node, run that playbook first.
+            #
+            # Only the H4 will actually have files here: the drift check runs from
+            # the control node against the whole fleet, so it produces one set of
+            # per-playbook numbers in one place rather than each node reporting on
+            # itself. The other four read an empty directory, which costs nothing and
+            # means a future per-node metric has somewhere to land without another
+            # gitops change. Enabling it per-node instead would need a second
+            # DaemonSet or a node-specific override — more machinery than the
+            # benefit justifies.
+            - --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
           # The 2026-07-26 note claimed this could not work because node_exporter
           # needs /run/systemd/private, which is root-only. That was wrong. The
           # collector connects to the D-Bus SYSTEM bus, and the pod log on
@@ -382,6 +404,14 @@ spec:
             - name: dbus
               hostPath: /run/dbus/system_bus_socket
               mountPath: /var/run/dbus/system_bus_socket
+              readOnly: true
+            # readOnly is correct and not merely cautious: node_exporter only READS
+            # .prom files here. The writers are root-run systemd units on the host,
+            # so the pod never needs write access — which also keeps
+            # readOnlyRootFilesystem: true intact.
+            - name: textfile
+              hostPath: /var/lib/node_exporter/textfile_collector
+              mountPath: /var/lib/node_exporter/textfile_collector
               readOnly: true
           # Mounting the socket is necessary but not sufficient on the Ubuntu
           # nodes. containerd applies its default AppArmor profile there, and
