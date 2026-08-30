@@ -37,6 +37,12 @@
     # is for steady-state plays blocked by a missing VAULT_TOKEN, which is a coverage
     # gap worth publishing. These are simply not steady-state:
     #
+    #   playbooks/home-assistant.yml — DELETED 2026-08-30. Home Assistant runs in
+    #     k3s (gitops/workloads/home-assistant). The play described a Docker install
+    #     on rpi4b — the live Pi-hole secondary DNS — and could never parse: it used
+    #     community.docker, which requirements.yml does not declare. Never run, on
+    #     any host, ever.
+    #
     #   playbooks/k8s-secrets.yml  — removed 2026-08-30. Its own header says "run this
     #     immediately after ArgoCD is back up" after a cluster rebuild: an installation
     #     event, not an ongoing state, so `changed` there means nothing. Same call as
@@ -49,7 +55,6 @@
       - playbooks/check-disk-space.yml
       - playbooks/disk-check-timer.yml
       - playbooks/h4-dns-resolvers.yml
-      - playbooks/home-assistant.yml
       - playbooks/journald.yml
       - playbooks/k3s-registry.yml
       - playbooks/ledger.yml
