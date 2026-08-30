@@ -520,3 +520,108 @@ spec:
               `k3s ctr images pull <image>` on that node unblocks it (k3s ctr, not
               plain ctr — the opi5pro boxes run a second containerd whose images no
               pod can use).
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # BACKLOG §3.11 — Ansible drift detection.
+    #
+    # Argo CD reconciles the cluster continuously with selfHeal, so a merged
+    # manifest reaches the cluster within ~30s whether anyone is watching or not.
+    # ANSIBLE RECONCILES NOTHING. A merged host-layer change takes effect only when
+    # a human remembers to run the playbook. These rules are the marker at that
+    # boundary.
+    #
+    # Metrics come from ansible-drift-check.sh via node_exporter's textfile
+    # collector on the H4, published weekly by ansible-drift-check.timer.
+    #
+    # WRITTEN ONLY AFTER THE FLOOR REACHED ZERO (2026-08-30, commit 98be83e:
+    # 21 playbooks, 0 drift, 0 check failures). That order was deliberate. An alert
+    # shipped against a permanently non-zero gauge is an alert that is ignored from
+    # day one — which is exactly what LabExternalHostDown did for three weeks against
+    # a decommissioned VM. Both floor items turned out to be the SAME BUG, a date
+    # rendered into a path or a payload:
+    #   shared-storage    — ansible_date_time.iso8601 in file CONTENT, plus the play
+    #                       deleted the file it then tried to read back
+    #   h4-dns-resolvers  — ansible_date_time.date in a backup FILENAME, so
+    #                       `force: false` had nothing to protect and rewrote daily
+    # Neither was drift. If a new playbook joins the covered set and pins the gauge
+    # at a constant non-zero, look for a timestamp before looking for a drifted host.
+    - name: lab.ansible-drift
+      rules:
+        # The scrape interval is minutes and the metric updates weekly, so `for:`
+        # here is about avoiding a partial-file read, not about debouncing. A real
+        # drift persists until someone runs the playbook, so this stays firing for up
+        # to a week — that is the intent, not a flaw.
+        - alert: LabAnsibleDrift
+          expr: lab_ansible_drift > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.playbook }} — hosts differ from git"
+            description: >
+              ansible-playbook --check reported {{ $value }} changed task(s) for
+              {{ $labels.playbook }}. The hosts and git have diverged: either the
+              playbook was merged and never run, or something changed a host directly.
+              DO NOT REFLEXIVELY APPLY IT. On 2026-08-30, three of four non-zero
+              readings meant GIT was wrong, not the host — mount-nvme.yml would have
+              stripped `nofail` from a headless SBC's fstab to add an option it was
+              missing. Run `ansible-playbook -i inventory/hosts.yml
+              playbooks/{{ $labels.playbook }}.yml --check --diff` on the H4 and read
+              the diff before deciding which side is correct.
+
+        # Distinct from drift, and deliberately NOT folded into it. "Could not look"
+        # and "looked, found nothing" are different states and only one is reassuring.
+        # The script publishes lab_ansible_drift 0 alongside this, so without a
+        # separate rule a broken check is indistinguishable from a clean one.
+        - alert: LabAnsibleCheckFailed
+          expr: lab_ansible_check_failed > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.playbook }} — --check could not complete"
+            description: >
+              ansible-playbook --check failed for {{ $labels.playbook }}, so its drift
+              is UNKNOWN and is being reported as 0. Every instance of this found on
+              2026-08-30 was a playbook that could not run at all, not a host problem:
+              an undeclared collection, an undefined vault variable censored by
+              no_log, a check-mode cascade, and a play requiring a full system upgrade.
+              See `journalctl -u ansible-drift-check` on the H4 for the last 20 lines
+              of the failure.
+
+        # THE MOST IMPORTANT RULE HERE. Without it a dead timer freezes every gauge
+        # above at its last value and the lab looks permanently calm — the same
+        # failure LabBackupEtcdSilent exists to catch on the backup timers.
+        # The timer is weekly (Sun 05:00, Persistent=true). 10 days allows one late
+        # run plus catch-up; 14 would let a fully missed week pass unremarked.
+        - alert: LabAnsibleDriftStale
+          expr: (time() - lab_ansible_drift_last_run_seconds) > 864000
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: "Ansible drift check has not completed in >10 days"
+            description: >
+              ansible-drift-check.timer is weekly, and the last successful completion
+              was more than 10 days ago. Every lab_ansible_drift gauge is therefore
+              STALE and its zeros mean nothing. Check
+              `systemctl status ansible-drift-check.timer` and
+              `journalctl -u ansible-drift-check` on the H4.
+
+        # And the case where the series stops existing at all — node_exporter down,
+        # the textfile collector unconfigured, or the .prom file removed. An alert on
+        # a gauge cannot fire if the gauge is absent, so absence needs its own rule.
+        # This is the §1.12 shape: a truncated view read as a complete one.
+        - alert: LabAnsibleDriftMetricMissing
+          expr: absent(lab_ansible_drift_last_run_seconds)
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: "Ansible drift metrics have disappeared entirely"
+            description: >
+              lab_ansible_drift_last_run_seconds is absent, so no drift rule above can
+              fire regardless of the hosts' true state. Check that node_exporter on the
+              H4 still has --collector.textfile.directory set and that
+              /var/lib/node_exporter/textfile_collector/ansible_drift.prom exists and
+              is group-writable.
