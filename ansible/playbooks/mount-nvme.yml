@@ -30,6 +30,11 @@
 #
 # The NVMe mount below is real and load-bearing: nvme0n1p1 (476.9 GB, ext4) carries
 # both /mnt/nvme and the kubelet's local-volume PVs. Only the Ollama half was dead.
+#
+# This play also owns the node's SWAP POLICY (added 2026-08-30) — because the
+# swapfile in question physically lives on this filesystem and its fstab record sits
+# beside the one managed here. Keeping it in this play also means the weekly §3.11
+# drift check watches it immediately, with no change to drift_playbooks.
 
 - name: Mount NVMe on the OPi 5 Pro nodes
   hosts: opi5pro-1,opi5pro-2
@@ -43,6 +48,10 @@
   vars:
     nvme_device: /dev/nvme0n1p1
     nvme_mount: /mnt/nvme
+    # Swap policy — see the block at the end of this play.
+    nvme_swapfile: /mnt/nvme/swapfile
+    zram_service: orangepi-zram-config.service
+    zram_swap_priority: 5
 
   tasks:
     # MODE IS 0700, NOT 0755 — corrected 2026-08-30 (BACKLOG §3.11).
@@ -129,6 +138,191 @@
         dump: "0"
         state: mounted
 
+    # =========================================================================
+    # SWAP POLICY: zram only, never the NVMe. Added 2026-08-30, BACKLOG §3.11.
+    #
+    # These two nodes are provisioned for the same role and had OPPOSITE swap
+    # configurations, measured 2026-08-30:
+    #
+    #   opi5pro-1   /dev/zram0          partition 7.8G     0B  PRIO  5
+    #   opi5pro-2   /mnt/nvme/swapfile  file      8.0G  867.3M PRIO -2
+    #
+    # An identical 8 GiB swapfile dated Jun 29 00:14 exists on BOTH — provisioning
+    # created it twice and only opi5pro-2 ever wired it into fstab. On opi5pro-1 it
+    # is dead space on the partition serving the Ollama model PV.
+    #
+    # WHY THE SWAPFILE LOSES ON EVERY AXIS:
+    #   - It wears flash on the SAME PARTITION that serves the ollama-models
+    #     local-volume PV, and contends with model reads for the same device.
+    #   - vm.swappiness is 100 on both nodes. That is the Orange Pi image default and
+    #     it is a sensible number FOR ZRAM, where paging is compression, not IO.
+    #     Pointed at a file on flash it is simply aggressive flash writing. This is
+    #     the whole mechanism behind 867 MB being paged out on a node reporting
+    #     14 Gi available — there was no memory pressure at all.
+    #   - Kubernetes' own default is NoSwap. Having NO swap is a perfectly good
+    #     end state here; zram is the bonus, not the requirement.
+    #
+    # ORDERING IS DELIBERATE: fstab entry removed BEFORE swapoff, so an interrupted
+    # run leaves a node that comes back WITHOUT the swapfile rather than with it.
+    # =========================================================================
+
+    - name: Read current swap devices
+      ansible.builtin.command: swapon --show=NAME --noheadings
+      register: swap_before
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Read bytes currently paged out to the NVMe swapfile
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        swapon --show=NAME,USED --noheadings --bytes
+        | awk '$1 == "{{ nvme_swapfile }}" { print $2 }'
+      args:
+        executable: /bin/bash
+      register: nvme_swap_used
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Read available memory
+      ansible.builtin.command: awk '/^MemAvailable:/ { print $2 }' /proc/meminfo
+      register: mem_available_kb
+      changed_when: false
+      check_mode: false
+
+    # swapoff pages everything back into RAM. On a node without the headroom that
+    # invites the OOM killer onto a k3s agent. opi5pro-2 has 14 Gi available against
+    # 867 MB out, so this passes easily today — the guard exists so the play stays
+    # safe to re-run on a node where that is no longer true.
+    - name: Refuse to deactivate swap without the RAM to absorb it
+      ansible.builtin.assert:
+        that:
+          - ((mem_available_kb.stdout | trim | int) * 1024) > ((nvme_swap_used.stdout | trim | default('0', true) | int) * 2)
+        fail_msg: >-
+          {{ inventory_hostname }}: {{ (nvme_swap_used.stdout | trim | default('0', true) | int / 1048576) | round(1) }} MiB
+          is paged out to {{ nvme_swapfile }} but only
+          {{ ((mem_available_kb.stdout | trim | int) / 1024) | round(1) }} MiB is available.
+          Refusing to swapoff — free memory first.
+        success_msg: >-
+          {{ inventory_hostname }}: safe to swapoff
+          ({{ (nvme_swap_used.stdout | trim | default('0', true) | int / 1048576) | round(1) }} MiB out,
+          {{ ((mem_available_kb.stdout | trim | int) / 1024) | round(1) }} MiB available)
+      when: nvme_swap_used.stdout | trim | length > 0
+
+    # ---- zram activation ------------------------------------------------------
+    # DIAGNOSED 2026-08-30. opi5pro-2's zram was NOT a failed service:
+    #
+    #   opi5pro-1   /dev/zram0  lzo-rle  7.8G  …  [SWAP]
+    #   opi5pro-2   /dev/zram0  lzo-rle  7.8G  …          <- exists, never swapon'd
+    #
+    # The device is created, correctly sized, correctly formatted. Config files on
+    # the two nodes are byte-identical (every value commented out) and so are the
+    # units. Only the runtime state differs.
+    #
+    # ROOT CAUSE, and a trap for anyone editing fstab on these boards:
+    # /usr/lib/orangepi/orangepi-zram-config runs `swapon` on zram0 DIRECTLY, so zram
+    # swap is NOT represented in /etc/fstab. `swapoff -a && swapon -a` — the obvious
+    # thing to run after adding a swapfile to fstab — therefore drops zram and brings
+    # back only the fstab entry. That is almost certainly how these two nodes diverged
+    # on 2026-06-29, and it will do it again. This play never uses `swapoff -a`; it
+    # deactivates one named file.
+    #
+    # WHY NOT JUST `systemd: state: started` (which is what I reached for first):
+    #   - The unit is Type=oneshot with RemainAfterExit=yes, and systemd already
+    #     considers it ACTIVE on opi5pro-2. `state: started` is a silent no-op — it
+    #     would report ok while changing nothing, which is the exact failure this
+    #     block exists to repair.
+    #   - `state: restarted` is WORSE: ExecStop tears down every zram device, and
+    #     zram1 currently carries /var/log on both nodes. Restarting a "swap config"
+    #     service would unmount the system log.
+    # So activate the device directly, and leave the service alone.
+    - name: Ensure the zram service is enabled at boot
+      ansible.builtin.systemd:
+        name: "{{ zram_service }}"
+        enabled: true
+
+    # Selects on the SWAP SIGNATURE, not on the device name. zram1 holds /var/log and
+    # zram2 (where present) holds /tmp; calling swapon on either would be a real
+    # mistake. `blkid -s TYPE` returning "swap" is the property that can only be true
+    # of a device mkswap has been run against.
+    - name: Find zram devices formatted as swap but not currently active
+      ansible.builtin.shell: |
+        set -o pipefail
+        for d in /dev/zram*; do
+          [ -b "$d" ] || continue
+          [ "$(blkid -s TYPE -o value "$d" 2>/dev/null)" = "swap" ] || continue
+          awk -v d="$d" 'NR > 1 && $1 == d { f = 1 } END { exit f ? 0 : 1 }' /proc/swaps && continue
+          echo "$d"
+        done
+      args:
+        executable: /bin/bash
+      register: zram_idle
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # Priority 5 to match what the orangepi script sets on opi5pro-1, so the two nodes
+    # agree on ordering as well as on presence. Higher priority wins, and there is
+    # deliberately nothing left for it to lose to once the swapfile is gone.
+    - name: Activate idle zram swap devices
+      ansible.builtin.command: "swapon --priority {{ zram_swap_priority }} {{ item }}"
+      loop: "{{ zram_idle.stdout_lines | default([]) }}"
+
+    - name: Re-read swap devices after zram activation
+      ansible.builtin.command: swapon --show=NAME --noheadings
+      register: swap_after_zram
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # WARN rather than fail, following the chrony.yml precedent. A node with no swap
+    # at all is an acceptable end state — Kubernetes' own default is NoSwap — so zram
+    # not coming up must not block removing the swapfile, which is the more important
+    # half. It must also not pass silently.
+    - name: WARN when no zram swap device is active
+      ansible.builtin.debug:
+        msg: >-
+          WARNING {{ inventory_hostname }}: no zram device is active as swap. This node
+          will have NO swap once {{ nvme_swapfile }} is removed. That is safe, but it is
+          not what the image intends — check `zramctl` and whether a `swapoff -a` ran.
+      when: "'zram' not in (swap_after_zram.stdout | default(''))"
+
+    # lineinfile, NOT ansible.posix.mount. Swap records carry `none` in the
+    # mount-point field, which is exactly what posix.mount matches on — pointing a
+    # matcher at `none` inside the file that decides whether a headless node boots
+    # is not a risk worth taking to save three lines.
+    - name: Remove the NVMe swapfile from fstab
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: '^\s*{{ nvme_swapfile | regex_escape }}\s+'
+        state: absent
+        backup: true
+
+    - name: Deactivate the NVMe swapfile
+      ansible.builtin.command: "swapoff {{ nvme_swapfile }}"
+      when: nvme_swapfile in (swap_before.stdout | default(''))
+
+    # Re-read rather than trusting the task above. Deleting a swapfile that is still
+    # active does NOT free the space — the kernel keeps writing to an unlinked inode
+    # — and it is the one genuinely destructive step in this play. It gets its own
+    # evidence. check_mode: false so the guard is real under --check too, where the
+    # swapoff above is skipped and this correctly leaves the file in place.
+    - name: Re-read swap devices before deleting anything
+      ansible.builtin.command: swapon --show=NAME --noheadings
+      register: swap_before_delete
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Delete the NVMe swapfile, only once proven inactive
+      ansible.builtin.file:
+        path: "{{ nvme_swapfile }}"
+        state: absent
+      when: nvme_swapfile not in (swap_before_delete.stdout | default(''))
+
     - name: Report
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: NVMe mounted at {{ nvme_mount }} (UUID={{ nvme_uuid.stdout | trim }})"
+        msg: >-
+          {{ inventory_hostname }}: NVMe mounted at {{ nvme_mount }}
+          (UUID={{ nvme_uuid.stdout | trim }}); swap = {{ swap_after_zram.stdout | trim | default("none", true) | replace("\n", " ") }}
