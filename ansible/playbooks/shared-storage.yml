@@ -276,17 +276,51 @@
   gather_facts: false
 
   tasks:
+    # FIXED CONTENT, AND THE FILE IS NO LONGER DELETED — 2026-08-30, BACKLOG §3.11.
+    #
+    # This task was the entire reason `lab_ansible_drift{playbook="shared-storage"}`
+    # sat permanently at 1, and it could never have been anything else: the content
+    # carried `ansible_date_time.iso8601`, so it differed on every single run, AND
+    # the play's last task deleted the file, so the next run always found it missing.
+    # Either alone guarantees `changed` forever.
+    #
+    # Note for anyone re-deriving this: THIS PLAY SETS gather_facts: false, which
+    # reads as though `ansible_date_time` would be undefined and the `| default('now')`
+    # would render a constant. It does not. Facts persist across plays within a run,
+    # and plays 1 and 3 both gather them for n150-2 (it is in k3s_server), so the
+    # variable is defined by the time this play runs and the default never fired.
+    #
+    # A permanently non-zero gauge is an alert that can never go green, which is how
+    # LabExternalHostDown spent three weeks being ignored against a decommissioned VM
+    # (see the note in lab-alerts.yaml). The floor has to be zero for the alert above
+    # it to mean anything.
+    #
+    # WORSE, AND THE REAL FIND: because the deletion ran at the end of every real run,
+    # the "Read test file back" task below — which DOES execute under --check, it
+    # carries check_mode: false — was reading a file that had just been removed. It
+    # failed into `failed_when: false` on every dry run. The single task meant to
+    # prove NFS round-trips actually work has been asserting nothing, quietly, for as
+    # long as it has existed.
+    #
+    # A persistent fixed-content marker fixes both. The read now succeeds and means
+    # something, and `copy` still verifies the file over NFS on every run (it
+    # checksums the remote before deciding), so the share is genuinely exercised —
+    # it just stops rewriting bytes that were already correct.
     - name: Write test file to shared storage from n150-2
       ansible.builtin.copy:
         dest: /srv/libvirt-shared/.migration-test
-        content: "written by n150-2 at {{ ansible_date_time.iso8601 | default('now') }}"
+        content: "libvirt-shared NFS round-trip marker, written from n150-2 by shared-storage.yml\n"
         mode: "0644"
 
-    # check_mode: false AND failed_when: false — 2026-08-29, BACKLOG §3.11.
-    # This reads a file the PRECEDING task writes, and that writer is skipped under
-    # --check. On a host that has never had a real run the file is absent, so the
-    # read must be allowed to fail rather than abort the dry run; "Show test result"
-    # then reports the true state of the round-trip instead of the play dying.
+    # check_mode: false AND failed_when: false — 2026-08-29, revised 2026-08-30.
+    # check_mode: false so the round-trip is genuinely exercised during a dry run
+    # rather than reported on without being tested. failed_when: false because on a
+    # host that has never had a real run the marker is absent, and an unreachable
+    # share is the FINDING — "Show test result" should report it, not abort the play.
+    #
+    # Until 2026-08-30 this read was pointed at a file the play deleted at the end of
+    # every real run, so it failed into failed_when: false every time and asserted
+    # nothing. It only became a real check when the marker was made persistent.
     - name: Read test file back (confirms NFS round-trip)
       ansible.builtin.command: cat /srv/libvirt-shared/.migration-test
       register: test_read
@@ -294,14 +328,25 @@
       failed_when: false
       check_mode: false
 
+    # Empty output is not a finding until you prove the check can speak (CLAUDE.md).
+    # The previous message said "NFS round-trip OK:" and then printed nothing at all
+    # when the read had failed — an unreachable share and a working one produced the
+    # same reassuring prefix.
     - name: Show test result
       ansible.builtin.debug:
-        msg: "NFS round-trip OK: {{ test_read.stdout }}"
+        msg: >-
+          {{
+            'NFS round-trip OK: ' ~ test_read.stdout | trim
+            if (test_read.rc | default(1)) == 0 and (test_read.stdout | trim | length) > 0
+            else 'NFS ROUND-TRIP FAILED — could not read the marker on
+                  /srv/libvirt-shared from n150-2 (rc=' ~ (test_read.rc | default('?')) ~ ').
+                  The share is not mounted, not readable, or has never had a real run.'
+          }}
 
-    - name: Remove test file
-      ansible.builtin.file:
-        path: /srv/libvirt-shared/.migration-test
-        state: absent
+    # The "Remove test file" task was DELETED 2026-08-30. Removing it was what made
+    # the read above meaningless and the drift gauge permanently 1. The marker is a
+    # 78-byte dotfile on a shared pool measured in gigabytes; leaving it costs
+    # nothing and is what makes this play idempotent.
 
     - name: Verify SSH from n150-2 to n150-1 (migration transport check)
       # ansible_become: true in kvm_hosts group vars overrides task-level become:false.
