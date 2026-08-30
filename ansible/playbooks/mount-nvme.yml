@@ -35,26 +35,100 @@
   hosts: opi5pro-1,opi5pro-2
   become: true
   gather_facts: true
+  # One node at a time. Both are k3s agents and both carry local-volume PVs on the
+  # filesystem this play remounts. Ansible's default parallelism would touch the
+  # storage under every AI workload in the lab simultaneously.
+  serial: 1
 
   vars:
     nvme_device: /dev/nvme0n1p1
     nvme_mount: /mnt/nvme
 
   tasks:
+    # MODE IS 0700, NOT 0755 — corrected 2026-08-30 (BACKLOG §3.11).
+    #
+    # This task runs against a path that is ALREADY MOUNTED, so `file:` stats the
+    # root of the mounted ext4 filesystem, not the underlying mount point. Setting
+    # 0755 here does not "create a directory with sane permissions"; it chmods live
+    # storage.
+    #
+    # Measured on both nodes 2026-08-30: /mnt/nvme is 0700 root:root, and it contains
+    # a Kubernetes local-volume PV directory that is 0777, plus an 8 GiB swapfile.
+    # Going to 0755 would hand every local user the traverse bit into a world-writable
+    # directory holding the Ollama model store. kubelet runs as root and needs nothing
+    # widened. The hosts were right and the playbook was wrong.
     - name: Ensure mount point exists
       ansible.builtin.file:
         path: "{{ nvme_mount }}"
         state: directory
-        mode: '0755'
+        mode: '0700'
 
+    # ---- fstab identity -------------------------------------------------------
+    # Resolved at run time because the two nodes have DIFFERENT filesystem UUIDs, so
+    # no single value can be written into this file. blkid is read-only and carries
+    # check_mode: false — a guard that skips under --check leaves the task below
+    # building an fstab line from an undefined variable.
+    - name: Read the NVMe filesystem UUID
+      ansible.builtin.command: "blkid -s UUID -o value {{ nvme_device }}"
+      register: nvme_uuid
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # Empty output is not a finding until you prove the check can speak (CLAUDE.md).
+    # A blank stdout here would silently write `UUID=` into fstab — a line that can
+    # never mount. Assert on the shape, not on the exit code alone.
+    - name: Verify a real UUID came back before writing it to fstab
+      ansible.builtin.assert:
+        that:
+          - nvme_uuid.rc == 0
+          - nvme_uuid.stdout | trim | length == 36
+        fail_msg: >-
+          blkid returned no usable UUID for {{ nvme_device }} on {{ inventory_hostname }}
+          (rc={{ nvme_uuid.rc }}, stdout={{ nvme_uuid.stdout | trim | default('<empty>', true) }}).
+          NOTE the boolean arg: `default('<empty>')` alone substitutes only for UNDEFINED,
+          and an empty string is defined — so this message would print `stdout=` in the
+          one case it exists to describe.
+          Refusing to write an fstab entry that cannot mount.
+        success_msg: "{{ inventory_hostname }}: {{ nvme_device }} is UUID={{ nvme_uuid.stdout | trim }}"
+
+    # OPTIONS ARE THE UNION OF WHAT THE TWO HOSTS ALREADY HAD — 2026-08-30, §3.11.
+    #
+    # The drift check reported this task changed on opi5pro-1 and ok on opi5pro-2.
+    # Neither host was wrong; each was right about something the other was missing,
+    # and the playbook was worse than both:
+    #
+    #   opi5pro-1   UUID=2c528788-… ext4 defaults,nofail  0 2
+    #   opi5pro-2   /dev/nvme0n1p1  ext4 defaults,noatime 0 0
+    #   playbook    /dev/nvme0n1p1  ext4 defaults,noatime 0 0   (was)
+    #
+    #   UUID    — survives device renaming/reordering. opi5pro-1 had it.
+    #   nofail  — WITHOUT THIS, a dead or renamed NVMe drops a headless SBC into an
+    #             emergency shell at boot, with no console attached to answer it.
+    #             opi5pro-1 had it; applying the old playbook would have REMOVED it.
+    #   noatime — fewer writes on flash, and this filesystem backs a model store that
+    #             is read constantly. opi5pro-2 had it.
+    #   passno 2 — fsck at boot on a filesystem holding Kubernetes PVs. opi5pro-1 had it.
+    #
+    # This is the third case this session where `lab_ansible_drift > 0` meant git was
+    # wrong rather than the host (see also mqtt.yml, github-runner.yml). "Drift is
+    # non-zero" is a prompt to look, never a licence to apply.
+    #
+    # APPLYING THIS DOES `mount -o remount` ON A LIVE FILESYSTEM. remount changes
+    # options in place — it does not unmount, so kubelet's bind mounts into running
+    # pods and opi5pro-2's active swapfile are undisturbed. That is still a real
+    # operation on the storage under the AI workloads: run it deliberately, and the
+    # `serial: 1` above means one node at a time.
     - name: Mount NVMe (persistent via fstab)
       ansible.posix.mount:
         path: "{{ nvme_mount }}"
-        src: "{{ nvme_device }}"
+        src: "UUID={{ nvme_uuid.stdout | trim }}"
         fstype: ext4
-        opts: defaults,noatime
+        opts: defaults,nofail,noatime
+        passno: "2"
+        dump: "0"
         state: mounted
 
     - name: Report
       ansible.builtin.debug:
-        msg: "{{ inventory_hostname }}: NVMe mounted at {{ nvme_mount }}"
+        msg: "{{ inventory_hostname }}: NVMe mounted at {{ nvme_mount }} (UUID={{ nvme_uuid.stdout | trim }})"
