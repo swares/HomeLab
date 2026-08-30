@@ -1914,6 +1914,71 @@ training the eye past it. So the alert rules are deliberately NOT written yet.
 - [ ] **Then write the alert rules** — drift non-zero, `check_failed` non-zero, and
       `last_run_seconds` going stale. Not before the floor is zero.
 
+### 3.16 The systemd collector exports ONLY backup units, so every other failed unit is invisible
+
+**Found 2026-08-30**, by the drift check's first run finding a service that had been dead
+for 37 days.
+
+`gitops/apps/monitoring.yaml` scopes node_exporter's systemd collector:
+
+    --collector.systemd.unit-include=backup-.+\.(service|timer)
+
+So `node_systemd_unit_state` exists for backup units **and nothing else**, on any of the
+13 hosts. `LabBackupUnitFailed` can only ever fire on those. This is not a rule that fails
+to match — **the series does not exist**, which is a different and worse thing, because
+no query can be written that would find the problem.
+
+That narrowing was deliberate on 2026-08-07 and correct at the time: the regex was widened
+*from* `(backup-nas|backup-etcd)` because backup-cloud, backup-verify and backup-offsite
+produced no series at all. Nobody wrote down what stayed excluded, which is everything.
+
+**The instance that exposed it.** `nfs-server` on `n150-1`:
+
+    Active: failed (Result: exit-code) since Fri 2026-07-24 06:12:26 UTC; 1 month 7 days ago
+    Duration: 2d 23h 16min 11.488s
+
+It ran for three days after `shared-storage.yml` configured it, exited `1/FAILURE` once,
+and stayed down for **37 days**. `/srv/libvirt-shared` was therefore unmounted on
+`n150-2` the whole time, both libvirt pools were degraded, and **live migration between
+the two KVM hosts was impossible** — on the pair that runs `gitlab-1`. Nothing alerted,
+because nothing could.
+
+**The cause is unrecoverable.** `journal has been rotated since unit was started` →
+`-- No entries --`. Three timestamps and an exit code are the entire surviving record,
+exactly as in §1.12. The service started cleanly on 2026-08-30 with no error, so the
+failure was transient rather than structural.
+
+**Why it lasted 37 days rather than until the next boot:** the host has **62 days of
+uptime**, and `nfs-server.service` carries no `Restart=` policy. One transient failure is
+therefore permanent until a human intervenes. The unit was `enabled` throughout, which
+looks reassuring in `systemctl list-unit-files` and means nothing about whether it is
+running.
+
+**Three fixes, and they are independent:**
+
+- [ ] **Widen the collector — the one that would have caught this in minutes.** The cost
+      is real: every unit on every node becomes a series, on a Prometheus already
+      evicting at ~14 days against a nominal 30 (§3.14). A middle path is a named set
+      rather than everything, e.g.
+      `--collector.systemd.unit-include=(backup-.+|nfs-server|libvirtd|k3s|k3s-agent|vault|docker)\.(service|timer)`.
+      Decide deliberately; do not widen to `.+` without measuring the series count first,
+      or §3.14 gets worse and this entry causes the next incident.
+- [ ] **Give `nfs-server` a `Restart=on-failure` drop-in** so a transient fault
+      self-heals. Caveat: a persistently broken server would then flap until
+      `StartLimitBurst` stops it — which is still better than silence, and produces a
+      restart count that the widened collector could alert on.
+- [ ] **Consider whether other one-shot-failure services have the same exposure.** The
+      question is not "which services are running" but "which would stay down forever if
+      they stopped". `systemctl list-units --failed` fleet-wide is one command and has
+      never been run as a sweep.
+
+**Sharpest framing, because it generalises past NFS:** this lab now has three recorded
+cases of a fault persisting because nothing exported a metric for it — §3.15's 19-day
+node-exporter crashloop, §1.12's lldap misdiagnosis, and this at 37 days. Each was found
+by accident. The drift check found this one on its first run, which is encouraging, but
+a weekly Ansible dry run is a poor substitute for a metric that would have fired the same
+afternoon.
+
 ---
 
 ## 4. Broken or blocked, live
