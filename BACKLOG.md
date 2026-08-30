@@ -1864,19 +1864,55 @@ Three things make it worth an entry rather than a footnote:
 Applied the same day; `changed=2` (the hold, and the unit). This is the concrete cost
 case for the scheduled `--check` below — the run that found it took under a minute.
 
-**To do:**
+**BUILT 2026-08-29.** `ansible-drift-check.sh` + a weekly timer on h4-core, publishing
+`lab_ansible_drift{playbook}` through the node_exporter textfile collector. 23
+steady-state playbooks checked, 8 knowingly skipped and published as
+`lab_ansible_drift_skipped` so the coverage gap is visible next to the results.
 
-- [ ] **Run every playbook in `--check` on a schedule** and report non-zero changed
-      counts. Weekly is probably right. This is the same "detect the disagreement"
-      pattern as `docs/LEDGER-DESIGN.md` §6 — except the two records disagreeing are
-      git and a machine, rather than git and a document.
-- [ ] Note the prerequisite: several playbooks are not honest under `--check` (they
-      skip their verification `command` tasks and print success anyway). `node-dns.yml`,
-      `promtail-remove-cluster.yml` and `h4-dns-resolvers.yml` were fixed on 2026-08-21;
-      the rest have not been audited. A scheduled `--check` that lies is worse than none.
-- [ ] Decide what the report does. Emailing a diff nobody reads recreates the problem
-      one level up; failing loudly through `LabBackupUnitFailed`-style alerting is the
-      pattern that has actually worked in this lab.
+**First run found 13 drifted hosts across 5 playbooks**, none of which anything would
+have reported: `k3s-registry` 4, `node-dns` 4, `shared-storage` 3, `mqtt` 1,
+`h4-dns-resolvers` 1. Plus 3 playbooks that cannot complete `--check` at all
+(`home-assistant`, `k8s-secrets`, `mount-nvme`).
+
+- [x] **Run every playbook in `--check` on a schedule.** Sunday 05:00, `Persistent=true`.
+- [x] **The check-mode honesty prerequisite**, for the in-scope set. Five playbooks were
+      fixed (`chrony`, `zswap`, `ai-nodes`, `github-runner`, `shared-storage`); a static
+      audit of `command`/`shell` tasks with consumed registers now returns zero.
+      `github-runner.yml` then revealed a class the audit could not see — a `get_url`
+      no-op cascading into `unarchive` — so it was dropped from the checked set as
+      one-shot provisioning rather than fixed.
+- [x] **What the report does:** three metrics, because the states want different
+      responses. `lab_ansible_drift` (hosts changed), `lab_ansible_check_failed` (the
+      check could not run — NOT the same as zero drift), and
+      `lab_ansible_drift_last_run_seconds`. The third is the one that matters: without
+      it a dead timer freezes every other gauge at its last reassuring value, which is
+      precisely what `LabBackupEtcdSilent` exists to catch on the backup timers.
+
+**A third property nobody had named: check-mode ACCURACY.** Honesty is "the play
+completes a dry run". Accuracy is "and what it reports is true". A task can be perfectly
+honest and still lie.
+
+`k3s-registry`'s *Add ansible user to docker group* reported `changed` on every run.
+`getent group docker` on h4-core returns `docker:x:124:swares` — the user was already a
+member. `ansible.builtin.user` with `append: true` cannot determine supplementary group
+membership under `--check` and reports changed regardless. Fixed by reading the group
+first and gating the task, but the general problem is bigger than one task:
+
+**A permanently-wrong `changed` puts a non-zero FLOOR under the drift metric**, and an
+alert that can never go green is an alert that gets ignored. `lab-alerts.yaml` already
+records `LabExternalHostDown` firing for three weeks against a decommissioned VM and
+training the eye past it. So the alert rules are deliberately NOT written yet.
+
+- [ ] **Drive the floor to zero before alerting.** Known contributors:
+      `h4-dns-resolvers` reports 1 permanently *by design* — §4.12 says that playbook
+      "writes the netplan override but does not apply it", the apply being a deliberate
+      manual `netplan try`. That is not drift and must not be counted as it. Either
+      exclude it, split the write from the apply, or baseline it explicitly.
+- [ ] **Audit the checked set for other `user`/`group`-module tasks** and anything else
+      that reports changed while converged. The static audit looked for check-mode
+      *honesty*; nothing has yet looked for *accuracy*.
+- [ ] **Then write the alert rules** — drift non-zero, `check_failed` non-zero, and
+      `last_run_seconds` going stale. Not before the floor is zero.
 
 ---
 
