@@ -2410,6 +2410,19 @@ carried `"count":26090`.
 | `.148 .116 .152` | **odroid-nas (H4)** | **2** — octopi counted twice |
 | *(no event)* | opi5pro-1, opi5pro-2 | list is ≤3; not truncated |
 
+> **CORRECTION 2026-08-29 to the opi5pro row.** "No event, list is ≤3, not truncated"
+> was inferred from the absence of a kubelet warning, and absence of an event is not
+> evidence of a short list — the same reasoning §1.12 and §3.14 both punish. Measured
+> directly with `resolvectl status`, `opi5pro-1` had **six**: four in the global scope
+> (`1.0.0.1 .148 .116 .184`) plus two on Link 2 (`.148 .116`). §4.16's count was right
+> and this table's was not.
+>
+> Now **five**, after applying `node-dns.yml` to both OPi5s on 2026-08-29 — a task that
+> had been written since August and never run, found by §3.11's first drift check. The
+> removed entry was `1.0.0.1` sitting inside the `~lab.home.arpa` routing-only scope,
+> where it could only ever have answered lab queries it cannot resolve. See §4.16 for
+> the full finding.
+
 **`192.168.1.152` is octopi's second interface, and this repo already says not to use
 it.** `docs/HARDWARE.md:22` lists RPi 3B #2 as `192.168.1.148` / `192.168.1.152
 (avoid)`. So on the H4 — the NAS, a k3s server, and per `CLAUDE.md` the core of the
@@ -2685,17 +2698,65 @@ urgent.
 **Deferred deliberately 2026-08-21**, split out of §4.12 because it is a design choice,
 not a defect.
 
-The four `node-dns.yml` nodes still exceed the kubelet's three-nameserver limit —
-**5 on n150-1/n150-2, 6 on opi5pro-1/2** — and the remaining count cannot be reduced
-without answering a question this lab has never explicitly decided.
+> **UPDATED 2026-08-29 — the OPi5s are now 5, not 6, and the reason they were 6 was
+> that this playbook had never been applied to them.**
+>
+> The first run of §3.11's drift check reported `node-dns` at 4. The diff was the
+> `DNS=1.0.0.1` neutralisation, still un-applied on `opi5pro-1` and `opi5pro-2` — the
+> N150s were clean. So the parenthetical below, *"(done in `node-dns.yml`)"*, meant
+> **written there**, not **applied there**. §3.11 in miniature, inside the entry that
+> documents §3.11's own subject.
+>
+> **A worse thing was hiding behind the count.** `resolvectl status` on `opi5pro-1`
+> before the fix:
+>
+>     Global
+>       DNS Servers: 1.0.0.1 192.168.1.148 192.168.1.116 192.168.1.184
+>       DNS Domain:  ~lab.home.arpa
+>
+> The `~lab.home.arpa` applies to the **whole global scope** — this playbook's own
+> comment says so — which makes every server in it *routing-only*: they receive
+> `lab.home.arpa` queries and nothing else. So `1.0.0.1` was never providing public DNS
+> here. It was sitting in the pool answering **lab** names, which Cloudflare cannot
+> resolve; `home.arpa` is special-use and returns NXDOMAIN.
+>
+> Two consequences neither this entry nor §4.12 had noticed:
+>
+> - **Lab resolution could fail intermittently.** resolved rotates servers on timeout,
+>   and any rotation onto `1.0.0.1` for a lab name returns NXDOMAIN — a DNS fault with
+>   no obvious cause, on the class of thing §4.11 and §6.1 are both scars from.
+> - **Internal hostnames leaked.** Every `*.lab.home.arpa` query that landed on
+>   `1.0.0.1` told Cloudflare the lab's naming.
+>
+> **Applied 2026-08-29 to both OPi5s, one at a time**, and the claim below that "public
+> DNS still works via the links" is now measured rather than asserted:
+>
+>     Global DNS Servers: 192.168.1.148 192.168.1.116 192.168.1.184   (4 -> 3)
+>     api.lab.home.arpa -> 192.168.1.200      lab resolution intact
+>     github.com        -> 140.82.114.4       public DNS via Link 2 (.148, .116)
+>
+> Link 2 carries `.148` and `.116` with **no** domain restriction, so those are the
+> general-purpose resolvers and always were. 3 global + 2 on the link = **5**, exactly
+> the 6→5 predicted below.
+>
+> **This entry stays open.** 5 is still above the kubelet's cap of 3, so the design
+> question is unchanged. What changed is that the discarded nameserver is no longer a
+> public resolver answering lab queries.
+
+The four `node-dns.yml` nodes exceed the kubelet's three-nameserver limit —
+**5 on n150-1/n150-2, and 5 on opi5pro-1/2 since 2026-08-29** — and the remaining count
+cannot be reduced without answering a question this lab has never explicitly decided.
 
 `node-dns.yml` writes `Domains=~lab.home.arpa`. The `~` makes the lab servers
 **routing-only**: they answer lab names and nothing else. Public DNS therefore comes
 from the links' DHCP servers. That is why the count stays above three, and why the H4's
 fix does not transfer:
 
-- Removing the distro's `DNS=1.0.0.1` (done in `node-dns.yml`) takes the OPi5s from 6
-  to 5 and makes lab resolution deterministic. Public DNS still works via the links.
+- ~~Removing the distro's `DNS=1.0.0.1` (done in `node-dns.yml`) takes the OPi5s from 6
+  to 5 and makes lab resolution deterministic. Public DNS still works via the links.~~
+  **Done 2026-08-29 — see the update above.** Both halves of that sentence turned out
+  to be true; neither had been verified when it was written, and "done in
+  `node-dns.yml`" meant written rather than applied.
 - Adding `use-dns: false` on the links — the H4 recipe — would leave three
   routing-only servers and **nothing at all serving public names**. Image pulls from
   ghcr.io and docker.io would fail on every affected node.
