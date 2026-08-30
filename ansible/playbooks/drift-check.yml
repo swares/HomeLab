@@ -1,0 +1,162 @@
+---
+# drift-check.yml — install the scheduled `ansible-playbook --check` drift detector.
+# BACKLOG §3.11.
+#
+# Argo reconciles the cluster within ~30s of a merge. Ansible reconciles nothing: a
+# merged host-layer change takes effect only when a human remembers to run the
+# playbook. This installs the thing that reports the gap.
+#
+# Runs ON the control node (h4-core) and checks the whole fleet from there, so the
+# output is one set of per-playbook numbers in one place — not each host reporting
+# on itself.
+#
+# Prerequisites, both already applied:
+#   - /var/lib/node_exporter/textfile_collector exists, group-writable by the
+#     ansible user (node-exporter.yml)
+#   - node_exporter has --collector.textfile.directory (gitops/apps/monitoring.yaml)
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/drift-check.yml
+#   sudo systemctl start ansible-drift-check.service    # run it now
+#   journalctl -u ansible-drift-check -f
+
+- name: Install the ansible drift check on the control node
+  hosts: h4-core
+  become: true
+
+  vars:
+    drift_repo_dir: "/home/{{ ansible_user }}/lab/homelab/homelab"
+    drift_textfile_dir: /var/lib/node_exporter/textfile_collector
+
+    # Steady-state playbooks: they describe an ongoing state, so "changed" under
+    # --check means the host has drifted from git. Excludes one-shot provisioning
+    # (changed is meaningless there), maintenance plays that mutate by design, and
+    # anything needing VAULT_TOKEN — token-admin is deliberately allowed to lapse
+    # (§5, §1.11) so no standing credential exists for an unattended run.
+    drift_playbooks:
+      - playbooks/apport.yml
+      - playbooks/argocd.yml
+      - playbooks/backup.yml
+      - playbooks/check-disk-space.yml
+      - playbooks/disk-check-timer.yml
+      - playbooks/h4-dns-resolvers.yml
+      - playbooks/home-assistant.yml
+      - playbooks/journald.yml
+      - playbooks/k3s-registry.yml
+      - playbooks/k8s-secrets.yml
+      - playbooks/ledger.yml
+      - playbooks/libvirt-exporter.yml
+      - playbooks/mount-nvme.yml
+      - playbooks/mqtt.yml
+      - playbooks/node-exporter.yml
+      - playbooks/printer.yml
+      - playbooks/promtail.yml
+      - playbooks/shared-storage.yml
+      - playbooks/storage.yml
+      - playbooks/vault-client.yml
+      - playbooks/zswap.yml
+      # chrony.yml and node-dns.yml live at ansible/ root, not under playbooks/.
+      # The paths here are relative to ansible/, which is where the script cds to
+      # (§4.1c) — so they are correct as written and deliberately not prefixed.
+      - chrony.yml
+      - node-dns.yml
+
+    # Published as metrics so the coverage gap is visible next to the results. A
+    # drift report that silently omits a third of the playbooks is the §1.12 shape:
+    # a truncated view mistaken for a complete one. If VAULT_TOKEN ever becomes
+    # available to an unattended run — or the Pi-hole hash moves to Ansible Vault,
+    # which would return dns.yml on its own — move entries from here to the list
+    # above rather than letting the gap go unrecorded.
+    drift_playbooks_skipped:
+      - playbooks/backup-cloud.yml
+      - playbooks/backup-offsite.yml
+      - playbooks/backup-vault.yml
+      - playbooks/dns.yml
+      - playbooks/healthchecks.yml
+      - playbooks/sync-secrets-to-vault.yml
+      - playbooks/vault-eso-k8s-auth.yml
+      - playbooks/vault-policies.yml
+
+  tasks:
+    - name: Assert the textfile collector directory exists and is group-writable
+      ansible.builtin.stat:
+        path: "{{ drift_textfile_dir }}"
+      register: _tf
+      check_mode: false
+
+    # Fail closed. Installing a timer that publishes to a directory it cannot write
+    # would produce a check that runs weekly, writes nothing, and reports nothing —
+    # indistinguishable from a healthy lab with no drift. That is the precise fault
+    # this playbook exists to remove, so it must not be possible to install it that
+    # way.
+    - name: Refuse to install if the metric cannot be published
+      ansible.builtin.assert:
+        that:
+          - _tf.stat.exists
+          - _tf.stat.isdir
+          - _tf.stat.wgrp
+        success_msg: "{{ drift_textfile_dir }} is present and group-writable"
+        fail_msg: >-
+          {{ drift_textfile_dir }} is missing or not group-writable. Run
+          playbooks/node-exporter.yml first — see BACKLOG §3.11. Installing the
+          timer now would publish nothing and look identical to zero drift.
+        quiet: true
+
+    - name: Install the drift check script
+      ansible.builtin.template:
+        src: ../templates/ansible-drift-check.sh.j2
+        dest: /usr/local/sbin/ansible-drift-check.sh
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Install the drift check service and timer
+      ansible.builtin.template:
+        src: "../templates/{{ item }}.j2"
+        dest: "/etc/systemd/system/{{ item }}"
+        owner: root
+        group: root
+        mode: "0644"
+      loop:
+        - ansible-drift-check.service
+        - ansible-drift-check.timer
+      notify: reload systemd
+
+    - name: Flush handlers so the timer is enabled against the current unit
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable the weekly drift check timer
+      ansible.builtin.systemd:
+        name: ansible-drift-check.timer
+        enabled: true
+        state: started
+        daemon_reload: true
+
+    # Read-only, so it must run under --check too — otherwise a dry run of this
+    # playbook reports success having confirmed nothing, which is the fault the
+    # whole §3.11 line of work exists to remove.
+    - name: Confirm systemd parsed the timer
+      ansible.builtin.command: systemctl show ansible-drift-check.timer -p NextElapseUSecRealtime --value
+      register: _next
+      changed_when: false
+      check_mode: false
+
+    - name: Report when the drift check will next run
+      ansible.builtin.assert:
+        that:
+          - _next.stdout | default('') | length > 0
+          - _next.stdout != 'n/a'
+        success_msg: "drift check scheduled — next run {{ _next.stdout | default('?') }}"
+        fail_msg: >-
+          ansible-drift-check.timer has no next elapse time. systemd accepted the
+          unit file but is not going to run it. `systemctl show -p` proves the
+          directive was PARSED; this asserts it will actually FIRE — the same
+          distinction §1.9 drew between OnSuccess= being present and the offsite
+          copy starting 4.8 ms after backup-nas.
+        quiet: true
+      when: not ansible_check_mode
+
+  handlers:
+    - name: reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true

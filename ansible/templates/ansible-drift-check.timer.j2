@@ -1,0 +1,27 @@
+[Unit]
+# {{ ansible_managed | default('Managed by Ansible — do not edit by hand') }}
+Description=Weekly ansible --check drift detection (BACKLOG §3.11)
+
+[Timer]
+# Sunday 05:00. Chosen to sit clear of everything else on this host:
+#   00:30 backup-etcd
+#   01:30 backup-nas, which chains straight into backup-offsite
+#   02:30 the lldap backup CronJob writes the same restic repo
+#   03:00 backup-verify (weekly, Sunday)
+# 05:00 leaves the backup chain finished and does not compete for the repo lock —
+# §1.9 is the entry about two restic operations racing each other, and although
+# this check touches no repository, a 45-minute ansible run against 13 hosts is
+# not something to overlap with the night's data path for no reason.
+OnCalendar=Sun *-*-* 05:00:00
+
+# Survive downtime. Without this a host that is off at 05:00 Sunday simply skips a
+# week and nothing says so — and the metric this publishes is specifically meant to
+# reveal silence. §3.4 is the entry where a weekly timer and a 25h alert threshold
+# disagreed for weeks.
+Persistent=true
+
+# Spread load and avoid landing exactly on the hour with everything else.
+RandomizedDelaySec=10min
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,42 @@
+[Unit]
+# {{ ansible_managed | default('Managed by Ansible — do not edit by hand') }}
+# Scheduled ansible --check drift detection. BACKLOG §3.11.
+Description=ansible --check drift detection (publishes node_exporter textfile metrics)
+Documentation=file://{{ drift_repo_dir }}/BACKLOG.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Runs as the ansible user, NOT root. It needs that user's SSH keys to reach the
+# fleet, ansible.cfg for the vault password file, and the group write bit on the
+# textfile directory. Running it as root would need a second set of SSH keys
+# distributed across 13 hosts, which is a worse answer than a group bit.
+User={{ ansible_user }}
+Group={{ ansible_user }}
+
+WorkingDirectory={{ drift_repo_dir }}/ansible
+
+# The script cds itself, but set it here too: §4.1c is the trap where ansible.cfg
+# is read from the current directory, so vault_password_file and pipelining
+# silently do nothing when a play is launched from the repo root.
+Environment=ANSIBLE_CONFIG={{ drift_repo_dir }}/ansible/ansible.cfg
+
+ExecStart=/usr/local/sbin/ansible-drift-check.sh
+
+# Generous, and deliberately finite. ~30 playbooks each gathering facts across 13
+# hosts; the per-playbook `timeout 300` in the script is the inner bound and this
+# is the outer one. An unbounded run would hold the weekly slot forever if a play
+# hung on an unreachable host — the failure mode §1.9 hit when an offsite copy with
+# TimeoutStartSec=infinity starved the nightly backup for four nights.
+TimeoutStartSec=45min
+
+# Drift is information, not an incident. A failure here should not page anyone —
+# the metrics carry the signal, and lab_ansible_drift_last_run_seconds going stale
+# is what says the mechanism itself stopped.
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target
