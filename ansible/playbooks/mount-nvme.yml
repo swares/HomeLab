@@ -338,6 +338,39 @@
       when: legacy_zswap_unit.stat.exists
       notify: reload systemd after removing zswap-config
 
+    # DELETING A FAILED UNIT'S FILE DOES NOT CLEAR ITS FAILED STATE, and neither does
+    # `daemon-reload`. Measured on opi5pro-2 immediately after the removal above:
+    #
+    #     zswap-config.service   not-found   failed   failed
+    #
+    # systemd keeps the failure recorded against the name until `reset-failed`. The
+    # unit is gone, `systemctl is-enabled` says "No such file or directory", and the
+    # host still reports a failed unit forever.
+    #
+    # This matters beyond tidiness: `systemctl list-units --failed` is the sweep this
+    # lab now runs, and node_systemd_unit_state would export state="failed" for a unit
+    # that no longer exists. A permanently-failed phantom is the alerting equivalent
+    # of a permanently-non-zero drift gauge (§3.11) — noise that trains the eye past
+    # real failures.
+    #
+    # gitlab-1 shows the identical pattern for prometheus-node-exporter.service
+    # (not-found + failed), which is almost certainly the same cause and the same fix.
+    #
+    # Gated on the LIVE failed state rather than on the file's prior existence, so it
+    # still clears on a later run when the file is already gone — which is exactly the
+    # situation this was found in.
+    - name: Check whether systemd still holds a failed state for zswap-config
+      ansible.builtin.command: systemctl is-failed zswap-config.service
+      register: zswap_failed_state
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Clear the lingering failed state for the removed unit
+      ansible.builtin.command: systemctl reset-failed zswap-config.service
+      when: zswap_failed_state.stdout | trim == "failed"
+      changed_when: true
+
     # lineinfile, NOT ansible.posix.mount. Swap records carry `none` in the
     # mount-point field, which is exactly what posix.mount matches on — pointing a
     # matcher at `none` inside the file that decides whether a headless node boots
