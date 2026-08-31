@@ -81,6 +81,7 @@
       - playbooks/mask-inapplicable-units.yml
       - playbooks/mount-nvme.yml
       - playbooks/mqtt.yml
+      - playbooks/network-online-wait.yml
       - playbooks/node-exporter.yml
       - playbooks/printer.yml
       - playbooks/promtail.yml

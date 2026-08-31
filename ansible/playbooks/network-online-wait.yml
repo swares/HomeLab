@@ -1,0 +1,231 @@
+---
+# network-online-wait.yml — repair hosts where systemd-networkd-wait-online fails.
+#
+# BACKLOG §3.16. Found by the fleet-wide failed-unit sweep 2026-08-30: four hosts had
+# systemd-networkd-wait-online.service failed, two of them for over a month.
+#
+# THIS IS NOT COSMETIC. network-online.target is pulled by real services here —
+# prometheus-node-exporter, promtail and mosquitto all order after it. A failing
+# wait-online means those start against a network nothing confirmed was ready. That is
+# also why these units were deliberately NOT masked by mask-inapplicable-units.yml:
+# masking would remove the ordering guarantee entirely and trade a cosmetic failure
+# for a real one.
+#
+# TWO DIFFERENT FAULTS, measured 2026-08-30, needing opposite fixes:
+#
+# CASE A — the Zero 2Ws (opi-zero2w-1, -2). NetworkManager owns the links:
+#     2 end0   ether  no-carrier  unmanaged
+#     3 wlan0  wlan    routable   unmanaged     <- has the IP, unmanaged by networkd
+#     networkd: active     NetworkManager: active
+# Every link is unmanaged by networkd, so wait-online waits for nothing and times out.
+# NetworkManager-wait-online.service IS enabled and active on both, so
+# network-online.target already has a working provider. Disabling networkd's version
+# removes redundant noise and loses no guarantee. DISABLED, not masked, so a future
+# switch back to networkd re-enables normally.
+#
+# CASE B — the KVM hypervisors (n150-1, n150-2). netplan already scopes the wait:
+#     ExecStart=/lib/systemd/systemd-networkd-wait-online -i br0:degraded -i enp1s0:carrier
+#     ExecStart=/lib/systemd/systemd-networkd-wait-online --any -o routable -i br0 -i enp1s0
+# The FIRST line is the fault: it waits for BOTH links, and enp1s0 sits at
+# SETUP=configuring forever because it is a bridge slave netplan never finishes
+# configuring. br0 reaches routable/configured immediately and carries the address —
+# on n150-1 it also carries the kube-vip VIPs .200 and .201. So the wait hangs on a
+# slave port while the network it is waiting for has been up the whole time.
+#
+# The fix scopes the wait to the bridge alone. Netplan regenerates its drop-in in
+# /run at every boot, so ours goes in /etc with a HIGHER-SORTING name: drop-ins are
+# merged across /etc, /run and /usr in lexical filename order, so 20-lab-scope.conf
+# is applied after 10-netplan.conf and its `ExecStart=` reset wins.
+#
+# NOT hardcoding br0: the bridge is discovered as the link networkd reports as both
+# routable and configured. Hardcoding an interface name into a play that could touch
+# any host is how a working network gets waited on incorrectly.
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/network-online-wait.yml --check
+#   ansible-playbook -i inventory/hosts.yml playbooks/network-online-wait.yml
+
+- name: Repair systemd-networkd-wait-online where it cannot succeed
+  hosts: all:!embedded:!xu3-1
+  become: true
+  gather_facts: false
+  # n150-3 (HTPC) is normally powered off. Learned 2026-08-30 with
+  # mask-inapplicable-units.yml: ignore_unreachable alone is not enough — every task
+  # consuming a register also needs a `is defined` guard, or the play still exits
+  # non-zero and pins lab_ansible_check_failed at 1 forever.
+  ignore_unreachable: true
+
+  tasks:
+    - name: Is systemd-networkd-wait-online failed here
+      ansible.builtin.command: systemctl is-failed systemd-networkd-wait-online.service
+      register: wait_online_state
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Does NetworkManager already provide network-online.target
+      ansible.builtin.shell: |
+        set -o pipefail
+        en=$(systemctl is-enabled NetworkManager-wait-online.service 2>/dev/null || true)
+        ac=$(systemctl is-active NetworkManager-wait-online.service 2>/dev/null || true)
+        if [ "$en" = "enabled" ] && [ "$ac" = "active" ]; then echo YES; else echo "NO enabled=$en active=$ac"; fi
+      args:
+        executable: /bin/bash
+      register: nm_provides
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: wait_online_state.stdout is defined
+
+    # Columns are: IDX LINK TYPE OPERATIONAL SETUP
+    - name: Find the link networkd reports as routable and configured
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        networkctl list --no-legend 2>/dev/null
+        | awk '$4 == "routable" && $5 == "configured" { print $2 }'
+        | head -1
+      args:
+        executable: /bin/bash
+      register: primary_link
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: wait_online_state.stdout is defined
+
+    - name: Report the diagnosis before acting
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{
+            'wait-online is healthy — nothing to do'
+            if (wait_online_state.stdout | trim) != 'failed'
+            else (
+              'CASE A — NetworkManager already provides network-online.target; disabling the redundant networkd wait'
+              if (nm_provides.stdout | trim) == 'YES'
+              else (
+                'CASE B — scoping the wait to ' ~ (primary_link.stdout | trim) ~ ', which is routable+configured'
+                if (primary_link.stdout | trim | length) > 0
+                else 'UNHANDLED — wait-online failed, NetworkManager does not provide the target, and no routable+configured link was found. Investigate by hand; this play will not guess.'
+              )
+            )
+          }}
+      when: wait_online_state.stdout is defined
+
+    # ---- CASE A ---------------------------------------------------------------
+    - name: Disable the redundant networkd wait where NetworkManager provides the target
+      ansible.builtin.systemd:
+        name: systemd-networkd-wait-online.service
+        state: stopped
+        enabled: false
+      when:
+        - wait_online_state.stdout is defined
+        - (wait_online_state.stdout | trim) == "failed"
+        - (nm_provides.stdout | trim) == "YES"
+
+    # ---- CASE B ---------------------------------------------------------------
+    - name: Ensure the drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/system/systemd-networkd-wait-online.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      when:
+        - wait_online_state.stdout is defined
+        - (wait_online_state.stdout | trim) == "failed"
+        - (nm_provides.stdout | trim) != "YES"
+        - (primary_link.stdout | trim | length) > 0
+
+    - name: Scope the wait to the routable, configured link
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/systemd-networkd-wait-online.service.d/20-lab-scope.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible (playbooks/network-online-wait.yml) — BACKLOG §3.16.
+          #
+          # netplan generates /run/systemd/system/systemd-networkd-wait-online.service.d/
+          # 10-netplan.conf which waits for BOTH the bridge and its slave port:
+          #   -i br0:degraded -i enp1s0:carrier
+          # The slave never leaves SETUP=configuring, so the wait always times out while
+          # the bridge itself has been routable since boot. 20- sorts after 10-, so this
+          # ExecStart reset wins.
+          [Service]
+          ExecStart=
+          ExecStart=/lib/systemd/systemd-networkd-wait-online --any -o routable -i {{ primary_link.stdout | trim }}
+      when:
+        - wait_online_state.stdout is defined
+        - (wait_online_state.stdout | trim) == "failed"
+        - (nm_provides.stdout | trim) != "YES"
+        - (primary_link.stdout | trim | length) > 0
+      notify: reload systemd for wait-online
+
+    - name: Flush handlers so systemd re-reads the unit before we test it
+      ansible.builtin.meta: flush_handlers
+
+    # PROVE IT. Restarting a oneshot that waits is safe when the link is already
+    # routable — it returns immediately. If it still fails, the scoping is wrong and
+    # the assert below says so rather than leaving a green run over a broken unit.
+    - name: Start the unit and see whether it now succeeds
+      ansible.builtin.command: systemctl restart systemd-networkd-wait-online.service
+      register: wait_online_restart
+      changed_when: true
+      failed_when: false
+      when:
+        - not ansible_check_mode
+        - wait_online_state.stdout is defined
+        - (wait_online_state.stdout | trim) == "failed"
+        - (nm_provides.stdout | trim) != "YES"
+        - (primary_link.stdout | trim | length) > 0
+
+    - name: Clear the recorded failure once it succeeds
+      ansible.builtin.command: systemctl reset-failed systemd-networkd-wait-online.service
+      changed_when: true
+      failed_when: false
+      when:
+        - not ansible_check_mode
+        - wait_online_state.stdout is defined
+        - (wait_online_state.stdout | trim) == "failed"
+        - >-
+          (nm_provides.stdout | trim) == "YES"
+          or (wait_online_restart.rc | default(1)) == 0
+
+    - name: Confirm the scoped wait actually works
+      ansible.builtin.assert:
+        that:
+          - wait_online_restart.rc == 0
+        fail_msg: >-
+          {{ inventory_hostname }}: scoped systemd-networkd-wait-online to
+          {{ primary_link.stdout | trim }} but it STILL fails (rc={{ wait_online_restart.rc }}).
+          The drop-in is at /etc/systemd/system/systemd-networkd-wait-online.service.d/
+          20-lab-scope.conf — remove it to fall back to netplan's version.
+        success_msg: >-
+          {{ inventory_hostname }}: wait-online now succeeds scoped to
+          {{ primary_link.stdout | trim }} (was hanging on a bridge slave stuck at
+          SETUP=configuring).
+      when:
+        - not ansible_check_mode
+        - wait_online_restart.rc is defined
+
+    - name: Report what is still failed here
+      ansible.builtin.shell: |
+        set -o pipefail
+        f=$(systemctl list-units --failed --no-legend --plain 2>/dev/null)
+        if [ -n "$f" ]; then echo "$f"; else echo "NONE"; fi
+      args:
+        executable: /bin/bash
+      register: still_failed
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Show remaining failures
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ still_failed.stdout | trim | replace('\n', ' | ') }}"
+      when: still_failed.stdout is defined
+
+  handlers:
+    - name: reload systemd for wait-online
+      ansible.builtin.systemd:
+        daemon_reload: true
