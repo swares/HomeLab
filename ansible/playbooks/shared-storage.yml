@@ -96,12 +96,114 @@
         mode: "0644"
       notify: reload exports
 
+    # ---- restart policy ------------------------------------------------------
+    # ADDED 2026-08-30, BACKLOG §3.16. `nfs-server` on n150-1 ships with
+    # `Restart=no` (measured fleet-wide the same day — every other managed service in
+    # this lab is Restart=always or on-failure; nfs-server was the sole exception).
+    #
+    # One transient failure was therefore PERMANENT. On 2026-07-24 the unit exited
+    # 1/FAILURE after running for 2d 23h and stayed down for 37 DAYS on a host with
+    # 62 days of uptime. /srv/libvirt-shared was unmounted on n150-2 that entire time,
+    # both libvirt pools were degraded, and live migration between the two KVM hosts —
+    # the pair running gitlab-1 — was impossible. Nothing alerted, because
+    # node_exporter's systemd collector is scoped to backup-.+ and the series for this
+    # unit DOES NOT EXIST (§3.16). `enabled` stayed true throughout, which looks
+    # reassuring in `systemctl list-unit-files` and says nothing about whether it runs.
+    #
+    # THE JOURNAL FOR THE FAILURE IS GONE — "journal has been rotated since unit was
+    # started". Three timestamps and an exit code are the entire surviving record, so
+    # the cause is unrecoverable and cannot be fixed. What CAN be fixed is the
+    # permanence, which is this drop-in.
+    #
+    # SCOPED TO n150-1 DELIBERATELY. h4-core also runs nfs-server with Restart=no, and
+    # that one is THE NAS: CLAUDE.md is explicit that the NAS services and the data
+    # they serve are off-limits — never stop, restart, or reconfigure them. This play
+    # targets n150-1 only, which is what keeps the two apart. Do not "fix" h4-core's
+    # nfs-server by widening this play's hosts.
+    #
+    # THE TRADE, stated plainly: a persistently broken server will now flap until
+    # StartLimitBurst stops it, rather than failing once and going quiet. That is the
+    # better failure — it is louder, it produces a restart count a widened collector
+    # can alert on, and 37 days of silent downtime is the alternative being traded
+    # away. StartLimitIntervalSec/Burst are left at systemd defaults (5 starts in 10s)
+    # so a genuinely broken unit still comes to rest instead of restarting forever.
+    - name: Ensure the nfs-server drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/system/nfs-server.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Give nfs-server a restart policy so a transient fault self-heals
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/nfs-server.service.d/10-restart.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible (playbooks/shared-storage.yml) — BACKLOG §3.16.
+          # Upstream nfs-server.service sets Restart=no, so one transient exit is
+          # permanent. It cost 37 days of silent downtime on 2026-07-24.
+          [Service]
+          Restart=on-failure
+          RestartSec=10s
+      notify: reload systemd for nfs-server
+
     - name: Enable and start NFS server
       ansible.builtin.systemd:
         # Package is nfs-kernel-server; systemd unit name on Ubuntu 24.04 is nfs-server
         name: nfs-server
         enabled: true
         state: started
+
+    # Handlers normally fire at the END of a play. On the run that CREATES the
+    # drop-in, that is too late: the verification below would read the policy before
+    # daemon-reload had run, systemd would still report Restart=no, and the assert
+    # would fail on the very run that fixed the problem. Same reason drift-check.yml
+    # flushes before enabling its timer.
+    - name: Flush handlers so systemd reloads before we verify
+      ansible.builtin.meta: flush_handlers
+
+    # Verify the drop-in is what systemd ACTUALLY LOADED, not what we wrote to disk.
+    # CLAUDE.md: check the artifact the consumer reads. A drop-in with a typo, a bad
+    # section header, or a name not ending in .conf is silently ignored — the file
+    # exists, the play reports changed, and the policy is still Restart=no. Asking
+    # systemd is the only check that can distinguish those.
+    - name: Read back the restart policy systemd resolved
+      ansible.builtin.command: systemctl show -p Restart --value nfs-server
+      register: nfs_restart_policy
+      changed_when: false
+      check_mode: false
+
+    # NOT ASSERTED UNDER --check. In check mode the drop-in is simulated and never
+    # written, so systemd correctly still reports Restart=no — asserting there would
+    # fail every dry run and publish lab_ansible_check_failed{playbook="shared-storage"},
+    # which is the check-mode cascade this repo has spent 2026-08-30 removing from four
+    # other playbooks. The dry run reports the pending change instead.
+    - name: DRY RUN — report the restart policy without asserting on it
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: nfs-server currently reports
+          Restart={{ nfs_restart_policy.stdout | trim | default('<unknown>', true) }}.
+          {{ 'Already correct.' if (nfs_restart_policy.stdout | trim) == 'on-failure'
+             else 'The drop-in above WOULD change this to on-failure on a real run.' }}
+      when: ansible_check_mode
+
+    - name: Confirm systemd is honouring the drop-in
+      when: not ansible_check_mode
+      ansible.builtin.assert:
+        that:
+          - nfs_restart_policy.stdout | trim == "on-failure"
+        fail_msg: >-
+          nfs-server on {{ inventory_hostname }} still reports
+          Restart={{ nfs_restart_policy.stdout | trim | default('<empty>', true) }}
+          after the drop-in was written. systemd is not loading
+          /etc/systemd/system/nfs-server.service.d/10-restart.conf — check the filename
+          ends in .conf and that `systemctl daemon-reload` ran.
+        success_msg: >-
+          {{ inventory_hostname }}: nfs-server Restart=on-failure confirmed by systemd
+          (was Restart=no; 37-day outage 2026-07-24, §3.16)
 
     - name: Define libvirt-shared storage pool
       ansible.builtin.command: >
@@ -140,6 +242,10 @@
         msg: "{{ pool_info.stdout_lines }}"
 
   handlers:
+    - name: reload systemd for nfs-server
+      ansible.builtin.systemd:
+        daemon_reload: true
+
     - name: reload exports
       ansible.builtin.command: exportfs -ra
 
