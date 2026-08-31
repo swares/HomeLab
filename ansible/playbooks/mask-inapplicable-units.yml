@@ -46,9 +46,19 @@
 #   ansible-playbook -i inventory/hosts.yml playbooks/mask-inapplicable-units.yml
 
 - name: Mask systemd units whose hardware is absent
+  # NOT `all:!x86_nodes:…` like most plays here: n150-2 is x86 and needs the openipmi
+  # mask, so the x86 hosts must be in scope. That pulls in n150-3, the living-room
+  # HTPC, which is usually powered off.
   hosts: all:!embedded:!xu3-1
   become: true
   gather_facts: false
+  # WITHOUT THIS, A POWERED-OFF HTPC POISONS THE DRIFT METRIC. An unreachable host
+  # makes ansible-playbook exit non-zero, and this play is in drift_playbooks — so the
+  # weekly run would publish lab_ansible_check_failed{playbook="mask-inapplicable-units"}
+  # = 1 every week, permanently. An alert that can never go green is one that gets
+  # ignored (§3.11, and LabExternalHostDown before it). n150-3 being off is normal and
+  # is not a finding; if it is on, it gets processed like anything else.
+  ignore_unreachable: true
 
   vars:
     # probe must print 0 when the required hardware is ABSENT.
