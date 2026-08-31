@@ -58,6 +58,14 @@
   # = 1 every week, permanently. An alert that can never go green is one that gets
   # ignored (§3.11, and LabExternalHostDown before it). n150-3 being off is normal and
   # is not a finding; if it is on, it gets processed like anything else.
+  #
+  # ignore_unreachable ALONE IS NOT ENOUGH, learned the hard way 2026-08-30. It lets
+  # the host continue past the failed connection into the NEXT task, which then dies
+  # on `'dict object' has no attribute 'stdout'` because the register from the skipped
+  # probe has no stdout. The play still exits non-zero and the metric is still pinned.
+  # Every task below that consumes a register therefore also carries
+  # `item.stdout is defined` — the connection being ignorable does not make the
+  # missing data usable.
   ignore_unreachable: true
 
   vars:
@@ -119,18 +127,21 @@
           {{ inventory_hostname }}: {{ item.item.unit }} —
           {{ item.stdout | trim }}
           {{ '=> MASKING: ' ~ item.item.reason if (item.stdout | trim).startswith('MASK') else '=> leaving alone' }}
-      loop: "{{ mask_decisions.results }}"
+      loop: "{{ mask_decisions.results | default([]) }}"
       loop_control:
         label: "{{ item.item.unit }}"
+      when: item.stdout is defined
 
     - name: Mask units whose hardware is absent and which are failed
       ansible.builtin.systemd:
         name: "{{ item.item.unit }}"
         masked: true
-      loop: "{{ mask_decisions.results }}"
+      loop: "{{ mask_decisions.results | default([]) }}"
       loop_control:
         label: "{{ item.item.unit }}"
-      when: (item.stdout | trim).startswith('MASK')
+      when:
+        - item.stdout is defined
+        - (item.stdout | trim).startswith('MASK')
 
     # Masking does not clear a recorded failure — established twice on 2026-08-30, with
     # zswap-config on opi5pro-2 and prometheus-node-exporter on gitlab-1 and h4-core.
@@ -138,10 +149,11 @@
     # of the exercise is lost.
     - name: Clear the recorded failure for each masked unit
       ansible.builtin.command: "systemctl reset-failed {{ item.item.unit }}"
-      loop: "{{ mask_decisions.results }}"
+      loop: "{{ mask_decisions.results | default([]) }}"
       loop_control:
         label: "{{ item.item.unit }}"
       when:
+        - item.stdout is defined
         - not ansible_check_mode
         - (item.stdout | trim).startswith('MASK')
       changed_when: true
@@ -159,10 +171,11 @@
 
     - name: Clear stale failures without masking
       ansible.builtin.command: "systemctl reset-failed {{ item.item }}"
-      loop: "{{ stale_states.results }}"
+      loop: "{{ stale_states.results | default([]) }}"
       loop_control:
         label: "{{ item.item }}"
       when:
+        - item.stdout is defined
         - not ansible_check_mode
         - item.stdout | trim == "failed"
       changed_when: true
@@ -189,3 +202,4 @@
         msg: >-
           {{ inventory_hostname }} still failed:
           {{ remaining_failed.stdout | trim | replace('\n', ' | ') }}
+      when: remaining_failed.stdout is defined
