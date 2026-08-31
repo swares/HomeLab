@@ -26,6 +26,8 @@ Last verified: 2026-07-18.
 | **Orange Pi Zero 2W #2** | H618 A53 4C | 4 GB | — | `192.168.1.188` | MQTT broker (Mosquitto) |
 | **Orange Pi Zero 2W #3** | H618 A53 4C | 4 GB | — | `192.168.1.217` | DNS secondary · Armbian Trixie (Debian 13) |
 | **Orange Pi Zero 2W #4** | H618 A53 4C | 4 GB | — | `192.168.1.99` | MQTT secondary broker · OrangePi image (Debian) |
+| **M5Stack LLM** | ESP32-S3 | — | — | USB | Edge AI inference |
+| **HostMon** | ESP32-S3 (Waveshare 4.3") | 8 MB PSRAM | LAN | — | Host prober + status panel |
 
 > **Same board model, different distro, different package names.** Confirmed
 > 2026-08-27 while disabling RAM logging. The Zero 2W boards do not share an OS:
@@ -71,8 +73,27 @@ Last verified: 2026-07-18.
 >
 > `ansible/playbooks/mount-nvme.yml` now owns this policy and converges both nodes
 > on zram-only, so a weekly `--check` will catch a recurrence.
-| **M5Stack LLM** | ESP32-S3 | — | — | USB | Edge AI inference |
-| **HostMon** | ESP32-S3 (Waveshare 4.3") | 8 MB PSRAM | LAN | — | Host prober + status panel |
+
+> **LXD was removed from the H4 on 2026-08-31. Do not reinstall it.** Found by the
+> first fleet-wide `systemctl list-units --failed` sweep (BACKLOG §3.16), which showed
+> `snap.lxd.activate.service` failed since 2026-08-26 — a boot-time race with
+> `snapd.apparmor` (`missing profile snap-update-ns.lxd`). The profile loads correctly
+> once snapd.apparmor has run, so the unit succeeded on a manual restart; with no
+> `Restart=` it had simply stayed failed for five days.
+>
+> Fixing the race was not worth it, because **LXD had never run a single container**.
+> `lxc list` returned the first-run banner and an empty table, and the daemon was
+> holding ~37.5 MiB resident on the box that serves the NAS *and* is a k3s
+> control-plane node. Nothing in this repo references LXD; the lab's containers are
+> k3s workloads and its VMs are libvirt on the n150s.
+>
+> Removed with plain `snap remove lxd` (NOT `--purge`), so snapd retains a data
+> snapshot — `snap saved` lists it and `snap restore <id>` brings it back if this
+> turns out to have been wanted.
+>
+> If you find yourself wanting LXD here again, note what it would be competing with:
+> k3s owns the container runtime on this host and libvirt owns VMs on n150-1/n150-2.
+> A third one deserves a deliberate decision, not a reinstall.
 
 ## VMs
 
