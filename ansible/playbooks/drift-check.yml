@@ -54,6 +54,7 @@
       - playbooks/backup.yml
       - playbooks/check-disk-space.yml
       - playbooks/disk-check-timer.yml
+      - playbooks/fstab-root-fstype.yml
       - playbooks/h4-dns-resolvers.yml
       - playbooks/journald.yml
       - playbooks/k3s-registry.yml
