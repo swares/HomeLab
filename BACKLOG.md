@@ -2004,23 +2004,79 @@ therefore permanent until a human intervenes. The unit was `enabled` throughout,
 looks reassuring in `systemctl list-unit-files` and means nothing about whether it is
 running.
 
-**Three fixes, and they are independent:**
+**Three fixes — ALL THREE DONE 2026-08-30.** They turned out not to be independent:
+the fleet sweep produced the cardinality number the collector decision needed.
 
-- [ ] **Widen the collector — the one that would have caught this in minutes.** The cost
-      is real: every unit on every node becomes a series, on a Prometheus already
-      evicting at ~14 days against a nominal 30 (§3.14). A middle path is a named set
-      rather than everything, e.g.
-      `--collector.systemd.unit-include=(backup-.+|nfs-server|libvirtd|k3s|k3s-agent|vault|docker)\.(service|timer)`.
-      Decide deliberately; do not widen to `.+` without measuring the series count first,
-      or §3.14 gets worse and this entry causes the next incident.
-- [ ] **Give `nfs-server` a `Restart=on-failure` drop-in** so a transient fault
-      self-heals. Caveat: a persistently broken server would then flap until
-      `StartLimitBurst` stops it — which is still better than silence, and produces a
-      restart count that the widened collector could alert on.
-- [ ] **Consider whether other one-shot-failure services have the same exposure.** The
-      question is not "which services are running" but "which would stay down forever if
-      they stopped". `systemctl list-units --failed` fleet-wide is one command and has
-      never been run as a sweep.
+- [x] **Widen the collector.** Done — to a NAMED SET, not `.+`:
+      `(backup-.+|ansible-drift-check|nfs-server|k3s|k3s-agent|containerd|docker|libvirtd|mosquitto)\.(service|timer)`
+      Every name was measured to exist and to be healthy first, so the new alert ships
+      green. Verified in Prometheus afterwards: `nfs-server.service` now returns series
+      — the first time in this lab's history that a query could have found the outage
+      this entry is about.
+- [x] **Give `nfs-server` a `Restart=on-failure` drop-in.** Done, `RestartSec=10s`,
+      **scoped to n150-1 only**. h4-core also runs `nfs-server` with `Restart=no` and
+      that one is THE NAS — CLAUDE.md forbids reconfiguring it. Verified with a
+      negative control after applying: n150-1 reports `on-failure` with
+      `/etc/systemd/system/nfs-server.service.d/10-restart.conf` in `DropInPaths`,
+      h4-core still reports `no` with only its generator drop-in. The play asks
+      systemd (`systemctl show -p Restart`) rather than checking the file exists,
+      because a drop-in not ending in `.conf`, or with a malformed section header, is
+      silently ignored — the file is there, the copy reports `changed`, and the policy
+      is still `no`.
+- [x] **Fleet-wide `systemctl list-units --failed` sweep.** Run for the first time.
+      Results below.
+
+**THE CARDINALITY ESTIMATE IN THE ORIGINAL ENTRY WAS RIGHT TO WORRY AND WRONG ON THE
+NUMBER.** Measured: 3,430 systemd units across the 13 real hosts, so `.+` would be
+~20,600 series *if the fleet had been at `backup-.+` everywhere*. **It was not.** The
+H4 and cluster nodes run the DaemonSet with the regex; rpi5, rpi4b, octopi-dns and the
+Zero 2Ws run the Debian `prometheus-node-exporter` package with `ARGS=""`, whose
+systemd collector defaults to `unit-include=".+"`. **Half the fleet has been exposing
+every unit all along.** The change therefore cost only the five DaemonSet nodes,
+~180 series.
+
+That mistake had a consequence worth keeping: **the alert's name filter is
+load-bearing, not defensive.** `LabSystemdUnitFailed` is scoped by unit name rather
+than left open, because an unscoped `state="failed"` rule would have fired on arrival
+against `smartmontools`, `nvmf-autoconnect`, `openipmi` and `systemd-remount-fs` on the
+already-open hosts — no matter what the DaemonSet regex said. The collector regex
+controls what exists; the rule's name filter controls what pages.
+
+**And a hypothesis measured and killed, so nobody re-proposes it:** if half the fleet
+exposes every unit, is the systemd collector a meaningful part of §3.14's retention
+shortfall? **No.** `count(node_systemd_unit_state)` = **3,580** against
+`count({__name__!=""})` = **334,102** — **1.07%**. Narrowing those hosts' `ARGS=""`
+would reclaim about one percent. §3.14's cause is elsewhere.
+
+**THE SWEEP'S OWN FINDINGS.** Four things worth their own entries, all deliberately
+EXCLUDED from the named set until fixed so the new alert stays green:
+
+| host | unit | note |
+|---|---|---|
+| opi5pro-2 | `zswap-config.service` failed | an **eighth** divergence in that supposedly-identical pair (see §3.11's swap work). zswap in front of zram is double compression |
+| opi5pro-1 **and** -2 | `dnsmasq.service` failed | why is dnsmasq installed on k3s agents at all? |
+| h4-core | `prometheus-node-exporter.service` **masked** *and* failed | §3.15 territory — a masked unit holding a failed state |
+| gitlab-1 | `prometheus-node-exporter.service` **not-found** and failed | something tried to start a unit that does not exist |
+| opi-zero2w-1, -2 | `systemd-remount-fs.service` failed | root remount failing on SD-card boards |
+
+Benign and permanent, and the reason `.+` would be noise rather than coverage:
+`smartmontools` on SD/eMMC boards (4 hosts), `nvmf-autoconnect` with no NVMe-oF (3),
+`openipmi` on non-server hardware (2), `systemd-networkd-wait-online` (4),
+`snap.lxd.activate` and `systemd-ask-password-*.path`. Eleven units that will never
+succeed and should be masked rather than watched.
+
+**Also: `n150-3` (HTPC) is unreachable over WinRM** — `No route to host`. Probably
+powered off, but it is in the inventory and nothing reports on it either way.
+
+**A trap found while running the sweep, and it is not a repo defect.** The first
+attempt used `ansible 'all:!xu3-1'` and three of sixteen result blocks were **h4-core
+wearing other names**. `hostmon` and `m5stack` are ESP32-S3 microcontrollers in an
+`embedded` group carrying `ansible_connection: local` — which does not mean "skip
+these", it means **run on the control node**. Every playbook in the repo already
+excludes them correctly (`all:!x86_nodes:!embedded:…`, five of them, and
+`break-glass-key.yml` even explains why). The safety lives in each play's host pattern,
+so **ad-hoc commands must repeat it**: use `all:!xu3-1:!embedded:!x86_nodes`. A
+mutating ad-hoc against `all` would hit the NAS core three times.
 
 **Sharpest framing, because it generalises past NFS:** this lab now has three recorded
 cases of a fault persisting because nothing exported a metric for it — §3.15's 19-day
