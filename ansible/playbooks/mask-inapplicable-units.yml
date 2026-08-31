@@ -1,0 +1,181 @@
+---
+# mask-inapplicable-units.yml — mask systemd units whose hardware does not exist here.
+#
+# BACKLOG §3.16. After the first fleet-wide `systemctl list-units --failed` sweep on
+# 2026-08-30 resolved five real findings, eleven failures remained — every one of them
+# a unit that CANNOT succeed on the board it is running on.
+#
+# WHY BOTHER. `systemctl list-units --failed` is now a tool this lab actually uses, and
+# a sweep that always returns eleven expected failures is a sweep nobody reads
+# carefully. That is exactly how nfs-server sat dead for 37 days (§3.16) — not because
+# no one looked, but because looking was unrewarding. Masking these converts the sweep
+# from "eleven knowns plus anything new" into "anything at all is a finding". Same
+# argument as driving the §3.11 drift floor to zero before writing its alerts.
+#
+# MASK, NOT DISABLE. `disable` removes the [Install] symlinks; anything that pulls the
+# unit in by dependency still starts it, and a package upgrade can re-enable it.
+# `mask` symlinks it to /dev/null so it cannot start by any route. That is the correct
+# systemd answer to "this unit is not applicable on this machine", and it is trivially
+# reversible with `systemctl unmask`.
+#
+# GATED ON PROVEN HARDWARE ABSENCE, NOT ON "IT IS CURRENTLY FAILING." A transiently
+# failed smartmontools on a box that really does have SMART must not be masked — that
+# would suppress a real monitor. Each unit below carries a probe that returns 0 only
+# when the hardware it needs is genuinely absent, and BOTH the probe and the failed
+# state must agree before anything is masked.
+#
+# DELIBERATELY NOT MASKED, though they are also failing:
+#
+#   systemd-networkd-wait-online.service  (n150-1, n150-2, opi-zero2w-1, -2)
+#       Masking breaks network-online.target ordering for every unit that depends on
+#       it. Services would start before the network is up — trading a cosmetic failure
+#       for a real one. The correct fix is telling it which interface to wait for
+#       (these hosts have bridges and unused NICs that never gain carrier). Its own job.
+#
+#   systemd-ask-password-console.path / -wall.path  (n150-1)
+#       These deliver passphrase prompts. Masking them means a box that ever needs one
+#       at boot would never show it, on hardware with no console attached. A stale
+#       failure is cleared below instead; if it returns, that is a finding.
+#
+#   snap.lxd.activate.service  (h4-core)
+#       Not hardware-absent — LXD on the NAS core is either deliberate or leftover, and
+#       masking it would bury the question. Left failing on purpose until answered.
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/mask-inapplicable-units.yml --check
+#   ansible-playbook -i inventory/hosts.yml playbooks/mask-inapplicable-units.yml
+
+- name: Mask systemd units whose hardware is absent
+  hosts: all:!embedded:!xu3-1
+  become: true
+  gather_facts: false
+
+  vars:
+    # probe must print 0 when the required hardware is ABSENT.
+    inapplicable_units:
+      - unit: smartmontools.service
+        probe: "smartctl --scan 2>/dev/null | grep -c ."
+        reason: >-
+          no SMART-capable device. SD cards, eMMC and virtio disks do not implement
+          SMART, so smartctl has nothing to monitor and the daemon exits.
+
+      - unit: openipmi.service
+        probe: "ls /dev/ipmi* 2>/dev/null | grep -c ."
+        reason: >-
+          no /dev/ipmi* device. IPMI is server-board management hardware; none of these
+          machines are server boards.
+
+      - unit: nvmf-autoconnect.service
+        probe: "ls /sys/class/nvme-fabrics 2>/dev/null | grep -c ."
+        reason: >-
+          no NVMe-over-Fabrics subsystem. This is NVMe over a NETWORK, unrelated to the
+          local NVMe in the OPi 5 Pros, and nothing in this lab uses it.
+
+    # Cleared but not masked — see the header.
+    stale_failure_units:
+      - systemd-ask-password-console.path
+      - systemd-ask-password-wall.path
+
+  tasks:
+    # One shell per unit returning a single decision word, because zipping two separate
+    # loop registers together in Jinja is harder to read than it is to get right.
+    # BOTH conditions must hold: the unit is really failed AND its hardware is really
+    # absent. Either alone is not enough to justify masking.
+    - name: Decide, per unit, whether masking is justified
+      ansible.builtin.shell: |
+        set -o pipefail
+        state=$(systemctl is-failed {{ item.unit | quote }} 2>/dev/null)
+        hw=$({{ item.probe }})
+        if [ "$state" = "failed" ] && [ "$hw" = "0" ]; then
+          echo "MASK state=$state hw_devices=$hw"
+        else
+          echo "SKIP state=$state hw_devices=$hw"
+        fi
+      args:
+        executable: /bin/bash
+      loop: "{{ inapplicable_units }}"
+      loop_control:
+        label: "{{ item.unit }}"
+      register: mask_decisions
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # Print the reasoning before acting on it. A masked unit is invisible afterwards,
+    # so the run output is the only record of WHY it was masked.
+    - name: Report each decision and its evidence
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ item.item.unit }} —
+          {{ item.stdout | trim }}
+          {{ '=> MASKING: ' ~ item.item.reason if (item.stdout | trim).startswith('MASK') else '=> leaving alone' }}
+      loop: "{{ mask_decisions.results }}"
+      loop_control:
+        label: "{{ item.item.unit }}"
+
+    - name: Mask units whose hardware is absent and which are failed
+      ansible.builtin.systemd:
+        name: "{{ item.item.unit }}"
+        masked: true
+      loop: "{{ mask_decisions.results }}"
+      loop_control:
+        label: "{{ item.item.unit }}"
+      when: (item.stdout | trim).startswith('MASK')
+
+    # Masking does not clear a recorded failure — established twice on 2026-08-30, with
+    # zswap-config on opi5pro-2 and prometheus-node-exporter on gitlab-1 and h4-core.
+    # Without this the unit stays in `list-units --failed` forever and the whole point
+    # of the exercise is lost.
+    - name: Clear the recorded failure for each masked unit
+      ansible.builtin.command: "systemctl reset-failed {{ item.item.unit }}"
+      loop: "{{ mask_decisions.results }}"
+      loop_control:
+        label: "{{ item.item.unit }}"
+      when:
+        - not ansible_check_mode
+        - (item.stdout | trim).startswith('MASK')
+      changed_when: true
+      failed_when: false
+
+    # Cleared, NOT masked. If these come back, that is a real signal about the boot
+    # path rather than noise, and it must stay able to reach us.
+    - name: Read the state of units that are cleared but never masked
+      ansible.builtin.command: "systemctl is-failed {{ item }}"
+      loop: "{{ stale_failure_units }}"
+      register: stale_states
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Clear stale failures without masking
+      ansible.builtin.command: "systemctl reset-failed {{ item.item }}"
+      loop: "{{ stale_states.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when:
+        - not ansible_check_mode
+        - item.stdout | trim == "failed"
+      changed_when: true
+      failed_when: false
+
+    # The point of the whole play, measured rather than assumed. This deliberately
+    # reports the remaining set instead of asserting it is empty:
+    # systemd-networkd-wait-online and snap.lxd.activate are expected to survive, and
+    # an assert would fail on the units we chose not to touch.
+    - name: Report what is still failed on this host
+      ansible.builtin.shell: |
+        set -o pipefail
+        f=$(systemctl list-units --failed --no-legend --plain 2>/dev/null)
+        if [ -n "$f" ]; then echo "$f"; else echo "NONE"; fi
+      args:
+        executable: /bin/bash
+      register: remaining_failed
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Show the remaining failures
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }} still failed:
+          {{ remaining_failed.stdout | trim | replace('\n', ' | ') }}

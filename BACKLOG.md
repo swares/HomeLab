@@ -2048,22 +2048,86 @@ shortfall? **No.** `count(node_systemd_unit_state)` = **3,580** against
 `count({__name__!=""})` = **334,102** — **1.07%**. Narrowing those hosts' `ARGS=""`
 would reclaim about one percent. §3.14's cause is elsewhere.
 
-**THE SWEEP'S OWN FINDINGS.** Four things worth their own entries, all deliberately
-EXCLUDED from the named set until fixed so the new alert stays green:
+**THE SWEEP'S OWN FINDINGS — ALL FIVE RESOLVED 2026-08-30.** Four were systemd
+bookkeeping; one was a real bug two years old.
 
-| host | unit | note |
-|---|---|---|
-| opi5pro-2 | `zswap-config.service` failed | an **eighth** divergence in that supposedly-identical pair (see §3.11's swap work). zswap in front of zram is double compression |
-| opi5pro-1 **and** -2 | `dnsmasq.service` failed | why is dnsmasq installed on k3s agents at all? |
-| h4-core | `prometheus-node-exporter.service` **masked** *and* failed | §3.15 territory — a masked unit holding a failed state |
-| gitlab-1 | `prometheus-node-exporter.service` **not-found** and failed | something tried to start a unit that does not exist |
-| opi-zero2w-1, -2 | `systemd-remount-fs.service` failed | root remount failing on SD-card boards |
+| host | unit | what it was | outcome |
+|---|---|---|---|
+| opi5pro-2 | `zswap-config.service` | artefact of `ansible/roles/zswap/` — an ORPHAN role invoked by no playbook | role **deleted**, unit removed, failed state cleared |
+| opi5pro-1 **and** -2 | `dnsmasq.service` | arrived via dnsmasq-base/resolvconf as a dependency, enabled by package default, failed since 2026-07-19 and 07-29 | **disabled + reset-failed** in `node-dns.yml`, gated on measured failure |
+| gitlab-1 | `prometheus-node-exporter.service` | package not installed, no unit file anywhere — a failure record with nothing behind it | `reset-failed` |
+| h4-core | `prometheus-node-exporter.service` | deliberately **masked to /dev/null** 2026-08-27 because the k8s DaemonSet owns :9100 (confirmed listening) | `reset-failed` |
+| opi-zero2w-1, -2 | `systemd-remount-fs.service` | **REAL BUG** — malformed fstab | repaired and **proven** |
 
-Benign and permanent, and the reason `.+` would be noise rather than coverage:
-`smartmontools` on SD/eMMC boards (4 hosts), `nvmf-autoconnect` with no NVMe-oF (3),
-`openipmi` on non-server hardware (2), `systemd-networkd-wait-online` (4),
-`snap.lxd.activate` and `systemd-ask-password-*.path`. Eleven units that will never
-succeed and should be masked rather than watched.
+**THE ORPHAN ROLE IS THE MOST IMPORTANT OF THESE**, because it explains six of the
+eight OPi 5 Pro divergences unpicked in §3.11 the same evening. `roles/zswap/` created
+the 8 GiB swapfile with `dd`+`mkswap`, added its fstab record, deployed
+`zswap-config.service`, and ran **`swapoff /dev/zram0`** under `zswap_disable_zram` —
+whose own default comment reads "Set true on hosts that use zram for swap (OPi 5
+Pros)". Its attempt to disable the zram service named `zram-generator` and
+`systemd-zram-setup@zram0`, which are Fedora/Arch units; these boards use
+`orangepi-zram-config`, so that half failed silently under `failed_when: false`,
+leaving the service enabled to keep re-creating a device nothing then swapped on.
+
+Nothing invoked the role, so it was invisible to §3.11's drift check — **`--check` can
+only run playbooks; an orphan role stays armed indefinitely.** That is a third category
+beyond "broken automation" and "drifted host": automation outside the checker's reach.
+`roles/` now contains only `cups_printer`, which `playbooks/printer.yml` does invoke.
+
+**THE FSTAB BUG.** `opi-zero2w-1` and `-2` share one cloned card (identical PARTUUID
+`5910ca3d`) whose root line is missing the fstype column:
+
+    PARTUUID=5910ca3d-02   /        defaults    0   1     <- five fields, needs six
+
+`mount` therefore reads `defaults` as the TYPE and `0` as the OPTIONS:
+
+    mount: /: fsconfig() failed: ext4: Unknown parameter '0'
+
+**It went unnoticed since 2024-07-06 — two years — because the boards work.** The
+kernel mounts root `rw` from the boot cmdline before fstab is consulted, so `touch`
+succeeds and nothing visibly breaks. What silently does not work is the remount: any
+option ever added to `/` would never apply. Fixed by
+`playbooks/fstab-root-fstype.yml`, which is gated on the field COUNT rather than a host
+list (so a re-flashed clone self-repairs), backs up first, and **proves the fix by
+restarting the very unit that was failing** rather than by asserting the file looks
+right — the only check that works without rebooting a headless board.
+
+**THE ELEVEN REMAINING FAILURES, and the decision about them.**
+`playbooks/mask-inapplicable-units.yml` masks units whose hardware provably does not
+exist — `smartmontools` (SD/eMMC/virtio implement no SMART), `openipmi` (no
+`/dev/ipmi*`), `nvmf-autoconnect` (no NVMe-over-Fabrics; unrelated to the OPi5s' local
+NVMe). Masked rather than disabled, because `disable` only removes [Install] symlinks
+and a dependency or a package upgrade re-enables it.
+
+Gated on **proven hardware absence AND the failed state together** — "it is currently
+failing" alone would suppress a genuinely broken monitor on a box that does have SMART.
+
+Three are deliberately left failing:
+
+- `systemd-networkd-wait-online` — masking breaks `network-online.target` ordering, so
+  services would start before the network is up. That trades a cosmetic failure for a
+  real one. The fix is scoping which interface it waits for; its own job.
+- `systemd-ask-password-*.path` — these deliver passphrase prompts. Masking them on
+  hardware with no console means a box needing one at boot would never show it.
+  Cleared, not masked; a recurrence is a finding.
+- `snap.lxd.activate` on h4-core — not hardware-absent. LXD on the NAS core is either
+  deliberate or leftover, and masking would bury the question.
+
+**Why this is worth doing at all:** `systemctl list-units --failed` is now a tool this
+lab uses, and a sweep that always returns eleven expected failures is a sweep nobody
+reads carefully. That is precisely how `nfs-server` hid for 37 days — not because
+nobody looked, but because looking was unrewarding. Same argument as driving §3.11's
+drift floor to zero before writing its alerts.
+
+**A pattern worth naming, since it appeared four times in one evening: SYSTEMD
+REMEMBERS FAILURES FOREVER AND NOTHING HERE WAS CLEARING THEM.** Deleting a unit file
+does not clear its failed state. Neither does masking it, disabling it, uninstalling
+its package, or `daemon-reload`. Only `systemctl reset-failed` does. A removed unit, an
+uninstalled package and a masked service all keep reporting `failed` indefinitely —
+and `node_systemd_unit_state` keeps exporting `state="failed"` for something nobody
+runs. That now matters directly: `LabSystemdUnitFailed` went live the same day, so any
+unit added to its name filter carrying a stale failure would page immediately and
+permanently.
 
 **Also: `n150-3` (HTPC) is unreachable over WinRM** — `No route to host`. Probably
 powered off, but it is in the inventory and nothing reports on it either way.
