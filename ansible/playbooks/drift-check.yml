@@ -48,6 +48,24 @@
     #     event, not an ongoing state, so `changed` there means nothing. Same call as
     #     github-runner.yml. It was ALSO failing every run for an unrelated reason —
     #     see the guard added in that file the same day.
+    # BEFORE ADDING A PLAYBOOK HERE: run it standalone once and check `echo $?`.
+    #
+    # The drift script records only `rc != 0` as lab_ansible_check_failed. It cannot
+    # tell you WHY, so a playbook that exits non-zero for a boring structural reason
+    # pins that gauge at 1 every week — an alert that can never go green, which is the
+    # exact failure LabExternalHostDown demonstrated for three weeks.
+    #
+    # Learned 2026-08-30 by doing it twice in one hour with mask-inapplicable-units.yml:
+    #   1. Its host pattern includes n150-3 (the HTPC, normally powered off). An
+    #      unreachable host makes ansible-playbook exit non-zero. Added
+    #      `ignore_unreachable: true`.
+    #   2. THAT WAS NOT ENOUGH. ignore_unreachable lets the host continue into the next
+    #      task, which died on `'dict object' has no attribute 'stdout'` — the register
+    #      from the probe it never ran. Still non-zero. Every task consuming a register
+    #      also needs `item.stdout is defined`.
+    #
+    # Both passed a --check before being caught. The tell was `failed=1` in the PLAY
+    # RECAP, not anything in the task output. Read the recap.
     drift_playbooks:
       - playbooks/apport.yml
       - playbooks/argocd.yml
