@@ -367,7 +367,48 @@ spec:
             # was written. backup-vault runs on the rpi5, whose Debian package
             # runs with ARGS="" and therefore includes every unit by default —
             # which is why that one was visible while the H4's were not.
-            - --collector.systemd.unit-include=backup-.+\.(service|timer)
+            # WIDENED AGAIN 2026-08-30 to a NAMED SET — BACKLOG §3.16.
+            #
+            # backup-.+ alone meant node_systemd_unit_state existed for backup units
+            # AND NOTHING ELSE, so no rule could be written that would find any other
+            # failed unit. That is not a rule that fails to match — the series does
+            # not exist, which is worse. It cost 37 days: nfs-server on n150-1 exited
+            # 1/FAILURE on 2026-07-24 and stayed down, leaving /srv/libvirt-shared
+            # unmounted on n150-2, both libvirt pools degraded, and live migration
+            # impossible on the pair running gitlab-1. Nothing alerted; nothing could.
+            #
+            # WHY NOT `.+`. Measured across the 13 real hosts on 2026-08-30:
+            # 3,430 systemd units. node_systemd_unit_state emits 5 series per unit
+            # plus node_systemd_unit_start_time_seconds, so `.+` costs ~20,600 new
+            # series against a Prometheus already evicting at ~14 days on a nominal
+            # 30 (§3.14). It would also expose eleven units that are permanently and
+            # correctly failed — smartmontools on SD/eMMC boards, nvmf-autoconnect
+            # with no NVMe-oF, openipmi on non-server hardware — which is the
+            # LabExternalHostDown failure again: an alert that is noise on day one is
+            # an alert that trains the eye past it.
+            #
+            # This set is built from units MEASURED to exist and to matter. ~30 unit
+            # instances across the DaemonSet nodes, ~180 series. All are healthy as of
+            # 2026-08-30, so LabSystemdUnitFailed ships green.
+            #
+            # Adding a unit here is half the change: also add it to
+            # LabSystemdUnitFailed's name filter in lab-alerts.yaml, and check it is
+            # not currently failing first. Verify coverage with:
+            #   curl -s http://<host>:9100/metrics | grep node_systemd_unit_state
+            #
+            # NOT INCLUDED, deliberately, because they are failing right now and would
+            # fire on arrival — each needs its own fix first:
+            #   prometheus-node-exporter  (masked+failed on h4-core, not-found on gitlab-1)
+            #   dnsmasq                   (failed on BOTH opi5pro nodes)
+            #   zswap-config              (failed on opi5pro-2 only — an eighth
+            #                              divergence in that supposedly-identical pair)
+            #   systemd-remount-fs        (failed on opi-zero2w-1 and -2)
+            #
+            # smbd/nmbd are absent because they were not measured, not because the NAS
+            # should go unwatched. Monitoring is read-only and does not violate
+            # CLAUDE.md's "never stop, restart, or reconfigure" — add them once
+            # confirmed present.
+            - --collector.systemd.unit-include=(backup-.+|ansible-drift-check|nfs-server|k3s|k3s-agent|containerd|docker|libvirtd|mosquitto)\.(service|timer)
             # Textfile collector, added 2026-08-29 for BACKLOG §3.11 — the
             # scheduled `ansible-playbook --check` drift report needs somewhere to
             # publish, and this is the path that already delivers to the phone via

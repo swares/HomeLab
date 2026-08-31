@@ -625,3 +625,44 @@ spec:
               H4 still has --collector.textfile.directory set and that
               /var/lib/node_exporter/textfile_collector/ansible_drift.prom exists and
               is group-writable.
+
+    # BACKLOG §3.16 — failed units outside the backup set.
+    #
+    # Until 2026-08-30 the systemd collector was scoped to backup-.+, so this rule
+    # could not have been written: the series did not exist. nfs-server on n150-1 was
+    # dead for 37 days inside that blind spot.
+    #
+    # NAME-SCOPED ON PURPOSE, and this filter — not the collector regex — is what
+    # keeps the rule quiet. The H4 and cluster nodes run the DaemonSet with a named
+    # include list, but rpi5 and the other external hosts run the Debian
+    # prometheus-node-exporter package with ARGS="", whose systemd collector defaults
+    # to unit-include=".+". EVERY unit on those hosts is already exposed. An unscoped
+    # `state="failed"` rule would therefore fire on arrival against smartmontools on
+    # SD-card boards, nvmf-autoconnect with no NVMe-oF, and openipmi on non-server
+    # hardware — eleven permanently-failing units fleet-wide, all of them correct.
+    #
+    # Every name below was verified active and healthy on 2026-08-30, so this ships
+    # green. Keep it that way: before adding a unit, check it is not already failed.
+    - name: lab.systemd-units
+      rules:
+        - alert: LabSystemdUnitFailed
+          # backup-.+ excluded — LabBackupUnitFailed already covers those at
+          # severity: critical, and two rules on one series is two pages.
+          expr: |
+            node_systemd_unit_state{
+              name=~"(ansible-drift-check|nfs-server|k3s|k3s-agent|containerd|docker|libvirtd|mosquitto|pihole-FTL|vault)\\.service",
+              state="failed"
+            } == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.name }} failed on {{ $labels.instance }}"
+            description: >
+              {{ $labels.name }} is in state=failed on {{ $labels.instance }}. Check
+              `systemctl status {{ $labels.name }}` and `journalctl -u {{ $labels.name }}`
+              — and do it promptly: the journal for the 2026-07-24 nfs-server failure
+              had already rotated away when it was found 37 days later, leaving three
+              timestamps and an exit code as the entire record. A unit with Restart=no
+              stays failed until a human intervenes; `enabled` says nothing about
+              whether it is running.
