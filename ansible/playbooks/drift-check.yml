@@ -60,6 +60,7 @@
       - playbooks/k3s-registry.yml
       - playbooks/ledger.yml
       - playbooks/libvirt-exporter.yml
+      - playbooks/mask-inapplicable-units.yml
       - playbooks/mount-nvme.yml
       - playbooks/mqtt.yml
       - playbooks/node-exporter.yml
