@@ -71,6 +71,80 @@
         backup: true
       notify: Restart resolved
 
+    # ---- a competing resolver that has never once worked ----------------------
+    # ADDED 2026-08-30, BACKLOG §3.16. The first fleet-wide `systemctl list-units
+    # --failed` sweep found dnsmasq.service FAILED and ENABLED on both OPi 5 Pros:
+    #
+    #     opi5pro-2   failed since 2026-07-19   (1 month 12 days)
+    #     opi5pro-1   failed since 2026-07-29   (1 month  3 days)
+    #
+    # Ten days apart, so two separate events rather than one bad push. Neither board
+    # is in the `dns` group, no playbook installs it, and `dpkg -S` traces the binary
+    # to dnsmasq-base with resolvconf in the reverse-depends chain — it arrived as a
+    # dependency, not by intent, and was enabled by the Debian package default.
+    #
+    # WHY IT FAILED IS UNRECOVERABLE: "journal has been rotated since unit was
+    # started" on both. That is the third time in one evening the record was already
+    # gone (nfs-server at 37 days, zswap-config, this) — §1.12's lesson repeating.
+    # So this deliberately does NOT claim a cause. A port-53 conflict with
+    # systemd-resolved is the obvious candidate and remains unproven.
+    #
+    # The cause does not change the action. THIS PLAYBOOK's whole purpose is making
+    # systemd-resolved the single DNS authority on these nodes; a second resolver
+    # enabled at boot is unwanted here whatever its exit code was. Disabled rather
+    # than purged, because dnsmasq-base is a dependency of packages that are wanted
+    # and removing the service wrapper is a bigger change than the finding justifies.
+    #
+    # GATED ON THE MEASURED FAILED STATE, NOT ON THE HOST LIST. This play also targets
+    # n150-1 and n150-2, which run libvirtd — libvirt spawns its own dnsmasq for the
+    # NAT network. That is a separate process from this unit, but the gate means these
+    # tasks simply never fire there: dnsmasq.service is not failed on either n150.
+    # Disabling a resolver on a hypervisor on the strength of a group membership,
+    # rather than on a measurement, is how a NAT network dies at 3am.
+    - name: Check whether a competing dnsmasq.service is in a failed state
+      ansible.builtin.command: systemctl is-failed dnsmasq.service
+      register: dnsmasq_failed_state
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Record what actually holds port 53 on this node
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        ss -lntup 2>/dev/null | awk '$5 ~ /:53$/ { print $1, $5, $7 }' | head -4
+      args:
+        executable: /bin/bash
+      register: port53_holders
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: dnsmasq_failed_state.stdout | trim == "failed"
+
+    - name: Report the competing resolver before disabling it
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: dnsmasq.service is FAILED and enabled; disabling it.
+          Port 53 is currently held by:
+          {{ port53_holders.stdout | trim | default('nothing listening — note this, it is unexpected', true) }}
+      when: dnsmasq_failed_state.stdout | trim == "failed"
+
+    - name: Disable the competing dnsmasq.service
+      ansible.builtin.systemd:
+        name: dnsmasq.service
+        state: stopped
+        enabled: false
+      when: dnsmasq_failed_state.stdout | trim == "failed"
+
+    # Stopping and disabling does NOT clear a recorded failure — measured on
+    # opi5pro-2 the same day, where removing zswap-config.service's unit file left
+    # `not-found failed` behind until reset-failed. Without this, the host reports a
+    # failed unit forever and node_systemd_unit_state keeps exporting state="failed"
+    # for a service nobody runs.
+    - name: Clear dnsmasq's recorded failure
+      ansible.builtin.command: systemctl reset-failed dnsmasq.service
+      when: dnsmasq_failed_state.stdout | trim == "failed"
+      changed_when: true
+
     - name: Ensure resolved drop-in directory exists
       ansible.builtin.file:
         path: /etc/systemd/resolved.conf.d
