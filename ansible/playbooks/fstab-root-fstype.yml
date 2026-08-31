@@ -1,0 +1,161 @@
+---
+# fstab-root-fstype.yml — repair root fstab lines that are missing the fstype field.
+#
+# BACKLOG §3.16. Found 2026-08-30 by the first fleet-wide `systemctl list-units
+# --failed` sweep, which reported systemd-remount-fs.service failed on two boards.
+#
+# THE DEFECT. /etc/fstab columns are:
+#
+#     <file system>  <dir>  <type>  <options>  <dump>  <pass>
+#
+# On opi-zero2w-1 and opi-zero2w-2 the root line has only FIVE fields:
+#
+#     PARTUUID=5910ca3d-02   /        defaults    0   1
+#
+# so mount reads `defaults` as the TYPE and `0` as the OPTIONS, and the kernel says
+# so plainly:
+#
+#     mount: /: fsconfig() failed: ext4: Unknown parameter '0'
+#
+# `findmnt --verify` reaches the same conclusion from the other direction:
+#     [W] defaults seems unsupported by the current kernel
+#     [W] defaults does not match with on-disk ext4
+#     [W] recommended root FS passno is 1 (current is 0)
+#
+# IMPACT IS SMALL BUT REAL, AND THE SILENCE IS THE POINT. Root is mounted rw by the
+# kernel from the boot cmdline before fstab is consulted, so the boards work and
+# `touch` succeeds — which is why this went unnoticed on opi-zero2w-1 since
+# 2024-07-06, TWO YEARS. What does not work is the remount: any option ever added to
+# `/` in fstab silently never applies, and the board reports a failed unit forever.
+#
+# THE FIX IS ONE TOKEN. Inserting `ext4` shifts the trailing `0 1` back into
+# dump/pass, producing exactly the intended line — no semantics are invented:
+#
+#     PARTUUID=5910ca3d-02   /   ext4   defaults   0   1
+#
+# SCOPE. Measured across all 12 reachable non-x86 boards: only these two match. Both
+# carry PARTUUID 5910ca3d, i.e. one cloned card. opi-zero2w-3 and -4 have correct
+# UUID-based fstabs from different provisioning. This play is therefore GATED ON THE
+# DEFECT, not on a host list — it repairs a re-flashed clone without being edited,
+# and does nothing everywhere else.
+#
+# WHY THIS IS CAUTIOUS. /etc/fstab decides whether a headless SD-card board boots,
+# and these have no console attached. So: back up first, match a deliberately narrow
+# regex, then PROVE the result by restarting the very unit that was failing rather
+# than by asserting the file looks right.
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/fstab-root-fstype.yml --check
+#   ansible-playbook -i inventory/hosts.yml playbooks/fstab-root-fstype.yml
+
+- name: Repair root fstab lines missing the fstype field
+  hosts: all:!x86_nodes:!embedded:!xu3-1
+  become: true
+  gather_facts: false
+  # One board at a time. Each edit touches the file that decides whether that board
+  # boots; a bad batch is a bad batch of bricks.
+  serial: 1
+
+  tasks:
+    # Detection is a field COUNT, not a text match, so it finds the defect on any
+    # future clone regardless of PARTUUID or options. check_mode: false because every
+    # task below gates on this and a skipped probe makes them unconditional.
+    - name: Find root fstab lines that are missing a field
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        awk '$0 !~ /^[[:space:]]*#/ && NF == 5 && $2 == "/" { print }' /etc/fstab
+      args:
+        executable: /bin/bash
+      register: malformed_root_line
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Report what was found
+      ansible.builtin.debug:
+        msg: >-
+          {{
+            'MALFORMED root fstab line (5 fields, needs 6): '
+              ~ (malformed_root_line.stdout | trim)
+            if (malformed_root_line.stdout | trim | length) > 0
+            else 'root fstab line is well-formed — nothing to do'
+          }}
+
+    - name: Back up fstab before touching it
+      ansible.builtin.copy:
+        src: /etc/fstab
+        dest: /etc/fstab.pre-fstype-repair
+        remote_src: true
+        force: false          # written once; never clobber the pristine copy
+        mode: "0644"
+      when: malformed_root_line.stdout | trim | length > 0
+
+    # Deliberately narrow. It matches ONLY: <something> / defaults <n> <n>
+    # — the exact shape measured. A line with any other type token, or a different
+    # field count, is left alone. Inserting `ext4` is the whole change; the trailing
+    # two numbers are untouched and simply land in the right columns.
+    - name: Insert the missing ext4 fstype on the root line
+      ansible.builtin.replace:
+        path: /etc/fstab
+        regexp: '^(\S+)\s+/\s+defaults\s+(\d+)\s+(\d+)\s*$'
+        replace: '\1  /  ext4  defaults  \2  \3'
+      when: malformed_root_line.stdout | trim | length > 0
+      notify: reload systemd after fstab change
+
+    - name: Flush handlers so systemd re-reads fstab before we verify
+      ansible.builtin.meta: flush_handlers
+
+    # PROVE IT, do not assert it. findmnt --verify parses fstab the way boot does,
+    # and restarting systemd-remount-fs runs the exact operation that has been failing
+    # — on a correct fstab it is a harmless no-op remount of an already-rw root.
+    # This is the only check that distinguishes "the file looks right" from "the thing
+    # that was broken now works", without rebooting a headless board to find out.
+    - name: Verify fstab parses the way boot will read it
+      ansible.builtin.command: findmnt --verify
+      register: fstab_verify
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: malformed_root_line.stdout | trim | length > 0
+
+    - name: Re-run the unit that was failing, as the real proof
+      ansible.builtin.command: systemctl restart systemd-remount-fs.service
+      register: remount_restart
+      changed_when: true
+      failed_when: false
+      when:
+        - not ansible_check_mode
+        - malformed_root_line.stdout | trim | length > 0
+
+    - name: Clear the recorded failure once the unit succeeds
+      ansible.builtin.command: systemctl reset-failed systemd-remount-fs.service
+      changed_when: true
+      failed_when: false
+      when:
+        - not ansible_check_mode
+        - malformed_root_line.stdout | trim | length > 0
+        - remount_restart.rc | default(1) == 0
+
+    - name: Confirm the repair worked
+      ansible.builtin.assert:
+        that:
+          - remount_restart.rc == 0
+          - "'0 errors' in fstab_verify.stdout or 'no errors' in fstab_verify.stdout"
+        fail_msg: >-
+          {{ inventory_hostname }}: fstab was edited but the repair is NOT proven.
+          systemd-remount-fs restart rc={{ remount_restart.rc | default('?') }}.
+          findmnt --verify said:
+          {{ fstab_verify.stdout | trim | default('<no output>', true) }}
+          The original file is at /etc/fstab.pre-fstype-repair — restore it before
+          rebooting this board.
+        success_msg: >-
+          {{ inventory_hostname }}: root fstab repaired and PROVEN —
+          systemd-remount-fs now starts cleanly and findmnt --verify is happy.
+      when:
+        - not ansible_check_mode
+        - malformed_root_line.stdout | trim | length > 0
+
+  handlers:
+    - name: reload systemd after fstab change
+      ansible.builtin.systemd:
+        daemon_reload: true
