@@ -147,9 +147,17 @@
     #   opi5pro-1   /dev/zram0          partition 7.8G     0B  PRIO  5
     #   opi5pro-2   /mnt/nvme/swapfile  file      8.0G  867.3M PRIO -2
     #
-    # An identical 8 GiB swapfile dated Jun 29 00:14 exists on BOTH — provisioning
-    # created it twice and only opi5pro-2 ever wired it into fstab. On opi5pro-1 it
-    # is dead space on the partition serving the Ollama model PV.
+    # An identical 8 GiB swapfile dated Jun 29 00:14 exists on BOTH, and only
+    # opi5pro-2 ever wired it into fstab. On opi5pro-1 it is dead space on the
+    # partition serving the Ollama model PV.
+    #
+    # CAUSE IDENTIFIED 2026-08-30 (this comment first said "provisioning", which was a
+    # guess): ansible/roles/zswap/ — an orphan role invoked by no playbook, deleted in
+    # the same change that added this block. It created the swapfile with
+    # `dd`+`mkswap`, added the fstab record via `posix.mount fstype=swap`, deployed
+    # zswap-config.service, and ran `swapoff /dev/zram0` under `zswap_disable_zram`.
+    # Its own defaults name these boards: "Set true on hosts that use zram for swap
+    # (OPi 5 Pros)". Every symptom found here traces to one manual run of that role.
     #
     # WHY THE SWAPFILE LOSES ON EVERY AXIS:
     #   - It wears flash on the SAME PARTITION that serves the ollama-models
@@ -288,6 +296,48 @@
           not what the image intends — check `zramctl` and whether a `swapoff -a` ran.
       when: "'zram' not in (swap_after_zram.stdout | default(''))"
 
+    # ---- remove the artefact of the old swapfile approach ---------------------
+    # ADDED 2026-08-30, BACKLOG §3.16. `zswap-config.service` was found FAILED on
+    # opi5pro-2 by the first fleet-wide `systemctl list-units --failed` sweep.
+    #
+    # Its origin is ansible/roles/zswap/ — an ORPHAN role invoked by no playbook,
+    # deleted in the same change that added this. That role created the swapfile, put
+    # it in fstab, deployed this unit, and — the part that explains everything —
+    # ran `swapoff /dev/zram0` under `zswap_disable_zram`. That is the exact state
+    # measured on opi5pro-2: zram0 created, correctly sized, mkswap'd, not active.
+    #
+    # The role also tried to disable `zram-generator` and `systemd-zram-setup@zram0`,
+    # which are Fedora/Arch unit names. These boards use `orangepi-zram-config`, so
+    # that half failed silently under `failed_when: false` — leaving the service
+    # enabled to keep RE-CREATING the device that nothing then swapped on.
+    #
+    # zswap is a compressed cache in FRONT of a swap device. With zram as the only
+    # swap here, zswap would be compressing already-compressed pages. There is
+    # nothing for it to do, and the unit fails anyway because it writes to
+    # /sys/module/zswap/parameters/ which these RK3588 kernels do not provide.
+    #
+    # Removal is idempotent: absent unit -> nothing to stop, nothing to delete.
+    - name: Check whether the legacy zswap-config unit is present
+      ansible.builtin.stat:
+        path: /etc/systemd/system/zswap-config.service
+      register: legacy_zswap_unit
+      check_mode: false
+
+    - name: Stop and disable the legacy zswap-config unit
+      ansible.builtin.systemd:
+        name: zswap-config.service
+        state: stopped
+        enabled: false
+      failed_when: false
+      when: legacy_zswap_unit.stat.exists
+
+    - name: Remove the legacy zswap-config unit file
+      ansible.builtin.file:
+        path: /etc/systemd/system/zswap-config.service
+        state: absent
+      when: legacy_zswap_unit.stat.exists
+      notify: reload systemd after removing zswap-config
+
     # lineinfile, NOT ansible.posix.mount. Swap records carry `none` in the
     # mount-point field, which is exactly what posix.mount matches on — pointing a
     # matcher at `none` inside the file that decides whether a headless node boots
@@ -342,3 +392,8 @@
         msg: >-
           {{ inventory_hostname }}: NVMe mounted at {{ nvme_mount }}
           (UUID={{ nvme_uuid.stdout | trim }}); swap = {{ swap_final.stdout | trim | default("none", true) | replace("\n", " / ") }}
+
+  handlers:
+    - name: reload systemd after removing zswap-config
+      ansible.builtin.systemd:
+        daemon_reload: true
