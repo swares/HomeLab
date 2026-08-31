@@ -2110,8 +2110,11 @@ Three are deliberately left failing:
 - `systemd-ask-password-*.path` — these deliver passphrase prompts. Masking them on
   hardware with no console means a box needing one at boot would never show it.
   Cleared, not masked; a recurrence is a finding.
-- `snap.lxd.activate` on h4-core — not hardware-absent. LXD on the NAS core is either
-  deliberate or leftover, and masking would bury the question.
+- `snap.lxd.activate` on h4-core — RESOLVED 2026-08-31 by removing LXD entirely.
+  A boot race with snapd.apparmor left it failed for 5 days; the unit restarts cleanly
+  now, but LXD had never run a container and was holding ~37.5 MiB on the NAS + k3s
+  control-plane node. `snap remove lxd` (no --purge, snapshot retained). See
+  docs/HARDWARE.md.
 
 **Why this is worth doing at all:** `systemctl list-units --failed` is now a tool this
 lab uses, and a sweep that always returns eleven expected failures is a sweep nobody
