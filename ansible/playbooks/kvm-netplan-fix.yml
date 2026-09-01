@@ -1,0 +1,213 @@
+---
+# kvm-netplan-fix.yml — resolve the netplan conflict on the KVM hypervisors.
+#
+# BACKLOG §4.12 (nameserver limit) and §3.16 (systemd-networkd-wait-online).
+# Found 2026-09-01. Two symptoms, one cause.
+#
+# THE CONFLICT. Two netplan files disagree about enp1s0, and netplan merges lexically
+# so the higher number wins:
+#
+#     10-kvm-bridge.yaml   enp1s0:  dhcp4: no      <- correct; it is a bridge port
+#     50-cloud-init.yaml   enp1s0:  dhcp4: true    <- cloud-init, and 50 > 10, so THIS WINS
+#
+# `netplan get ethernets.enp1s0` returns `dhcp4: true` on both hosts, and the file
+# networkd actually generated proves the consequence:
+#
+#     [Match]
+#     Name=enp1s0
+#     [Network]
+#     DHCP=ipv4          <- runs a DHCP client
+#     LinkLocalAddressing=no
+#     Bridge=br0         <- ...on an interface enslaved to a bridge
+#
+# A bridge port cannot complete a DHCP lease, so networkd never marks the link
+# SETUP=configured. THAT is why systemd-networkd-wait-online failed on both
+# hypervisors for over a month (n150-1 since 2026-06-29, n150-2 since 2026-07-25):
+# netplan's own drop-in waits for `-i enp1s0:carrier`, and the answer never comes.
+# §3.16 scoped the wait to br0 on 2026-08-31; that was a correct workaround for this.
+#
+# SECOND SYMPTOM, SAME FILE. br0 takes DHCP, and the router advertises two of the
+# lab's three DNS servers. systemd-resolved concatenates the global list (set by
+# node-dns.yml) with the per-link list, producing FIVE nameserver lines that are only
+# THREE distinct servers:
+#     .148 .116 .184   <- global, from 10-lab-dns.conf
+#     .184 .116        <- br0 link, from DHCP    DUPLICATES
+# The kubelet counts lines, not servers, so 3 unique resolvers trip a 3-server limit
+# and every pod on these nodes gets a DNSConfigForming warning. `use-dns: false` on
+# the bridge leaves the Ansible-managed three as the only source.
+#
+# WHY EDITING 50-cloud-init.yaml WOULD NOT WORK: cloud-init network regeneration is
+# NOT disabled on these hosts, so it rewrites that file at every boot. The H4 already
+# has the disable stanza (§4.12); the hypervisors never got it. That is fixed here
+# first, or nothing else survives a reboot.
+#
+# THIS PLAY WRITES AND VALIDATES. IT DOES NOT APPLY.
+# br0 on n150-1 carries the kube-vip VIPs 192.168.1.200 (control-plane) and
+# 192.168.1.201 (Traefik ingress) — confirmed by the kubevip-traefik-vip lease. An
+# apply that drops the bridge takes both with it. `netplan try` reverts after 120s if
+# not confirmed, and it prompts interactively, which Ansible cannot do. So the play
+# stops and hands over, exactly as h4-dns-resolvers.yml does.
+#
+# ORDER OF OPERATIONS ON THE HOSTS:
+#   1. Run this play (writes config, validates, applies nothing).
+#   2. On n150-2 FIRST — it holds no VIPs:
+#        sudo netplan try          # confirm within 120s, or it reverts itself
+#   3. Verify: grep -c nameserver /run/systemd/resolve/resolv.conf   -> 3
+#              networkctl list | grep enp1s0                          -> configured
+#   4. Only then repeat on n150-1, watching that .200/.201 survive.
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/kvm-netplan-fix.yml --check --diff
+#   ansible-playbook -i inventory/hosts.yml playbooks/kvm-netplan-fix.yml
+
+- name: Resolve the netplan conflict on the KVM hypervisors
+  hosts: kvm_hosts
+  become: true
+  gather_facts: false
+  serial: 1
+
+  vars:
+    bridge_file: /etc/netplan/10-kvm-bridge.yaml
+    cloudinit_file: /etc/netplan/50-cloud-init.yaml
+
+  tasks:
+    - name: Confirm the expected links exist before touching anything
+      ansible.builtin.command: "networkctl status {{ item }}"
+      loop: [enp1s0, br0]
+      changed_when: false
+      failed_when: false
+      register: link_check
+      check_mode: false
+
+    - name: Refuse to continue if either link is missing
+      ansible.builtin.assert:
+        that:
+          - link_check.results | selectattr('rc', 'ne', 0) | list | length == 0
+        fail_msg: >-
+          {{ inventory_hostname }}: expected links enp1s0 and br0 were not both found.
+          This play assumes the standard KVM bridge layout and will not guess.
+
+    - name: Record the state we are trying to change
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "nameserver_lines=$(grep -c nameserver /run/systemd/resolve/resolv.conf)"
+        echo "enp1s0_setup=$(networkctl list --no-legend | awk '$2 == "enp1s0" { print $5 }')"
+        echo "effective_dhcp4=$(netplan get ethernets.enp1s0 2>/dev/null | tr -d ' ')"
+      args:
+        executable: /bin/bash
+      register: before_state
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Show the before state
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} BEFORE: {{ before_state.stdout_lines | default([]) | join(' | ') }}"
+
+    # ---- 1. stop cloud-init rewriting the netplan at every boot ---------------
+    # Without this, 50-cloud-init.yaml comes back and enp1s0 goes back to dhcp4: true
+    # on the next reboot. The H4 has carried this file since §4.12; the hypervisors
+    # never got it, which is why this conflict survived.
+    - name: Stop cloud-init from regenerating the network config
+      ansible.builtin.copy:
+        dest: /etc/cloud/cloud.cfg.d/99-disable-network-config.cfg
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible (playbooks/kvm-netplan-fix.yml) — BACKLOG §4.12.
+          # Without this, cloud-init rewrites /etc/netplan/50-cloud-init.yaml on boot
+          # and restores `enp1s0: dhcp4: true`, which conflicts with the bridge
+          # definition in 10-kvm-bridge.yaml and leaves the port stuck at
+          # SETUP=configuring forever.
+          network: {config: disabled}
+
+    # ---- 2. remove the conflicting file, keeping a pristine copy --------------
+    - name: Preserve the cloud-init netplan before removing it
+      ansible.builtin.copy:
+        src: "{{ cloudinit_file }}"
+        dest: "{{ cloudinit_file }}.orig"
+        remote_src: true
+        force: false          # written once; never clobber
+        mode: "0600"
+
+    - name: Remove the conflicting cloud-init netplan
+      ansible.builtin.file:
+        path: "{{ cloudinit_file }}"
+        state: absent
+
+    # ---- 3. the bridge definition, with DHCP-supplied DNS suppressed ----------
+    # Written in full rather than patched: the file is 12 lines, both hosts are
+    # byte-identical, and a deterministic file is easier to review than an insertion
+    # into YAML whose indentation decides whether a hypervisor has a network.
+    - name: Write the bridge definition
+      ansible.builtin.copy:
+        dest: "{{ bridge_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+        backup: true
+        content: |
+          # Managed by Ansible (playbooks/kvm-netplan-fix.yml).
+          #
+          # enp1s0 is a BRIDGE PORT: dhcp4 must be `no`. Until 2026-09-01 this was
+          # overridden by 50-cloud-init.yaml (dhcp4: true, and 50 sorts after 10), so
+          # networkd generated DHCP=ipv4 alongside Bridge=br0 and the link never
+          # reached SETUP=configured. That broke systemd-networkd-wait-online on both
+          # hypervisors for over a month.
+          #
+          # dhcp4-overrides.use-dns: the router advertises two of the lab's three DNS
+          # servers on this bridge. systemd-resolved concatenates them with the global
+          # list from node-dns.yml, producing five nameserver lines for three distinct
+          # servers — over the kubelet's limit of three, hence DNSConfigForming on
+          # every pod here. DNS policy belongs to node-dns.yml; DHCP should not also
+          # supply it.
+          network:
+            version: 2
+            ethernets:
+              enp1s0:
+                dhcp4: no
+            bridges:
+              br0:
+                interfaces: [enp1s0]
+                dhcp4: yes
+                dhcp4-overrides:
+                  use-dns: false
+                parameters:
+                  stp: false
+                  forward-delay: 0
+
+    # ---- 4. validate the merged config WITHOUT applying it --------------------
+    # netplan generate parses every file in /etc/netplan and writes the networkd units
+    # to /run, but changes nothing live. check_mode: false so a dry run still proves
+    # the config parses — otherwise --check verifies nothing at all.
+    - name: Validate the merged netplan without applying it
+      ansible.builtin.command: netplan generate
+      register: netplan_generate
+      changed_when: false
+      failed_when: netplan_generate.rc != 0
+      check_mode: false
+
+    - name: Confirm the generated unit no longer gives a bridge port its own DHCP
+      ansible.builtin.shell: >-
+        set -o pipefail;
+        grep -c '^DHCP=' /run/systemd/network/*enp1s0*.network 2>/dev/null || echo 0
+      args:
+        executable: /bin/bash
+      register: enp1s0_dhcp_lines
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Stop here and hand over
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: config written and `netplan generate` accepted it.
+          The generated enp1s0 unit now has
+          {{ enp1s0_dhcp_lines.stdout | trim }} DHCP= line(s) (was 1, want 0).
+          NOTHING HAS BEEN APPLIED to the running network.
+          Now, ON THAT HOST: sudo netplan try  — it reverts itself after 120s unless
+          you confirm. Do n150-2 first (it holds no VIPs); n150-1 carries
+          192.168.1.200 and 192.168.1.201. Then verify:
+          `grep -c nameserver /run/systemd/resolve/resolv.conf` returns 3, and
+          `networkctl list` shows enp1s0 as configured rather than configuring.
