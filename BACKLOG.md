@@ -2104,9 +2104,37 @@ failing" alone would suppress a genuinely broken monitor on a box that does have
 
 Three are deliberately left failing:
 
-- `systemd-networkd-wait-online` — masking breaks `network-online.target` ordering, so
-  services would start before the network is up. That trades a cosmetic failure for a
-  real one. The fix is scoping which interface it waits for; its own job.
+- `systemd-networkd-wait-online` — **RESOLVED 2026-08-31** by
+  `playbooks/network-online-wait.yml`, and it was TWO different faults, not one:
+
+  **n150-1 / n150-2.** netplan had ALREADY scoped the wait — my prediction that
+  `--interface=br0` was missing was wrong. Its generated drop-in waits for BOTH links:
+  `-i br0:degraded -i enp1s0:carrier`. `enp1s0` is a bridge slave that never leaves
+  `SETUP=configuring`, so the wait hung on a port while `br0` had been routable since
+  boot — carrying, on n150-1, the kube-vip VIPs .200 and .201. Fixed with an /etc
+  drop-in named `20-lab-scope.conf`, which sorts after netplan's `10-netplan.conf` and
+  resets ExecStart to wait on the bridge alone. Proven by restarting the unit, not by
+  inspecting the file.
+
+  **opi-zero2w-1 / -2.** Not a tuning problem: **NetworkManager and systemd-networkd
+  are both running**, every link is `unmanaged` by networkd, so its wait-online waits
+  for zero links and times out by definition. `NetworkManager-wait-online` is enabled
+  and active on both, so `network-online.target` already had a working provider —
+  which is what made disabling networkd's version safe rather than the
+  ordering-guarantee-destroying move that masking would have been. DISABLED, not
+  masked, so switching back to networkd re-enables normally.
+
+  The play discovers the bridge (the link networkd reports `routable` + `configured`)
+  rather than hardcoding `br0`, and refuses to act — printing `UNHANDLED` — when the
+  unit fails but neither branch applies.
+
+  **This took the fleet to ZERO failed units on every reachable host**, the first time
+  that has been true. `systemctl list-units --failed` is now a check where any output
+  at all is a finding, which is the whole point of §3.16.
+
+  Still unexplained and worth its own look: WHY `enp1s0` never reaches
+  `SETUP=configured` on either hypervisor. Waiting on the bridge is correct regardless,
+  but that is a workaround for a netplan/networkd behaviour nobody has understood.
 - `systemd-ask-password-*.path` — these deliver passphrase prompts. Masking them on
   hardware with no console means a box needing one at boot would never show it.
   Cleared, not masked; a recurrence is a finding.
@@ -2758,21 +2786,66 @@ apply it** — the apply step is `netplan try`, by hand, deliberately.
       Also established: **`enp2s0` is the primary interface**, carrying `.160` and both
       kube-vip VIPs. It is not a spare, and changes to it risk the cluster API and every
       ingress at once.
-- [ ] **Reboot the H4 at a quiet moment.** Cloud-init network regeneration is now
-      disabled, so boot-time networking rests entirely on the two netplan files.
-      `netplan try` cannot test that path. Backup is at
-      `/etc/netplan/50-cloud-init.yaml.bak-2026-08-21`.
-- [ ] Confirm no *new* `DNSConfigForming` events for `odroid-nas`. Existing pods keep
-      their old `resolv.conf`, so this only shows as pods are recreated. Checkable now
-      only because events are retained (§3.9).
+- [x] **Reboot the H4** — **DONE 2026-08-31, and it worked.** The boot-time path that
+      `netplan try` cannot test came up clean. Measured immediately after:
+
+          $ grep -c nameserver /run/systemd/resolve/resolv.conf
+          3
+          nameserver 192.168.1.148
+          nameserver 192.168.1.116
+          nameserver 192.168.1.184
+
+      **That number was 6.** `.152` is gone. All five k3s nodes returned `Ready`, both
+      backup timers active, zero failed units after boot. The pristine backup is now at
+      `/etc/netplan/50-cloud-init.yaml.orig` (§3.11 promoted it from the dated copy).
+- [x] Confirm no *new* `DNSConfigForming` events for `odroid-nas` — **CONFIRMED
+      2026-08-31.** Events kept firing 3–4 minutes after the reboot, which looked like a
+      failed fix until the pods were attributed:
+
+          node-exporter tch26 -> n150-2      node-exporter k8f96 -> n150-1
+          kube-vip 7tzlg      -> n150-2
+
+      Every recent event is a pod on an N150. **None on `odroid-nas`.** Worth noting how
+      close this came to a wrong conclusion: the events' applied line reads
+      `.148 .116 .184`, which is exactly what the H4 now has — so the message looks like
+      it is describing the fixed host. Only `-o wide` distinguishes them.
 - [ ] Decide whether the H4 should join `node-dns.yml` rather than staying unmanaged.
       Being the only unmanaged node is how this happened.
 - [x] **`lab_dns_servers` in `node-dns.yml` corrected** 2026-08-21, from
       `.148 .184 .217` (one Pi-hole, two dnsmasq) to `.148 .116 .184` (two Pi-holes,
-      one dnsmasq). **Not yet applied** — it touches all four managed nodes and wants
-      its own `--check`.
-- [ ] **The N150 warning will persist after that change**, and this is the part worth
-      understanding. `node-dns.yml` writes a *routing-only* drop-in
+      one dnsmasq). ~~**Not yet applied**~~ — **APPLIED 2026-08-31**, incidentally: the
+      play was run for real to disable a competing dnsmasq (§3.16), and the drop-in on
+      all four managed nodes now reads `DNS=192.168.1.148 192.168.1.116 192.168.1.184`.
+      Verified by reading `/etc/systemd/resolved.conf.d/10-lab-dns.conf` on n150-1 and
+      n150-2. A correction that sat unapplied for ten days went out as a side effect of
+      unrelated work — which is §3.11's whole thesis, arriving from the other direction.
+- [ ] **The N150 warning persists, exactly as predicted** — and 2026-08-31 measured the
+      composition rather than inferring it. Both hypervisors carry FIVE lines that are
+      only THREE distinct servers:
+
+          nameserver 192.168.1.148    <- global, from node-dns.yml's 10-lab-dns.conf
+          nameserver 192.168.1.116    <- global
+          nameserver 192.168.1.184    <- global
+          nameserver 192.168.1.184    <- br0 link, from DHCP   DUPLICATE
+          nameserver 192.168.1.116    <- br0 link, from DHCP   DUPLICATE
+
+      `resolvectl dns` shows it plainly: `Global: .148 .116 .184` and
+      `Link 4 (br0): .184 .116`. The kubelet counts LINES, not distinct servers, so
+      three unique resolvers trip a three-server limit. Nothing here is stale or wrong;
+      **our own drop-in collides with what the router advertises on the bridge.**
+
+      THE FIX, not yet applied: `dhcp4-overrides: {use-dns: false}` on the br0 definition
+      in netplan, leaving the Ansible-managed three as the only source. Takes both hosts
+      to exactly 3.
+
+      WHY IT WAS NOT DONE THE SAME NIGHT: it is a netplan change on both KVM
+      hypervisors, and `br0` on n150-1 was carrying the kube-vip VIPs **.200 and .201**
+      at the time. An apply that briefly drops the bridge takes the control-plane VIP
+      and the ingress VIP with it. `netplan try` reverts after 120 s so it is
+      survivable, but it wants doing deliberately, with the current VIP holder known,
+      and one node at a time. Same posture `h4-dns-resolvers.yml` already takes.
+
+      Original reasoning, which was correct: `node-dns.yml` writes a *routing-only* drop-in
       (`Domains=~lab.home.arpa`), so its three servers apply to lab queries while the
       nodes' global resolvers still come from DHCP. The union is what the kubelet
       truncates. Correcting the list fixes *which* three get used; it does not reduce
@@ -2783,7 +2856,9 @@ apply it** — the apply step is `netplan try`, by hand, deliberately.
       opi-zero2w-1 (`.184`) "secondary DNS", while `README.md` lists `.184` as the
       *tertiary* dnsmasq fallback and rpi4b (`.116`) as the Pi-hole secondary. One is
       wrong and it is load-bearing for the decision above.
-- [ ] Decide whether `.152` should exist at all. An address documented as "avoid" that
+- [ ] Decide whether `.152` should exist at all. **It is no longer on the H4** as of
+      the 2026-08-31 reboot — that resolver list is now `.148 .116 .184`. The question
+      stands for anywhere else it may be configured. An address documented as "avoid" that
       is nonetheless in a production resolver list is worse than an undocumented one.
 
 **A fourth set (`.148 .184 .152`) appeared under `node-exporter-tqxdl`** — a pod that
@@ -2886,10 +2961,33 @@ different, cheaper change, and it is not what this entry describes.
 - [ ] **Non-cluster hosts only, to begin with** — the Pis and Zero 2Ws. They are the
       ones that are actually inconsistent, they carry no `kubernetes.io/hostname`
       selectors, and the blast radius is a reboot.
-- [ ] Identify `orangepizero2w` before touching it. An unattributed host on the
-      network is its own small finding.
-- [ ] Resolve the `opi-zero2w-4` / `opizero2w-4` duplicate — confirm it is one machine
-      renamed, not two.
+- [x] Identify `orangepizero2w` — **ANSWERED 2026-08-31.** It is `opi-zero2w-3`
+      (192.168.1.217, Armbian Trixie, DNS secondary). Not an unattributed host; just a
+      board whose hostname was never set past the image default.
+- [x] Resolve the `opi-zero2w-4` / `opizero2w-4` duplicate — **ANSWERED 2026-08-31, and
+      THERE IS NO DUPLICATE. They are two different machines**, which is worse than a
+      duplicate would have been. Measured `/etc/hostname` and `hostnamectl --static` on
+      all four boards:
+
+      | inventory name | IP    | ACTUAL hostname  | role                |
+      |----------------|-------|------------------|---------------------|
+      | opi-zero2w-1   | .184  | **opizero2w-4**  | **DNS secondary**   |
+      | opi-zero2w-2   | .188  | **opizero2w-1**  | MQTT broker         |
+      | opi-zero2w-3   | .217  | **orangepizero2w** | DNS secondary     |
+      | opi-zero2w-4   | .99   | opi-zero2w-4     | MQTT secondary      |
+
+      Only one of four matches. **The dangerous pair: `opizero2w-4` is the hostname of
+      the board inventory calls `opi-zero2w-1` — the DNS secondary at .184. A DIFFERENT
+      board, at .99, is named `opi-zero2w-4` in inventory and runs MQTT.** Anyone who
+      reads `opizero2w-4` in a journal line, Loki label or alert annotation and then
+      runs `ansible opi-zero2w-4 ...` operates on the wrong machine — MQTT instead of
+      DNS, and CLAUDE.md is explicit that DNS is load-bearing here.
+
+      Found 2026-08-31 while chasing `systemd-remount-fs`: the journal on the host
+      Ansible addressed as `opi-zero2w-2` printed `opizero2w-1`, which is what made the
+      names worth checking at all. Neither .184 nor .188 has the `hostname` binary
+      installed, so `hostname` returns nothing and the mismatch is invisible to the
+      obvious check — `cat /etc/hostname` is required.
 - [ ] **Cluster nodes: flag, do not perform.** `odroid-nas`, `n150-1`, `n150-2`,
       `opi5pro-1`, `opi5pro-2` already match their inventory names, so there is
       nothing to fix and every reason not to touch them. If a rename is ever genuinely
