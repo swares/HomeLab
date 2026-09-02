@@ -69,6 +69,10 @@
   vars:
     bridge_file: /etc/netplan/10-kvm-bridge.yaml
     cloudinit_file: /etc/netplan/50-cloud-init.yaml
+    # NOT inside /etc/netplan. netplan globs that directory, and leaving backups
+    # there invites a stale copy being read as live config. The first draft of this
+    # play used `backup: true` and a `.orig` sibling — both wrong for the same reason.
+    netplan_backup_dir: /var/backups/netplan
 
   tasks:
     - name: Confirm the expected links exist before touching anything
@@ -123,13 +127,24 @@
           network: {config: disabled}
 
     # ---- 2. remove the conflicting file, keeping a pristine copy --------------
-    - name: Preserve the cloud-init netplan before removing it
+    - name: Ensure the backup directory exists, outside /etc/netplan
+      ansible.builtin.file:
+        path: "{{ netplan_backup_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Preserve both netplan files before changing anything
       ansible.builtin.copy:
-        src: "{{ cloudinit_file }}"
-        dest: "{{ cloudinit_file }}.orig"
+        src: "{{ item }}"
+        dest: "{{ netplan_backup_dir }}/{{ item | basename }}.orig"
         remote_src: true
-        force: false          # written once; never clobber
+        force: false          # written once; never clobber the pristine copy
         mode: "0600"
+      loop:
+        - "{{ cloudinit_file }}"
+        - "{{ bridge_file }}"
 
     - name: Remove the conflicting cloud-init netplan
       ansible.builtin.file:
@@ -146,7 +161,8 @@
         owner: root
         group: root
         mode: "0600"
-        backup: true
+        # NO `backup: true` — it writes the backup alongside, inside /etc/netplan.
+        # The pristine copies are taken above, into {{ netplan_backup_dir }}.
         content: |
           # Managed by Ansible (playbooks/kvm-netplan-fix.yml).
           #
@@ -178,33 +194,71 @@
                   forward-delay: 0
 
     # ---- 4. validate the merged config WITHOUT applying it --------------------
-    # netplan generate parses every file in /etc/netplan and writes the networkd units
-    # to /run, but changes nothing live. check_mode: false so a dry run still proves
-    # the config parses — otherwise --check verifies nothing at all.
+    # NOT `check_mode: false`, and that was a real defect on the first attempt.
+    #
+    # With check_mode: false these ran during a --check, where the config files above
+    # had NOT been written — so `netplan generate` regenerated from the ORIGINAL
+    # config and the DHCP check reported the pre-change state as though it described
+    # the post-change one. The guard built to prevent a wrong conclusion produced one.
+    # It also wrote /run/systemd/network during a dry run, which is exactly what
+    # --check exists to avoid.
+    #
+    # A dry run cannot validate a file it did not write. Say so instead of pretending.
     - name: Validate the merged netplan without applying it
       ansible.builtin.command: netplan generate
       register: netplan_generate
       changed_when: false
       failed_when: netplan_generate.rc != 0
-      check_mode: false
+      when: not ansible_check_mode
 
-    - name: Confirm the generated unit no longer gives a bridge port its own DHCP
+    # Match the VALUE, not the presence of a DHCP= line. The first version counted
+    # lines matching ^DHCP= — which matches `DHCP=no` and `DHCP=ipv4` identically, so
+    # success and failure produced the same number.
+    - name: Read what the generated enp1s0 unit says about DHCP
       ansible.builtin.shell: >-
         set -o pipefail;
-        grep -c '^DHCP=' /run/systemd/network/*enp1s0*.network 2>/dev/null || echo 0
+        awk -F= '/^DHCP=/ { print $2 }' /run/systemd/network/10-netplan-enp1s0.network
+        2>/dev/null | head -1
       args:
         executable: /bin/bash
-      register: enp1s0_dhcp_lines
+      register: enp1s0_dhcp_value
       changed_when: false
       failed_when: false
-      check_mode: false
+      when: not ansible_check_mode
+
+    - name: Confirm the bridge port no longer runs its own DHCP client
+      ansible.builtin.assert:
+        that:
+          - (enp1s0_dhcp_value.stdout | trim) in ["no", ""]
+        fail_msg: >-
+          {{ inventory_hostname }}: the generated enp1s0 unit still says
+          DHCP={{ enp1s0_dhcp_value.stdout | trim | default('<empty>', true) }}.
+          Something still declares enp1s0 with dhcp4 true — check `netplan get
+          ethernets.enp1s0` and `ls /etc/netplan/`. DO NOT run `netplan try`.
+          Pristine copies are in {{ netplan_backup_dir }}.
+        success_msg: >-
+          {{ inventory_hostname }}: enp1s0 unit now says
+          DHCP={{ enp1s0_dhcp_value.stdout | trim | default('(absent)', true) }} —
+          the bridge port no longer runs a DHCP client it can never complete.
+      when: not ansible_check_mode
+
+    - name: DRY RUN — say plainly that nothing was validated
+      ansible.builtin.debug:
+        msg: >-
+          DRY RUN on {{ inventory_hostname }}. The diffs above are what WOULD be
+          written. `netplan generate` was NOT run and nothing was validated — a dry run
+          cannot validate files it did not write. Re-run without --check to write the
+          config and verify it.
+      when: ansible_check_mode
 
     - name: Stop here and hand over
+      when: not ansible_check_mode
       ansible.builtin.debug:
         msg: >-
           {{ inventory_hostname }}: config written and `netplan generate` accepted it.
-          The generated enp1s0 unit now has
-          {{ enp1s0_dhcp_lines.stdout | trim }} DHCP= line(s) (was 1, want 0).
+          The generated enp1s0 unit now says
+          DHCP={{ enp1s0_dhcp_value.stdout | trim | default('(absent)', true) }}
+          (was ipv4; want no or absent).
           NOTHING HAS BEEN APPLIED to the running network.
           Now, ON THAT HOST: sudo netplan try  — it reverts itself after 120s unless
           you confirm. Do n150-2 first (it holds no VIPs); n150-1 carries
