@@ -135,6 +135,15 @@
         group: root
         mode: "0700"
 
+    # SKIPPED UNDER --check, and this is a CHECK-MODE CASCADE, not caution.
+    # The task above reports `changed` for the directory without creating it, so this
+    # copy fails on "Destination directory does not exist" during a dry run — the same
+    # shape as github-runner.yml's get_url -> unarchive and mount-nvme.yml's
+    # file -> link, both fixed earlier in this repo. Written 2026-09-01 by someone who
+    # had spent the previous evening removing three of these.
+    #
+    # Gated rather than given check_mode: false, because creating a directory during a
+    # dry run is still a mutation, and --check exists precisely to not do that.
     - name: Preserve both netplan files before changing anything
       ansible.builtin.copy:
         src: "{{ item }}"
@@ -145,6 +154,7 @@
       loop:
         - "{{ cloudinit_file }}"
         - "{{ bridge_file }}"
+      when: not ansible_check_mode
 
     - name: Remove the conflicting cloud-init netplan
       ansible.builtin.file:
