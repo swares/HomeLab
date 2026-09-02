@@ -60,6 +60,18 @@
           # servicelb is k3s's built-in LB — assigns node IP to LoadBalancer services (Traefik needs this)
           # Write kubeconfig world-readable so the ansible user can read it
           write-kubeconfig-mode: "0644"
+          # Bind the embedded etcd metrics listener to the node IP as well as
+          # loopback, so Prometheus (a pod on another node) can scrape it.
+          # BACKLOG §3.2 — without this it is 127.0.0.1-only and quorum loss is
+          # invisible on a 3-node HA cluster.
+          #
+          # NOTE: this task WRITES the config, it does not restart k3s. Re-running
+          # this play on a live server updates the file and changes nothing until
+          # the next restart. Applying it to a running cluster is
+          # playbooks/k3s-etcd-metrics.yml, which restarts the voters one at a time
+          # behind a quorum gate. This line exists so a rebuild does not silently
+          # lose the setting.
+          etcd-expose-metrics: true
 
     - name: Check if k3s is already installed
       ansible.builtin.stat:

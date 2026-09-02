@@ -1547,8 +1547,84 @@ collector "cannot read `/run/systemd/private`" — a diagnosis that
 cannot fire`. It is now suppressing a working metric. One of the two key names is also
 the non-existent `..._last_trigger_time_seconds`.
 
-### 3.2 No etcd metrics, therefore no quorum-loss alerting
+### 3.2 No etcd metrics, therefore no quorum-loss alerting — **HALF DONE 2026-09-02: endpoint exposed, nothing scrapes it yet**
+
 `docs/REVIEW-2026-07-24.md:306` (H26) — `kubeEtcd: enabled: false` on a 3-node HA cluster.
+Losing one etcd voter is survivable and silent; losing two stops the cluster. Nothing
+today reports the difference between three healthy members and two.
+
+**THE OBVIOUS FIX IS WRONG, and this is the finding that scopes the work.** Setting
+`kubeEtcd: enabled: true` in `monitoring.yaml` is not sufficient and must not be done
+first. Measured on h4-core 2026-09-02, both curls run **from h4-core itself**:
+
+    http://127.0.0.1:2381/metrics       -> 200
+    http://192.168.1.160:2381/metrics   -> 000      <- its own LAN IP
+
+Same host, two addresses. No network path, no second machine, no firewall in between —
+so this is purely a bind-address fact: k3s binds the etcd metrics listener to loopback
+only. Prometheus runs as a pod on n150-1 and cannot reach a loopback port on three
+different machines. Enabling `kubeEtcd` alone would create a target that exists and
+never scrapes, which reads as coverage on every dashboard. That is §3.16's shape and it
+is worse than having no target at all.
+
+(The first version of that test was going to be "curl from a different node", which
+would have confounded binding with routing. Running both from the same box was
+accidental and strictly better — it removes every variable except the one in question.)
+
+**Estimate, revised.** This was called "a one-line Helm value plus alerts, about fifteen
+minutes" earlier the same day. That was wrong. It is a control-plane change: an Ansible
+config change plus a rolling restart of three etcd voters, then the monitoring side.
+**2–3 hours**, in two halves that verify independently.
+
+#### Half one — DONE 2026-09-02, applied via `playbooks/k3s-etcd-metrics.yml`
+
+- [x] `etcd-expose-metrics: true` added to `k3s-h4.yml` and `k3s-ha-join.yml` so a
+      rebuild keeps it. **Those plays write the config and do not restart k3s** — on a
+      live server they change the file and nothing else until the next restart, which
+      is why applying it needs its own playbook rather than a re-run.
+- [x] `playbooks/k3s-etcd-metrics.yml` — `serial: 1` with `any_errors_fatal: true`
+      across the three voters, each gated on a pre-flight health check that refuses to
+      restart anything unless every node is Ready and `/healthz/etcd` says `ok`.
+
+      The pre-flight gate asserts **`total >= 3`** as well as `notready == 0`,
+      deliberately: a failed `kubectl` produces empty output, a bad-node count of 0,
+      and a gate that passes on a cluster it never saw. Node count is the value no
+      failed call can fabricate.
+
+      The closing assert reads `etcd_server_has_leader` **from the node IP, never
+      loopback** — one number that cannot be produced unless the listener actually
+      moved *and* etcd is healthy. A check against 127.0.0.1 would have passed before
+      any of this existed, which is the whole point.
+
+- [ ] **Run order: `n150-2`, then `n150-1`, then `h4-core`**, one host per invocation,
+      `--check` first. n150-2 holds no kube-vip VIPs; h4-core is the NAS core and the
+      original cluster-init node, so it goes last. Restarting k3s does not touch
+      `smbd`/`nfs-server` — those are host services outside the cluster.
+
+      If the assert fails with `http_code=000`, the flag did not take: see
+      k3s-io/k3s#6833 and use `etcd-arg: listen-metrics-urls=http://127.0.0.1:2381,
+      http://<node-ip>:2381` instead. **Do not repoint the check at loopback** — that
+      is the condition being fixed.
+
+#### Half two — NOT STARTED, and this is the handoff note
+
+After half one the lab has **an open metrics port with no consumer**. That is a
+deliberate intermediate state, not an abandoned one, and it is written down here
+precisely because six months from now it would be impossible to tell which.
+
+- [ ] `kubeEtcd` in `gitops/apps/monitoring.yaml` needs **explicit** configuration, not
+      just `enabled: true`. The chart's defaults assume port 2379 with client certs
+      against `kube-system` etcd static pods, none of which exist under k3s's embedded
+      etcd. It needs `endpoints:` listing the three node IPs, `port: 2381`, and
+      `scheme: http`.
+- [ ] Verify the way everything else was verified this week: the target `up == 1` for
+      all three, `etcd_server_has_leader == 1` × 3, and the built-in
+      `etcdMembersDown` / `etcdInsufficientMembers` rules present in `/api/v1/rules`.
+      A rule group that fails to load is silent, not broken.
+- [ ] Most of the remaining uncertainty is in the value shape, and it fails **silently**
+      by default — a wrong `endpoints` list gives a green Argo Application and a target
+      that never scrapes. Budget for iterating, and treat "the target exists" as the
+      beginning of the check rather than the end of it.
 
 ### 3.3 ~~Nothing verifies that DNS actually resolves~~ — **BUILT AND VERIFIED 2026-09-02**
 
