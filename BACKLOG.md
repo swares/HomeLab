@@ -3113,12 +3113,44 @@ urgent.
 
 **To do:**
 
-- [ ] Give Alloy a persistent `storagePath` on a volume that survives restarts. This
-      means adding a volume to a DaemonSet, so it wants its own PR and its own
-      verification — deliberately not bundled with the §3.9 mount fix.
-- [ ] Decide whether Loki's `reject_old_samples_max_age` should be raised. Probably
-      not: the rejection is correct behaviour and raising it would let stale replays
-      land silently, which is worse than the noise.
+- [x] **Persistent `storagePath`** — done 2026-09-02. `hostPath /var/lib/alloy`
+      (`DirectoryOrCreate`), mounted read-write, with `alloy.storagePath` pointed at it.
+
+      Confirmed against the running pod before writing anything, rather than inferring
+      from the rejection messages:
+
+          --storage.path=/tmp/alloy                     <- chart default, as claimed
+          /tmp/alloy/loki.source.journal.systemd/       <- the position stores
+          /tmp/alloy/loki.source.kubernetes.pods/
+          28K total, mtimes updating minutes before the check
+
+      The positions were being written correctly all along and discarded on restart.
+      28K per node to keep them.
+
+      `DirectoryOrCreate` here is deliberately the OPPOSITE of the journal volume's
+      `Directory`, and the contrast is worth keeping: the journal MUST pre-exist —
+      its absence is §3.9's bug, so auto-creating it would hide the fault behind a
+      silently-succeeding mount. Alloy's state directory legitimately does not exist
+      before its first run on a node, so creating it empty is correct rather than a
+      mask. Same option, opposite meanings, ten lines apart in the same file.
+
+      No fsGroup or chown initContainer needed: Alloy runs as uid 0 (verified — `id`
+      in the pod, and an empty securityContext), so a kubelet-created root:root
+      directory is writable.
+
+- [x] **`reject_old_samples_max_age`: NOT raised** — decided 2026-09-02, and the
+      original reasoning holds with an extra argument on top.
+
+      The rejection is correct behaviour. Raising the window would let stale replays
+      land silently, trading visible noise for invisible bad data — strictly worse.
+
+      And as of today it would also be futile: Loki's compactor retention was enabled
+      the same day (§3.14), so anything older than 30d is now actively deleted.
+      Widening the acceptance window would ingest data destined for immediate
+      deletion — cost with no benefit.
+
+      Left unset, so Loki's default applies. Recorded here so the next person hitting
+      the rejection messages knows it was considered and declined, not overlooked.
 
 ### 4.16 Decide whether cluster nodes should resolve public DNS through the lab
 
