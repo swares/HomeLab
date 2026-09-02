@@ -69,6 +69,16 @@ Read this before acting. Full context is in `docs/` (start with `ARCHITECTURE.md
   `ansible/playbooks/dns.yml`. **Not `192.168.1.160`** — that was the H4's own node IP
   until 2026-07-27, a single A record whose loss took down every service URL in the
   lab. If you find `.160` on the wildcard, that is the fault, not the fix.
+  (`.160` on `h4-core.lab.home.arpa` is correct and expected — it is the H4's node
+  IP. Only the *wildcard* pointing there is the fault.)
+- **DNS is now probed — check the probes before checking anything else.** Since
+  2026-09-02 (§3.3) blackbox queries all four resolvers every 60s and asserts the
+  ANSWER, not just that one arrived: `api.lab.home.arpa` must be `.200`, the
+  `*.apps` wildcard must be `.201` and must NOT contain `.160`. Read it with
+  `probe_success{job=~"dns-.*"}` — 16 series, all 1 when healthy.
+  `LabDNSWrongAnswer` is critical precisely because a resolver that is up and wrong
+  is worse than one that is down: clients fail over from a dead resolver, and use a
+  wrong answer indefinitely. That was the 2026-07-27 shape.
 
 ## Secrets
 
@@ -111,7 +121,7 @@ Read this before acting. Full context is in `docs/` (start with `ARCHITECTURE.md
 
 The H4 is the core (k3s server + NAS, Ubuntu 22.04, `192.168.1.160`). The two
 **Orange Pi 5 Pro** boards (8C/16GB/NPU) are k3s agents / AI inference hosts; RPi 5
-runs Vault; RPi 4B runs Pi-hole (192.168.1.116) as the DNS **secondary**; opi-zero2w-1 (192.168.1.184) is the **tertiary** dnsmasq fallback, NOT the secondary — corrected 2026-09-02, see BACKLOG §4.12; Home Assistant runs as a k3s Deployment in the `home-assistant` namespace; lldap runs as a k3s Deployment in the `lldap` namespace (ldap-1 VM decommissioned
+runs Vault; RPi 4B runs Pi-hole (192.168.1.116) as the DNS **secondary**; opi-zero2w-1 (192.168.1.184) is the **tertiary** dnsmasq fallback, NOT the secondary — corrected 2026-09-02, see BACKLOG §4.12; opi-zero2w-3 (192.168.1.217) is a **fourth, fully working dnsmasq resolver that nothing currently queries** — it is configured by `dns.yml` but is absent from `lab_dns_servers`, and 2026-09-02's probes confirmed it answers every lab name correctly and authoritatively (`local=/lab.home.arpa/`, so it is a real spare, not a forwarder). Do not describe the lab as having three resolvers; Home Assistant runs as a k3s Deployment in the `home-assistant` namespace; lldap runs as a k3s Deployment in the `lldap` namespace (ldap-1 VM decommissioned
 2026-07-04); the XU3 is a build agent. DNS needs a permanent host.
 M5Stack + OPi NPUs are edge inference endpoints, not cluster nodes.
 The map's plaintext credentials must be rotated. See `docs/HARDWARE.md`.
