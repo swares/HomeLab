@@ -170,6 +170,31 @@ being reachable.** Any future source should be checked against that test.
 Pod logs (Loki has them), metrics (Prometheus has them), and NAS file activity. The
 ledger records *changes and outcomes*, not continuous telemetry.
 
+> **"Prometheus has them" means FOURTEEN DAYS, not thirty.** Measured 2026-09-02
+> (BACKLOG §3.14). `gitops/apps/monitoring.yaml` said `retention: 30d`, but Prometheus
+> enforces whichever of time or size binds first and size always wins here:
+>
+>     prometheus_tsdb_size_retentions_total   19
+>     prometheus_tsdb_time_retentions_total    0     <- never once fired
+>     measured horizon                        14.33 days
+>
+> The config has since been corrected to `15d` so git states the truth. **This moves
+> the boundary this document is built on.** Anything the ledger does not capture is
+> recoverable from Prometheus for about two weeks, not a month — and the failure mode
+> is silent, because an empty Prometheus result is indistinguishable from a metric that
+> never existed. A query reaching back three weeks returns nothing and reads as "it did
+> not happen".
+>
+> That sharpens the argument for the ledger rather than weakening it: the window in
+> which telemetry can substitute for a durable record is half what this design
+> originally assumed. The §5 example query — *"which claimed-DONE items have no
+> supporting ledger event in the last 30 days?"* — cannot be answered from Prometheus
+> at all. It needs the ledger.
+>
+> NOT YET MEASURED: whether Loki's stated 30 days is real. Its PV is 12 GB on the same
+> constrained root filesystem on n150-1 (Prometheus 13 GB, Loki 12 GB, 25 GB of a 44 GB
+> used root). The same size-versus-time question applies and nobody has asked it.
+
 ---
 
 ## 4. Schema
