@@ -45,7 +45,60 @@ spec:
                   path: /etc/machine-id
                   type: File
 
+              # Alloy's own state — read positions and WAL. BACKLOG §4.15.
+              #
+              # type: DirectoryOrCreate, which is DELIBERATELY THE OPPOSITE of the
+              # journal volume above, and the contrast is the point:
+              #
+              #   journal      type: Directory        the host path MUST already exist.
+              #                                       Its absence IS the bug (§3.9), so
+              #                                       creating it empty would hide the
+              #                                       fault behind a silently-succeeding
+              #                                       mount.
+              #   alloy state  type: DirectoryOrCreate  the path legitimately does not
+              #                                       exist before Alloy's first run on
+              #                                       a node. Creating it empty is the
+              #                                       correct behaviour, not a mask.
+              #
+              # Safe to let kubelet create it: Alloy runs as uid 0 (verified 2026-09-02,
+              # `id` in the pod returns uid=0(root), securityContext is empty), so a
+              # root:root 0755 directory is writable without an fsGroup or a chown
+              # initContainer.
+              - name: alloy-state
+                hostPath:
+                  path: /var/lib/alloy
+                  type: DirectoryOrCreate
+
         alloy:
+          # PERSISTENT STATE PATH — BACKLOG §4.15. The chart default is /tmp/alloy,
+          # which is emptyDir: it dies with the pod.
+          #
+          # Alloy keeps its read positions there. Measured in the running pod
+          # 2026-09-02:
+          #
+          #     /tmp/alloy/loki.source.journal.systemd/
+          #     /tmp/alloy/loki.source.kubernetes.pods/
+          #     28K total
+          #
+          # Those two directories are the positions. They were being written
+          # correctly — mtimes updated minutes before the check — and thrown away on
+          # every restart. A fresh pod then re-reads container log files from the
+          # beginning for every long-running pod and pushes July entries at Loki,
+          # which rejects them:
+          #
+          #     has timestamp too old: 2026-07-31T10:30:05Z,
+          #     oldest acceptable timestamp is: 2026-08-14T02:12:10Z
+          #
+          # The real cost is not the noise. Loki rejects the WHOLE BATCH containing a
+          # too-old entry, so current lines pushed alongside a replayed one are lost
+          # too — the same batch-level loss as §3.9's label-limit rejections, from a
+          # different trigger.
+          #
+          # 28K per node. The volume is defined under controller.volumes.extra and
+          # the mount under alloy.mounts.extra — two different blocks, which is how
+          # the invented key names in §3.9 went unnoticed.
+          storagePath: /var/lib/alloy
+
           # Node name for the discovery.kubernetes field selector below. Must come
           # from the downward API — HOSTNAME inside a pod is the pod name.
           extraEnv:
@@ -213,6 +266,10 @@ spec:
               - name: machine-id
                 mountPath: /etc/machine-id
                 readOnly: true
+
+              # NOT readOnly — this is the one mount Alloy writes to.
+              - name: alloy-state
+                mountPath: /var/lib/alloy
 
         serviceMonitor:
           enabled: true    # scrape Alloy metrics via existing Prometheus
