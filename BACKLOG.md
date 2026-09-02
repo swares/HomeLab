@@ -1535,18 +1535,55 @@ empty result from Prometheus is indistinguishable from a metric that never exist
 
 **To do:**
 
-- [ ] Measure the real horizon rather than guessing:
-      `prometheus_tsdb_lowest_timestamp_seconds`, and
-      `prometheus_tsdb_storage_blocks_bytes` against the 15GB cap.
-- [ ] Decide which limit is the honest one and make the config say so. Either raise
-      `retentionSize` (needs PV headroom — check before, per §4's disk history) or lower
-      `retention` to the truth so the number in git matches the number in the TSDB.
-- [ ] Alert when the actual horizon falls below the intended one. A retention that quietly
-      shrinks is the same class of fault as a backup that quietly stops: the config keeps
-      claiming a guarantee the system stopped providing.
-- [ ] Feed the real number into `docs/LEDGER-DESIGN.md`. The ledger's premise is that
-      Prometheus covers the recent window and the ledger covers the durable one — the
-      boundary is ~14 days, not 30, and the design should say the measured figure.
+- [x] **Measure the real horizon** — done 2026-09-02, and Prometheus keeps counters
+      that answer it outright rather than by inference:
+
+          prometheus_tsdb_size_retentions_total   19
+          prometheus_tsdb_time_retentions_total    0     <- NEVER fired
+          prometheus_tsdb_storage_blocks_bytes    12.2 GiB
+          prometheus_tsdb_retention_limit_bytes   15 GiB  ("15GB" is parsed BINARY)
+          lowest_timestamp 1787119200 vs now 1788357374 = 14.33 DAYS
+
+      `retention: 30d` had never evicted a single block. The number in git was
+      decorative for as long as it has existed.
+- [x] **Made the config honest** — `retention: 30d -> 15d` 2026-09-02. Lowering was the
+      only option available today; raising `retentionSize` has nowhere to go. Measured
+      on n150-1:
+
+          /              65G total, 44G used, 18G avail (71%)
+          Prometheus PV  13G      Loki PV  12G      <- 25G of the 44G used
+          VG free        7.89G
+
+      Nothing was reduced in capability: the change makes git describe the system
+      instead of contradicting it.
+- [x] **Alert added** — `lab.prometheus-retention` in lab-alerts.yaml, 2026-09-02.
+      `LabPrometheusRetentionShort` fires when the horizon drops under 12d (2.3 days of
+      margin below today's 14.33), plus `LabPrometheusRetentionMetricMissing` on
+      `absent()`, because a rule on a gauge cannot fire when the gauge is gone. Ships
+      green — checked before merging, per the §3.11 rule about alerts that arrive
+      already firing.
+- [x] **`docs/LEDGER-DESIGN.md` corrected** 2026-09-02, in §3.3 where it says metrics
+      are out of scope because "Prometheus has them". It now records that this means 14
+      days rather than 30. That sharpens the case for the ledger rather than weakening
+      it — §5's example query ("which claimed-DONE items have no supporting ledger event
+      in the last 30 days?") cannot be answered from Prometheus at all.
+
+**REMAINING, both opened by this work:**
+
+- [ ] **Loki claims 30 days and nobody has checked it.** Its PV is 12 GB on the same
+      constrained root filesystem as Prometheus's 13 GB, and the same
+      size-versus-time question applies. Given `30d` turned out to be decorative for
+      Prometheus, the prior on Loki's identical claim is poor. `LEDGER-DESIGN.md`
+      states 30 days for Loki in the logs-vs-ledger table, so the same correction may
+      be needed there. Cheap to check.
+- [ ] **302 GB sits idle in `vm-storage` while retention is disk-bound.** Measured
+      2026-09-02: the LV is 400 GB, `/var/lib/libvirt/images` holds 72 GB (one 71 GB
+      gitlab-1 qcow2, fully allocated), 20% used. Reclaiming even 100 GB into
+      `ubuntu-lv` would let `retentionSize` rise and take the horizon back toward 30d
+      for real. **This is an `lvreduce` on a mounted ext4** — stop gitlab-1, `e2fsck`,
+      `resize2fs` shrink, `lvreduce`, then `lvextend` the root LV. It is the one
+      operation in this area that destroys data if a step is skipped or ordered wrong.
+      A deliberate maintenance window, not a config change.
 
 ### 3.15 ~~The H4's node-exporter pod crashlooped for 19 days~~ — **FIXED 2026-08-27**
 
