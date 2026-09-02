@@ -31,8 +31,44 @@ spec:
                 index:
                   prefix: index_
                   period: 24h
+          # ---- RETENTION IS THE COMPACTOR'S JOB, NOT limits_config'S ----
+          # Added 2026-09-02, BACKLOG §3.14. Until now this file set
+          # `retention_period: 30d` and nothing else, which DELETED NOTHING.
+          # In Loki, limits_config.retention_period only marks how long data is
+          # *considered* retained; the compactor performs the deletion, and
+          # `retention_enabled` defaults to FALSE. Measured on the running pod:
+          #
+          #     retention_enabled:        false
+          #     apply_retention_interval: 0s
+          #     delete_request_store:     ""
+          #     retention_period:         30d      <- set, and unused
+          #
+          # Confirmed independently on disk: the oldest file in the Loki PV was
+          # dated 2026-07-04 — SIXTY days, twice the claimed thirty. Loki had never
+          # deleted a log line since it was deployed. 12 GB accumulated at roughly
+          # 200 MB/day, on a root filesystem with 18 GB free, and local-path does not
+          # enforce the 20Gi PVC any more than it enforced Prometheus's 50Gi.
+          #
+          # Not a silent fuse — LabNodeDiskLow fires at 85% on / and n150-1 sits at
+          # 71%, so there was ~45 days of warning. But unbounded growth on the node
+          # that also hosts Grafana, Alertmanager, authelia-postgres, lldap,
+          # semaphore and the gitlab-1 hypervisor is not a state to leave running,
+          # and §4 records what happened the last time that disk filled: kubelet
+          # evicting authelia-postgres roughly hourly.
+          #
+          # delete_request_store IS MANDATORY when retention_enabled is true in
+          # Loki 3.x — the process refuses to start without it. Setting
+          # retention_enabled alone would have crash-looped Loki.
+          compactor:
+            working_directory: /var/loki/compactor
+            retention_enabled: true
+            delete_request_store: filesystem
+
           limits_config:
-            retention_period: 30d    # keep logs for 30 days (same as metrics)
+            # Now actually enforced, by the compactor above. The comment on this line
+            # used to read "same as metrics" — metrics turned out to be 14 days, not
+            # 30 (§3.14), so that comparison was doubly wrong.
+            retention_period: 30d
             ingestion_rate_mb: 16
             ingestion_burst_size_mb: 32
 
