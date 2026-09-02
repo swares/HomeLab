@@ -208,7 +208,13 @@
 
           [Install]
           WantedBy=systemd-networkd.service
-      when: _networkd.stdout | default('') is search('^active')
+      # NO LONGER GATED ON NETWORKD — 2026-09-02. The unit is now also driven by
+      # chrony-onoffline.timer below, which is installed everywhere chrony runs. On a
+      # host without systemd-networkd the [Install] WantedBy= section is simply inert;
+      # the ExecStart is a single `chronyc onoffline` and is harmless anywhere.
+      # Leaving the gate here would have meant the timer firing a unit that does not
+      # exist on exactly the hosts that rely on the dispatcher hook — which is also
+      # event-driven and has the same blind spot.
 
     - name: Enable chrony-onoffline
       ansible.builtin.systemd:
@@ -216,6 +222,71 @@
         enabled: true
         daemon_reload: true
       when: _networkd.stdout | default('') is search('^active')
+
+    # ---- PERIODIC RECONCILIATION — added 2026-09-02, BACKLOG §1.13 ----
+    #
+    # BOTH recovery paths above are EVENT-DRIVEN, and that is the gap. The
+    # routable.d hook fires on a dispatcher event; chrony-onoffline.service fires on
+    # systemd-networkd's lifecycle. Neither fires if a source goes offline without a
+    # local network event — and one did.
+    #
+    # MEASURED 2026-09-02 on opi-zero2w-3:
+    #
+    #     ^? h4-core.lab.home.arpa   Reach 0   LastRx 5d   last sample -19.2s
+    #     chronyc activity: 16 sources online, 1 SOURCE OFFLINE
+    #     ping 192.168.1.160: 0% loss, 1.7ms
+    #     chronyc clients on h4-core: .217 not listed at all
+    #
+    # Five days with the LAN time server parked, on a host reporting itself
+    # synchronised — because it had silently fallen back to time.cloudflare.com.
+    # chrony-onoffline.service had last run Aug 27, correctly: nothing local had
+    # happened since. The recovery existed and had no trigger.
+    #
+    # WHY A TIMER AND NOT A BURST. `chronyc burst` was tried first and LOOKED like it
+    # worked — the source went to `^*` and produced a sample. It did not work:
+    # `Reach` stayed 0 and `chronyc activity` still counted the source offline. Only
+    # `chronyc onoffline` recovered it, taking Reach 0 -> 37 and activity to
+    # 17 online / 0 offline. Verified by reproducing the fault deliberately
+    # (`chronyc offline 192.168.1.160`) and clearing it.
+    #
+    # `onoffline` and not `online`: it reconciles against the routing table, so it is
+    # correct on a host that genuinely has no route, rather than forcing a source
+    # online that cannot be reached.
+    #
+    # Hourly. The failure it covers is silent and can persist for days, so the cost of
+    # a missed hour is nothing and the cost of running it needlessly is one chronyc
+    # invocation.
+    - name: Install timer to reconcile chrony sources periodically
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/chrony-onoffline.timer
+        mode: "0644"
+        content: |
+          # Managed by Ansible (chrony.yml) — BACKLOG §1.13.
+          # Backstop for sources that go offline with NO local network event, which
+          # neither the dispatcher hook nor the networkd-bound oneshot can catch.
+          [Unit]
+          Description=Periodically reconcile chrony sources against the routing table
+
+          [Timer]
+          OnBootSec=5min
+          OnUnitActiveSec=1h
+          # Catch up after downtime rather than waiting a full interval.
+          Persistent=true
+
+          [Install]
+          WantedBy=timers.target
+      # No `when:` — play 1 does `meta: end_host` for Arch hosts, so anything
+      # reaching this task has chrony installed. An earlier draft gated on
+      # `_chrony_present.stat.exists | default(true)`, a register that does not
+      # exist: `default()` does NOT rescue an undefined variable, because the
+      # attribute access fails first. It would have failed on every host.
+
+    - name: Enable the periodic reconciliation timer
+      ansible.builtin.systemd:
+        name: chrony-onoffline.timer
+        enabled: true
+        state: started
+        daemon_reload: true
 
     # WHICH MECHANISM COVERS THIS HOST.
     #
