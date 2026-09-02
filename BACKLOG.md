@@ -950,7 +950,13 @@ retention is deleting.
 varies per run, so `--group-by` never matches an existing series. Every cloud snapshot
 is kept forever, and the 10 GB free tier is the ceiling.
 
-### 1.13 An unattended upgrade silently stopped time sync on an etcd voter
+### 1.13 An unattended upgrade silently stopped time sync on an etcd voter — **FIX APPLIED FLEET-WIDE 2026-09-02; one policy decision open**
+
+> Recovery is now in place on all 11 chrony hosts and verified by the number that
+> identified the fault: `0 sources offline`, everywhere, plus an hourly reconcile timer
+> so recovery no longer depends on an event hook firing. Applying it found six hosts that
+> had never received the backstop at all (see To do). What remains is not a repair but a
+> question: whether etcd voters should self-upgrade networking packages unattended.
 
 **Found 2026-08-26.** n150-2 ran **18 hours with no time synchronisation at all**, and the
 sequence is fully in the journal:
@@ -1007,19 +1013,76 @@ measurement that held up every time was: restart networkd, count sources online.
 
 **To do:**
 
-- [ ] Run `chrony.yml` `--check` and then for real, so every host gets the hook — this is
-      §3.11 territory: merged is not applied, and nothing reports the gap.
-- [ ] Check whether other hosts are currently parked: `chronyc activity` fleet-wide. Any
-      host that hit an upgrade window since installing networkd-dispatcher could be sitting
-      in this state right now with a plausible-looking clock.
-- [ ] `systemd-networkd-wait-online` returned exit 1 on n150-2 at 06:11:19, *before* the
-      upgrade proceeded — a pre-existing condition, likely the bridge plus k8s veths never
-      reaching "online". Worth its own look; apt believing the network is not ready is not
-      harmless.
-- [ ] Consider whether cluster nodes should hold `systemd` out of unattended-upgrades, or
-      whether the dispatcher hook is sufficient. The hook fixes the symptom class; the
-      broader question is whether etcd voters should self-upgrade networking packages
-      unattended at all.
+- [x] **Run `chrony.yml` fleet-wide — done 2026-09-02.** `--check` clean, real run
+      `failed=0` on all 13 hosts. Fleet state afterwards, on every one of the 11 chrony
+      hosts: `0 sources offline`, and `chrony-onoffline.timer` armed with a next run.
+      Ten of eleven now track `h4-core.lab.home.arpa` at stratum 5; h4-core itself tracks
+      Cloudflare, as designed. The two Arch boards sync via timesyncd to 192.168.1.160.
+
+      **And running it found the thing running it was supposed to find.** Six hosts —
+      `rpi4b`, `rpi5`, `opi5pro-1`, `opi5pro-2`, `opi-zero2w-4`, `octopi-dns` — reported
+      `changed` for *Install oneshot unit*, meaning **`chrony-onoffline.service` had never
+      existed on them at all**. The install task had been gated on systemd-networkd being
+      active, which reads sensibly and is wrong: the oneshot is precisely the backstop for
+      hosts where the dispatcher path is unavailable, and the gate excluded exactly those.
+      `opi5pro-1`/`-2` had the `routable.d` hook but no backstop; the other four had
+      neither, so from 2026-08-26 until today they carried **no come-back-online path of
+      any kind**. The fix was un-gating the install (`chrony.yml`).
+
+      §3.11 says *merged is not applied*. This is its sibling and it is nastier, because
+      the run is green either way: **applied is not applied everywhere.** A play whose
+      install task is conditional will report `ok` on a host it deliberately skipped, and
+      the `PLAY RECAP` looks identical to full coverage. The only signal was reading
+      *which* hosts said `changed` on a run that was expected to be a no-op.
+
+- [x] **Fleet-wide `chronyc activity` sweep — done, and it was not empty.**
+      `opi-zero2w-3` was parked: its LAN source had been offline **five days** while
+      `timedatectl` reported `System clock synchronized: yes`, because it had silently
+      fallen back to a Cloudflare pool source. Both statements were true simultaneously,
+      which is the whole hazard in this entry — the host is synchronised *to the wrong
+      stratum via the wrong path*, and every green indicator stays green. Corrected with
+      `chronyc onoffline` (Reach 0 → 37); it now holds `h4-core` at 171 µs.
+
+      Also confirmed here: **`chronyc burst` does not fix this.** It produced a sample and
+      even a `^*` selection while `Reach` stayed `0` and the source stayed offline. It
+      makes the display look repaired without repairing anything. `onoffline` is the verb.
+
+- [x] **`systemd-networkd-wait-online` exit 1 on n150-2 — root-caused and fixed
+      2026-09-01, and it was not the veths.** The guess in the original entry ("the bridge
+      plus k8s veths") was wrong. `enp1s0` is a *bridge port* that `50-cloud-init.yaml`
+      set `dhcp4: true` on (50 sorts after `10-kvm-bridge.yaml`, so cloud-init won). A
+      bridge port cannot complete a DHCP lease, so the link never reached
+      `SETUP=configured` and netplan's own drop-in waited for it forever — n150-1 since
+      2026-06-29, n150-2 since 2026-07-25. Same file also produced the duplicate-resolver
+      count in §4.12. See `playbooks/kvm-netplan-fix.yml` and
+      `playbooks/network-online-wait.yml`; both applied, both verified.
+
+- [ ] **Still open: should etcd voters hold `systemd` out of unattended-upgrades?**
+      Everything above fixes the *symptom class* — the clock now recovers within an hour
+      on every host, by hook where a dispatcher exists and by timer everywhere else. The
+      unanswered question is upstream of that: whether a node holding an etcd vote should
+      restart its own networking stack unattended at 06:10 with nothing watching. The hook
+      makes the blast radius small; it does not make the decision. Filed next to §1.7,
+      which resolved the same tension for restic by pinning rather than by monitoring.
+
+**Two smaller things surfaced by the verification, neither worth its own entry:**
+
+The play's *Report which chrony recovery mechanism covers this host* task prints
+`package hook: /etc/network/if-up.d/chrony, /etc/dhcp/dhclient-exit-hooks.d/chrony` for
+**every** host — including the four that were provably uncovered. It measures that the
+files exist, which was the correct 2026-08-29 fix for an earlier version that merely
+asserted they did. But existence is not a working trigger: this entry established at the
+top that neither `ifupdown` nor `isc-dhcp-client` is installed, so those files are
+inert. The one task designed to report coverage honestly currently overstates it. It
+should gate on the consumer being installed, not on the file being present — the same
+distinction as §4.12's `resolvectl` versus `resolv.conf`.
+
+And the verification one-liner used above ends `chronyc activity | sed -n "2p;3p" ||
+echo "(timesyncd)"`. A pipeline's exit status is the *last* command's, so `sed` returns 0
+on empty input and the `|| echo` fallback can never fire. The two Arch hosts printed
+nothing at all, and that read correctly only because we already knew why. Per *empty
+output is not a finding until you prove the check can speak* — a host that had simply
+lost `chronyc` would have printed the identical nothing.
 
 ### 1.7 ~~Nothing pins restic, so an unattended upgrade can change copy semantics~~ — **FIXED AND APPLIED 2026-08-27**
 
@@ -1487,10 +1550,78 @@ the non-existent `..._last_trigger_time_seconds`.
 ### 3.2 No etcd metrics, therefore no quorum-loss alerting
 `docs/REVIEW-2026-07-24.md:306` (H26) — `kubeEtcd: enabled: false` on a 3-node HA cluster.
 
-### 3.3 Nothing verifies that DNS actually resolves
+### 3.3 Nothing verifies that DNS actually resolves — **BUILT 2026-09-02, NOT YET VERIFIED**
+
 `docs/REVIEW-2026-07-24.md:306` (H29) — no blackbox exporter, so
 `api.lab.home.arpa` and `*.apps.lab.home.arpa` failing to resolve is invisible.
 DNS is the lab's most load-bearing dependency.
+
+**Why this was next.** `CLAUDE.md` names DNS load-bearing and instructs "suspect DNS
+before the cluster". On 2026-07-27 a single wildcard A record took down every service
+URL in the lab. §4.12 was a resolver fault that ran for months. Four resolvers, one
+documented total outage, a standing rule to check DNS first — and nothing measuring
+any of it. Everything else open has a narrower blast radius.
+
+**What was written** (PR pending; nothing applied yet):
+
+- `gitops/apps/blackbox-exporter.yaml` — chart 11.17.2, four `dns` modules.
+- `gitops/workloads/monitoring/dns-probes.yaml` — four `Probe` CRs × four resolvers
+  = 16 series. Picked up by the `monitoring-config` Application, which syncs
+  `gitops/workloads/monitoring` (that path is *excluded* from `workloads-appset` —
+  checked, because a file that nothing syncs is §3.11 all over again).
+- `lab.dns` group in `lab-alerts.yaml` — six rules.
+
+**The design point worth remembering.** Every module asserts the **answer**, not the
+response. In July, rpi4b was up, fast, and handing out `192.168.1.160`; a probe that
+checked only "did DNS reply" would have been green throughout the outage it exists to
+catch. So severity is assigned by *kind of failure*, not by count:
+
+| condition | severity | why |
+|---|---|---|
+| wrong answer, even one resolver | critical | clients don't fail over from a wrong answer — they use it |
+| no answer, one of four | warning | redundancy lost, clients fail over |
+| no answer, all four | critical | lab-wide; four boards don't fail together — suspect a `dns.yml` run |
+
+`probe_dns_answer_rrs` is what separates "never replied" from "replied wrongly".
+
+There is also a `fail_if_matches_regexp` on `192.168.1.160` alongside the
+`fail_if_not_matches_regexp` on `.201`. Not redundant: the latter passes if *any*
+answer RR matches, so a resolver returning `.201` **and** a stale `.160` — which fails
+intermittently and is miserable to diagnose — slips through it and not through the pair.
+
+**Verification, none of it done yet.** In order, and the third is the one that matters:
+
+1. Service name. The Probe CRs hardcode
+   `blackbox-exporter-prometheus-blackbox-exporter.monitoring.svc:9115`.
+   `fullnameOverride` was deliberately **not** used — it is undocumented in this
+   chart's `values.yaml`, and Helm discards unknown value keys silently (§3.9, the
+   Alloy journal mount that never existed while Argo said Healthy). Confirm the
+   generated name: `kubectl -n monitoring get svc | grep blackbox`.
+2. The series exist at all: `count(probe_dns_answer_rrs{job=~"dns-.*"})` → want **16**.
+   If it returns nothing, four of the six rules are silent rather than broken, which
+   is §3.16's failure mode exactly.
+3. **Prove a probe can go red.** Green on arrival proves only that Prometheus is
+   scraping something. Temporarily change `dns_api_vip`'s expected address to one that
+   is wrong, watch `probe_success` go 0 and `LabDNSWrongAnswer` fire, then revert. Per
+   the house rule, this control has twice produced findings of its own — and here it is
+   the only thing that distinguishes a working alert from an alert whose regexp never
+   matches anything.
+
+**This settles §4.12's open `.217` question as a side effect.** Three places in the
+repo describe the resolver fleet and they disagree: `CLAUDE.md` lists `.148`/`.116`/
+`.184` and does not have `.217` serving DNS at all; `monitoring.yaml` calls `.217`
+"DNS quaternary, dnsmasq"; `hosts.yml` gives `.184`, `.116` **and** `.217` all
+`dns_role: secondary`. All four are probed. Within a minute of the first sync,
+`probe_success{instance="192.168.1.217:53"}` says whether it answers authoritatively
+for `lab.home.arpa`. Whichever way it lands, two of those three descriptions are wrong
+— record the answer in §4.12 rather than leaving the disagreement standing.
+
+**What this does NOT cover**, so a green dashboard isn't over-read: it queries each
+resolver **by IP**, so it tests the resolvers, not whether any client is configured to
+use them — §4.12 was precisely that class of fault and this would not have caught it.
+No ICMP (chart drops `ALL` capabilities; reachability is `LabExternalHostDown`'s job).
+No HTTP probes — H29's other half, cert-manager expiry, is separate work, and an
+unused module shipped "for later" is a thing that rots.
 
 ### 3.4 ~~`LabBackupEtcdSilent` may fire permanently against a weekly timer~~ — **FIXED, confirmed 2026-08-21**
 
