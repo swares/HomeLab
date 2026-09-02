@@ -96,7 +96,7 @@ model (hot NVMe + two cold SATA RAID 1 mirrors) keeps data safe.
 | N150 mini PC #3 | n150-3 | 192.168.1.176 | Windows HTPC (WinRM managed) |
 | OPi Zero 2W #1 | opi-zero2w-1 | 192.168.1.184 | dnsmasq DNS tertiary fallback |
 | OPi Zero 2W #2 | opi-zero2w-2 | 192.168.1.188 | MQTT primary broker |
-| OPi Zero 2W #3 | opi-zero2w-3 | 192.168.1.217 | dnsmasq DNS secondary (Armbian Trixie) |
+| OPi Zero 2W #3 | opi-zero2w-3 | 192.168.1.217 | dnsmasq — configured, but NOT in `lab_dns_servers` (see docs/HARDWARE.md) |
 | OPi Zero 2W #4 | opi-zero2w-4 | 192.168.1.99 | MQTT secondary broker (HA bridge) |
 | Odroid XU3 | xu3-1 | 192.168.1.64 | Build agent |
 
