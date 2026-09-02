@@ -1550,10 +1550,78 @@ the non-existent `..._last_trigger_time_seconds`.
 ### 3.2 No etcd metrics, therefore no quorum-loss alerting
 `docs/REVIEW-2026-07-24.md:306` (H26) — `kubeEtcd: enabled: false` on a 3-node HA cluster.
 
-### 3.3 Nothing verifies that DNS actually resolves
+### 3.3 Nothing verifies that DNS actually resolves — **BUILT 2026-09-02, NOT YET VERIFIED**
+
 `docs/REVIEW-2026-07-24.md:306` (H29) — no blackbox exporter, so
 `api.lab.home.arpa` and `*.apps.lab.home.arpa` failing to resolve is invisible.
 DNS is the lab's most load-bearing dependency.
+
+**Why this was next.** `CLAUDE.md` names DNS load-bearing and instructs "suspect DNS
+before the cluster". On 2026-07-27 a single wildcard A record took down every service
+URL in the lab. §4.12 was a resolver fault that ran for months. Four resolvers, one
+documented total outage, a standing rule to check DNS first — and nothing measuring
+any of it. Everything else open has a narrower blast radius.
+
+**What was written** (PR pending; nothing applied yet):
+
+- `gitops/apps/blackbox-exporter.yaml` — chart 11.17.2, four `dns` modules.
+- `gitops/workloads/monitoring/dns-probes.yaml` — four `Probe` CRs × four resolvers
+  = 16 series. Picked up by the `monitoring-config` Application, which syncs
+  `gitops/workloads/monitoring` (that path is *excluded* from `workloads-appset` —
+  checked, because a file that nothing syncs is §3.11 all over again).
+- `lab.dns` group in `lab-alerts.yaml` — six rules.
+
+**The design point worth remembering.** Every module asserts the **answer**, not the
+response. In July, rpi4b was up, fast, and handing out `192.168.1.160`; a probe that
+checked only "did DNS reply" would have been green throughout the outage it exists to
+catch. So severity is assigned by *kind of failure*, not by count:
+
+| condition | severity | why |
+|---|---|---|
+| wrong answer, even one resolver | critical | clients don't fail over from a wrong answer — they use it |
+| no answer, one of four | warning | redundancy lost, clients fail over |
+| no answer, all four | critical | lab-wide; four boards don't fail together — suspect a `dns.yml` run |
+
+`probe_dns_answer_rrs` is what separates "never replied" from "replied wrongly".
+
+There is also a `fail_if_matches_regexp` on `192.168.1.160` alongside the
+`fail_if_not_matches_regexp` on `.201`. Not redundant: the latter passes if *any*
+answer RR matches, so a resolver returning `.201` **and** a stale `.160` — which fails
+intermittently and is miserable to diagnose — slips through it and not through the pair.
+
+**Verification, none of it done yet.** In order, and the third is the one that matters:
+
+1. Service name. The Probe CRs hardcode
+   `blackbox-exporter-prometheus-blackbox-exporter.monitoring.svc:9115`.
+   `fullnameOverride` was deliberately **not** used — it is undocumented in this
+   chart's `values.yaml`, and Helm discards unknown value keys silently (§3.9, the
+   Alloy journal mount that never existed while Argo said Healthy). Confirm the
+   generated name: `kubectl -n monitoring get svc | grep blackbox`.
+2. The series exist at all: `count(probe_dns_answer_rrs{job=~"dns-.*"})` → want **16**.
+   If it returns nothing, four of the six rules are silent rather than broken, which
+   is §3.16's failure mode exactly.
+3. **Prove a probe can go red.** Green on arrival proves only that Prometheus is
+   scraping something. Temporarily change `dns_api_vip`'s expected address to one that
+   is wrong, watch `probe_success` go 0 and `LabDNSWrongAnswer` fire, then revert. Per
+   the house rule, this control has twice produced findings of its own — and here it is
+   the only thing that distinguishes a working alert from an alert whose regexp never
+   matches anything.
+
+**This settles §4.12's open `.217` question as a side effect.** Three places in the
+repo describe the resolver fleet and they disagree: `CLAUDE.md` lists `.148`/`.116`/
+`.184` and does not have `.217` serving DNS at all; `monitoring.yaml` calls `.217`
+"DNS quaternary, dnsmasq"; `hosts.yml` gives `.184`, `.116` **and** `.217` all
+`dns_role: secondary`. All four are probed. Within a minute of the first sync,
+`probe_success{instance="192.168.1.217:53"}` says whether it answers authoritatively
+for `lab.home.arpa`. Whichever way it lands, two of those three descriptions are wrong
+— record the answer in §4.12 rather than leaving the disagreement standing.
+
+**What this does NOT cover**, so a green dashboard isn't over-read: it queries each
+resolver **by IP**, so it tests the resolvers, not whether any client is configured to
+use them — §4.12 was precisely that class of fault and this would not have caught it.
+No ICMP (chart drops `ALL` capabilities; reachability is `LabExternalHostDown`'s job).
+No HTTP probes — H29's other half, cert-manager expiry, is separate work, and an
+unused module shipped "for later" is a thing that rots.
 
 ### 3.4 ~~`LabBackupEtcdSilent` may fire permanently against a weekly timer~~ — **FIXED, confirmed 2026-08-21**
 

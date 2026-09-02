@@ -1,0 +1,246 @@
+---
+# blackbox-exporter — BACKLOG §3.3 / docs/REVIEW-2026-07-24.md H29.
+#
+# WHY THIS EXISTS. `CLAUDE.md` says DNS is load-bearing and that an Ingress which
+# does not resolve should make you "suspect DNS before the cluster". Until now
+# nothing in the lab measured whether DNS answers at all, let alone whether it
+# answers CORRECTLY. Four resolvers, a documented total outage, and a standing
+# instruction to check DNS first — with no probe on any of it.
+#
+# THE FAULT THIS IS SHAPED AROUND. On 2026-07-27 the ingress VIP moved to
+# 192.168.1.201 on the three managed resolvers while rpi4b — outside the `dns`
+# group at the time, therefore untouched by any playbook — kept handing out
+# 192.168.1.160 indefinitely. Every service URL in the lab broke for anyone whose
+# resolver was that one. Note what a naive probe would have reported throughout:
+# rpi4b was UP, ANSWERING, and FAST. "Did DNS respond" was green the whole time.
+#
+# So every module below asserts the ANSWER, not the response. `validate_answer_rrs`
+# is the entire point of this file; a probe that only checks probe_success against
+# reachability would have been green through the outage it is here to catch.
+#
+# AND IT ASSERTS IN BOTH DIRECTIONS. fail_if_not_matches_regexp passes when ANY
+# answer RR matches, so a resolver returning BOTH .201 and a stale .160 — the
+# round-robin case, which fails intermittently and is the worst kind to debug —
+# would still pass. The paired fail_if_matches_regexp on the old address closes
+# that. The two are not redundant; they catch different shapes of the same fault.
+#
+# WHAT THIS DOES NOT COVER, stated plainly so nobody reads more into a green
+# dashboard than is there:
+#   - It queries each resolver BY IP, so it tests the RESOLVERS. It says nothing
+#     about whether any given client is configured to USE them. §4.12 was exactly
+#     that class of fault (six nameserver lines where three were meant) and this
+#     would not have caught it.
+#   - No ICMP. The chart's securityContext drops ALL capabilities, and an icmp
+#     prober needs NET_RAW added back. Host reachability is already covered by
+#     LabExternalHostDown on the node-exporter targets.
+#   - No HTTP probes. §3.3 asks whether names resolve; H29's other half
+#     (cert-manager expiry) is a separate piece of work. An unused http_2xx module
+#     shipped "for later" is a thing that rots — add it with its Probe or not at all.
+#
+# ---- NAMING: WHY NO fullnameOverride ----
+# Every other app here that wants a short service name sets fullnameOverride.
+# Deliberately not done: this chart's values.yaml does not document that key, and
+# Helm DISCARDS UNKNOWN VALUE KEYS SILENTLY. That is not hypothetical here — it is
+# BACKLOG §3.9, where Argo reported Synced and Healthy on an Alloy config whose
+# journal mount had never existed for exactly this reason. If the key were ignored,
+# the Service would keep its generated name, the Probe CRs below would point at a
+# Service that does not exist, and the failure would look like a DNS outage.
+# So: the generated name is used verbatim, everywhere.
+#
+#     blackbox-exporter-prometheus-blackbox-exporter.monitoring.svc:9115
+#
+# (release name = Argo Application name = blackbox-exporter, then the chart's
+# own fullname suffix.) Ugly, and correct without depending on a key we did not
+# verify. Confirm after first sync with:
+#     kubectl -n monitoring get svc | grep blackbox
+#
+# ---- NOT PINNED TO A NODE, unlike the rest of monitoring ----
+# Grafana, Prometheus, Alertmanager and kube-state-metrics all carry
+# nodeSelector: n150-1, because they own local-path PVCs and local-path is
+# node-local. blackbox has no state and no PVC, so pinning it would buy nothing
+# and cost the ability to drain n150-1. Running on an arm64 node is fine — the
+# upstream image is multi-arch — and probing from a different node than
+# Prometheus is arguably a better vantage point.
+#
+# ---- resources ARE MANDATORY HERE ----
+# kyverno ClusterPolicy `require-resource-limits` is in **Enforce** and monitoring
+# is not in its exclude list, so a container without limits.cpu AND limits.memory
+# is rejected at admission. The chart ships `resources: {}`. Values below are
+# generous for a prober that holds no state.
+#
+# Usage: Argo syncs this automatically. To verify by hand:
+#   kubectl -n monitoring port-forward svc/blackbox-exporter-prometheus-blackbox-exporter 9115:9115
+#   curl -s 'localhost:9115/probe?module=dns_api_vip&target=192.168.1.148:53' | grep -E 'probe_success|answer_rrs'
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: blackbox-exporter
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: prometheus-blackbox-exporter
+    # renovate: datasource=helm registryUrl=https://prometheus-community.github.io/helm-charts depName=prometheus-blackbox-exporter
+    targetRevision: 11.17.2
+    helm:
+      valuesObject:
+        replicas: 1
+
+        # See the header — required by kyverno, not merely tidy.
+        resources:
+          limits:
+            cpu: 200m
+            memory: 128Mi
+          requests:
+            cpu: 25m
+            memory: 48Mi
+
+        # Chart defaults already satisfy PodSecurityAdmission: runAsNonRoot,
+        # runAsUser 1000, readOnlyRootFilesystem, capabilities drop ALL. Restated
+        # rather than inherited silently, because adding NET_RAW for an icmp
+        # prober later is a security decision and should be a visible diff.
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1000
+          runAsNonRoot: true
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+
+        # Scrape blackbox's OWN /metrics. This is not the probe data — it is how
+        # we know the prober itself is alive. Distinct from the probe results,
+        # which arrive via the Probe CRs in
+        # gitops/workloads/monitoring/dns-probes.yaml.
+        #
+        # No `release: monitoring` label is needed: the stack sets
+        # serviceMonitorSelectorNilUsesHelmValues: false (see monitoring.yaml,
+        # where labelling objects was explicitly rejected as the fix).
+        serviceMonitor:
+          selfMonitor:
+            enabled: true
+            interval: 30s
+          # The chart can also generate one ServiceMonitor per target. Not used —
+          # Probe CRs express the same thing with the target list in one place,
+          # and probeSelectorNilUsesHelmValues is already false.
+          enabled: false
+
+        config:
+          modules:
+            # ---------------------------------------------------------------
+            # 1. The control-plane VIP.
+            # api.lab.home.arpa MUST be 192.168.1.200 (kube-vip). Source of
+            # truth is dns_records.api in ansible/inventory/hosts.yml.
+            # ---------------------------------------------------------------
+            dns_api_vip:
+              prober: dns
+              timeout: 5s
+              dns:
+                query_name: api.lab.home.arpa
+                query_type: A
+                valid_rcodes: [NOERROR]
+                validate_answer_rrs:
+                  fail_if_not_matches_regexp:
+                    # Matched against miekg/dns RR.String() — tab-separated
+                    # "name TTL IN A addr". \s+ absorbs the tabs. Deliberately
+                    # not anchored on name or TTL: a TTL change is not a fault
+                    # and would produce a false red.
+                    - 'IN\s+A\s+192\.168\.1\.200$'
+                # ip_protocol_fallback false: this lab is IPv4 only. Without it
+                # blackbox tries IPv6 first and the failure mode is a confusing
+                # timeout rather than a clear one.
+                preferred_ip_protocol: ip4
+                ip_protocol_fallback: false
+
+            # ---------------------------------------------------------------
+            # 2. The ingress wildcard — the 2026-07-27 fault.
+            #
+            # The query name is a CANARY that deliberately matches nothing but
+            # the wildcard. Probing grafana.apps.lab.home.arpa instead would
+            # couple this to a workload existing and could pass off an explicit
+            # record while the wildcard itself was broken. What went wrong in
+            # July was the wildcard, so the wildcard is what is measured.
+            # ---------------------------------------------------------------
+            dns_apps_wildcard:
+              prober: dns
+              timeout: 5s
+              dns:
+                query_name: probe-canary.apps.lab.home.arpa
+                query_type: A
+                valid_rcodes: [NOERROR]
+                validate_answer_rrs:
+                  fail_if_not_matches_regexp:
+                    - 'IN\s+A\s+192\.168\.1\.201$'
+                  # THE HISTORICAL WRONG ANSWER, named explicitly. CLAUDE.md:
+                  # "If you find .160 on the wildcard, that is the fault, not
+                  # the fix." This catches the case fail_if_not_matches cannot:
+                  # a resolver returning .201 AND a stale .160 together.
+                  fail_if_matches_regexp:
+                    - 'IN\s+A\s+192\.168\.1\.160$'
+                preferred_ip_protocol: ip4
+                ip_protocol_fallback: false
+
+            # ---------------------------------------------------------------
+            # 3. A name that MUST NOT resolve.
+            #
+            # Two jobs. It proves the resolver distinguishes existent from
+            # non-existent names — a resolver that answers everything (an
+            # over-broad wildcard, a captive portal, a hijacking upstream) looks
+            # perfect to every other probe here. And it is the standing control
+            # for the house rule that empty output is not a finding: this probe
+            # is green only when a NEGATIVE answer is being produced correctly,
+            # which is a different code path from the positive ones above.
+            #
+            # NOT under *.apps.lab.home.arpa, obviously — that wildcard would
+            # answer it. Under the zone apex, where no wildcard exists.
+            # ---------------------------------------------------------------
+            dns_nxdomain_control:
+              prober: dns
+              timeout: 5s
+              dns:
+                query_name: probe-must-not-exist.lab.home.arpa
+                query_type: A
+                valid_rcodes: [NXDOMAIN]
+                preferred_ip_protocol: ip4
+                ip_protocol_fallback: false
+
+            # ---------------------------------------------------------------
+            # 4. Recursion to the outside world.
+            #
+            # Separates "the resolver is dead" from "the resolver is alive but
+            # cannot reach its upstreams" (dns_upstream in hosts.yml is
+            # 1.1.1.1 / 9.9.9.9). Those need different responses and look
+            # identical from a client. Warning-level, not critical: internal
+            # name resolution is what the cluster depends on, and this failing
+            # while 1-3 pass means WAN or upstream trouble, not a lab fault.
+            #
+            # Relevant to §4.16, which is still open: whether cluster nodes
+            # should resolve public DNS through the lab at all. This measures
+            # what that currently costs.
+            # ---------------------------------------------------------------
+            dns_recursion:
+              prober: dns
+              timeout: 5s
+              dns:
+                query_name: cloudflare.com
+                query_type: A
+                valid_rcodes: [NOERROR]
+                validate_answer_rrs:
+                  # Any A record will do — the assertion is that recursion
+                  # produced one, not which one.
+                  fail_if_not_matches_regexp:
+                    - 'IN\s+A\s+'
+                preferred_ip_protocol: ip4
+                ip_protocol_fallback: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

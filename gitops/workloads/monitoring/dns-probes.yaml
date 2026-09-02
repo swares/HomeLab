@@ -1,0 +1,150 @@
+---
+# DNS probes — BACKLOG §3.3. Modules are defined in gitops/apps/blackbox-exporter.yaml.
+#
+# Each Probe below runs ONE question against ALL FOUR resolvers. That shape is the
+# whole design, and it comes straight from the 2026-07-27 outage: three resolvers
+# had been updated to the new ingress VIP and the fourth had not. A probe that
+# asked "does DNS work" of whichever resolver answered first would have been green.
+# Asking every resolver the same question independently is what makes a single
+# divergent resolver visible.
+#
+# ---- THE FOUR TARGETS, AND A DISAGREEMENT WORTH SETTLING ----
+#
+# Three places in this repo describe the resolver fleet and they do not match:
+#
+#   CLAUDE.md          .148 primary, .116 secondary, .184 tertiary. No mention
+#                      of .217 serving DNS at all.
+#   monitoring.yaml    .148 primary, .116 secondary, .184 tertiary,
+#                      .217 "DNS quaternary, dnsmasq".
+#   inventory hosts.yml  octopi-dns primary; .184, .116 AND .217 all carry
+#                      dns_role: secondary — three secondaries, no ordering.
+#
+# BACKLOG §4.12 still lists "decide what .217 is for" as open. All four are probed
+# here deliberately, including .217, because the probe settles empirically what
+# three prose sources disagree about: either it answers authoritatively for
+# lab.home.arpa or it does not, and probe_success will say which within a minute.
+# Whichever way it lands, one of the three descriptions above needs correcting —
+# record the result in §4.12 rather than leaving the disagreement in place.
+#
+# ---- PORT IS EXPLICIT ON PURPOSE ----
+# blackbox's dns prober falls back to port 53 when the target has no port. That is
+# a behaviour read from upstream source, not something measured on this deployment,
+# and "verify before asserting" applies to library defaults too. `:53` is
+# unambiguously correct whether or not the fallback works as remembered. It also
+# makes the `instance` label say what was actually queried.
+#
+# ---- ADDING A RESOLVER ----
+# Add it to ALL FOUR target lists, not just one. A resolver probed for the API VIP
+# but not the wildcard would have passed the July fault.
+
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: dns-api-vip
+  namespace: monitoring
+  labels:
+    # No `release: monitoring` label needed — probeSelectorNilUsesHelmValues is
+    # false in gitops/apps/monitoring.yaml. Labelled for human grepping only.
+    lab.probe/class: dns
+spec:
+  # jobName becomes the `job` label. Every DNS probe job is prefixed `dns-` so the
+  # alert rules can select them with job=~"dns-.*" and nothing else.
+  jobName: dns-api-vip
+  interval: 60s
+  scrapeTimeout: 10s
+  module: dns_api_vip
+  prober:
+    url: blackbox-exporter-prometheus-blackbox-exporter.monitoring.svc:9115
+    path: /probe
+  targets:
+    staticConfig:
+      static:
+        - 192.168.1.148:53   # octopi-dns  — Pi-hole, primary
+        - 192.168.1.116:53   # rpi4b       — Pi-hole. The July divergence was here.
+        - 192.168.1.184:53   # opi-zero2w-1 — dnsmasq
+        - 192.168.1.217:53   # opi-zero2w-3 — dnsmasq; role disputed, see header
+      labels:
+        lab_probe: api-vip
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: dns-apps-wildcard
+  namespace: monitoring
+  labels:
+    lab.probe/class: dns
+spec:
+  jobName: dns-apps-wildcard
+  interval: 60s
+  scrapeTimeout: 10s
+  module: dns_apps_wildcard
+  prober:
+    url: blackbox-exporter-prometheus-blackbox-exporter.monitoring.svc:9115
+    path: /probe
+  targets:
+    staticConfig:
+      static:
+        - 192.168.1.148:53
+        - 192.168.1.116:53
+        - 192.168.1.184:53
+        - 192.168.1.217:53
+      labels:
+        lab_probe: apps-wildcard
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: dns-nxdomain-control
+  namespace: monitoring
+  labels:
+    lab.probe/class: dns
+spec:
+  jobName: dns-nxdomain-control
+  # Slower than the others: this is a correctness control, not an outage detector.
+  # Nothing about the lab breaks in the 5 minutes before it notices.
+  interval: 300s
+  scrapeTimeout: 10s
+  module: dns_nxdomain_control
+  prober:
+    url: blackbox-exporter-prometheus-blackbox-exporter.monitoring.svc:9115
+    path: /probe
+  targets:
+    staticConfig:
+      static:
+        - 192.168.1.148:53
+        - 192.168.1.116:53
+        - 192.168.1.184:53
+        - 192.168.1.217:53
+      labels:
+        lab_probe: nxdomain-control
+
+---
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: dns-recursion
+  namespace: monitoring
+  labels:
+    lab.probe/class: dns
+spec:
+  jobName: dns-recursion
+  # 5m, and deliberately not faster: this leaves the lab and hits 1.1.1.1 / 9.9.9.9.
+  # At 60s across four resolvers that is 5,760 external queries a day to answer a
+  # question that changes slowly.
+  interval: 300s
+  scrapeTimeout: 10s
+  module: dns_recursion
+  prober:
+    url: blackbox-exporter-prometheus-blackbox-exporter.monitoring.svc:9115
+    path: /probe
+  targets:
+    staticConfig:
+      static:
+        - 192.168.1.148:53
+        - 192.168.1.116:53
+        - 192.168.1.184:53
+        - 192.168.1.217:53
+      labels:
+        lab_probe: recursion

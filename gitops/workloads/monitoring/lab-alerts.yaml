@@ -723,3 +723,169 @@ spec:
               prometheus_tsdb_lowest_timestamp_seconds is absent, so
               LabPrometheusRetentionShort cannot fire whatever the real horizon is.
               Prometheus may not be scraping itself.
+
+    # -----------------------------------------------------------------------
+    # DNS — BACKLOG §3.3 / REVIEW H29. Probes in
+    # gitops/workloads/monitoring/dns-probes.yaml, modules in
+    # gitops/apps/blackbox-exporter.yaml.
+    #
+    # THE DISTINCTION THESE RULES ARE BUILT ON. A resolver that is DOWN and a
+    # resolver that is UP AND WRONG are different emergencies, and the second is
+    # worse. Clients fail over from a dead resolver in seconds; they use a wrong
+    # answer happily and indefinitely. On 2026-07-27 rpi4b was up, fast, and
+    # answering *.apps.lab.home.arpa with 192.168.1.160 — every service URL broken
+    # for its clients, with nothing unreachable anywhere.
+    #
+    # So severity is assigned by which of those two it is, NOT by how many
+    # resolvers are affected:
+    #   wrong answer, even one resolver     -> critical (phone)
+    #   no answer, one of four              -> warning  (display; redundancy lost)
+    #   no answer, ALL four                 -> critical (phone; lab-wide outage)
+    #
+    # blackbox reports both facts, and probe_dns_answer_rrs is what separates them:
+    # a resolver that never replied has probe_success 0 with 0 answer RRs; one that
+    # replied with an address failing validation has probe_success 0 with answer
+    # RRs present.
+    #
+    # BEFORE TRUSTING ANY OF THIS, confirm the series exist. probe_dns_answer_rrs
+    # is a blackbox metric name taken from upstream, not one measured on this
+    # deployment, and a rule keyed to a metric that does not exist is silent rather
+    # than broken — §3.16's failure exactly ("the series does not exist, which is
+    # worse"). One query settles it:
+    #   count(probe_dns_answer_rrs{job=~"dns-.*"})    # want 16 (4 probes x 4 resolvers)
+    # If that returns nothing, LabDNSWrongAnswer and LabDNSResolverNotAnswering are
+    # both dead and only LabDNSAllResolversFailing still works.
+    # -----------------------------------------------------------------------
+    - name: lab.dns
+      rules:
+        # The July fault. Deliberately has NO `for:` beyond one scrape interval —
+        # a resolver handing out a wrong address is breaking things right now, and
+        # unlike a flapping host there is no transient state this could catch by
+        # mistake. Validation either passed or it did not.
+        - alert: LabDNSWrongAnswer
+          expr: |
+            probe_success{job=~"dns-.*"} == 0
+              and on (instance, job) probe_dns_answer_rrs > 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "{{ $labels.instance }} returns the WRONG answer for {{ $labels.job }}"
+            description: >
+              The resolver replied but the answer failed validation. This is the
+              2026-07-27 shape: up, fast, and wrong. Check what it is actually
+              handing out with
+              `dig @{{ $labels.instance }} +short probe-canary.apps.lab.home.arpa`
+              — the wildcard must be 192.168.1.201 and api.lab.home.arpa must be
+              192.168.1.200. If you find 192.168.1.160, that is the fault and not
+              the fix (CLAUDE.md): it was the H4's own node IP until 2026-07-27.
+              Source of truth is `ingress_vip` in ansible/inventory/hosts.yml,
+              applied by ansible/playbooks/dns.yml — and a resolver outside the
+              `dns` inventory group is never touched by it, which is how this
+              happened the first time.
+
+        # One resolver silent. Warning, not critical: with four of them, clients
+        # fail over. It is a loss of redundancy, and redundancy losses that page
+        # at 3am are how LabExternalHostDown trained the eye to skip alerts.
+        - alert: LabDNSResolverNotAnswering
+          expr: |
+            probe_success{job=~"dns-.*"} == 0
+              and on (instance, job) probe_dns_answer_rrs == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "DNS resolver {{ $labels.instance }} is not answering {{ $labels.job }}"
+            description: >
+              No usable response for 5 minutes. The other resolvers are covering,
+              so this is redundancy lost rather than an outage. Check the host is
+              up (LabExternalHostDown covers reachability separately — if that is
+              quiet, the box is alive and the DNS service is not) and that
+              pihole-FTL or dnsmasq is running.
+
+        # Every resolver failing the same question. This is the lab-wide outage,
+        # and it is a genuinely different event from four separate instances of
+        # the warning above — most likely a bad dns.yml run or a records change,
+        # not four simultaneous hardware faults.
+        #
+        # sum(), not count(): if the series vanish entirely this expression has no
+        # data and stays silent rather than firing on absence. That case is
+        # LabDNSProbesMissing below, which says something useful instead.
+        - alert: LabDNSAllResolversFailing
+          expr: |
+            sum by (job) (probe_success{job=~"dns-.*"}) == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "NO resolver can satisfy {{ $labels.job }}"
+            description: >
+              All four resolvers are failing the same probe. Every name this
+              covers is unresolvable lab-wide. If the job is dns-api-vip the k3s
+              control-plane endpoint is unreachable by name; if dns-apps-wildcard
+              every service URL is down. Suspect a recent dns.yml run or a
+              dns_records change before suspecting the hosts — four boards do not
+              fail together. `git log -p ansible/inventory/hosts.yml` for
+              ingress_vip and dns_records.
+
+        # The resolver answers, but it answers a name that must not exist. Catches
+        # an over-broad wildcard, a hijacking upstream, or a captive portal —
+        # every other probe here looks perfect in all three cases.
+        - alert: LabDNSResolvesNonexistentName
+          expr: |
+            probe_success{job="dns-nxdomain-control"} == 0
+              and on (instance, job) probe_dns_answer_rrs > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.instance }} answers a name that should not exist"
+            description: >
+              probe-must-not-exist.lab.home.arpa returned records instead of
+              NXDOMAIN. Something is answering for names it does not own — check
+              for a wildcard broader than *.apps.lab.home.arpa, and check what the
+              resolver's upstream is doing. Note this also means every negative
+              answer in the lab is suspect, including the ones other probes rely on.
+
+        # Recursion to the outside. Warning by design — internal resolution is
+        # what the cluster needs, and 1-3 above cover that. Relevant to §4.16.
+        - alert: LabDNSRecursionFailing
+          expr: |
+            sum(probe_success{job="dns-recursion"}) == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "No resolver can resolve public names"
+            description: >
+              Every resolver failed to resolve cloudflare.com while internal names
+              may still be fine. That points at the WAN or at the upstreams
+              (dns_upstream in hosts.yml: 1.1.1.1, 9.9.9.9), not at the lab.
+              Internal resolution is covered separately — check whether
+              LabDNSAllResolversFailing is also firing before treating this as a
+              lab fault.
+
+        # NONE OF THE ABOVE CAN FIRE IF THE PROBES STOP EXISTING. blackbox down,
+        # the Probe CRs pruned, the operator's probeSelector narrowed by a chart
+        # upgrade — in every case the alerts go quiet and quiet reads as healthy.
+        # This is the same guard as LabAnsibleDriftMetricMissing and
+        # LabPrometheusRetentionMetricMissing, and it is the one rule here that
+        # watches the watcher.
+        #
+        # Critical, because its silence is indistinguishable from DNS being fine,
+        # and DNS is the lab's most load-bearing dependency.
+        - alert: LabDNSProbesMissing
+          expr: absent(probe_success{job="dns-api-vip"})
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "DNS probes have disappeared from Prometheus"
+            description: >
+              probe_success{job="dns-api-vip"} is absent, so every rule in
+              lab.dns is now silent regardless of what DNS is actually doing.
+              Check the blackbox pod is running in monitoring, that the four Probe
+              CRs still exist (`kubectl -n monitoring get probes`), and that the
+              prober URL in dns-probes.yaml still matches the Service name
+              (`kubectl -n monitoring get svc | grep blackbox`) — a chart upgrade
+              that changes the generated name breaks every probe at once.
