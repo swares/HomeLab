@@ -174,12 +174,22 @@
         mode: "0644"
       notify: reload systemd
 
+      # CHECK-MODE CASCADE GUARD — 2026-09-02. This enables a unit whose file is
+      # written earlier in this same play. Under --check that write is simulated, so
+      # on a host that does not already have the unit systemd reports "Could not find
+      # the requested service" and the play fails. It passes today only because the
+      # unit already exists everywhere it runs — so this would surface on a REBUILD or
+      # a new host, which is the worst time to discover it.
+      #
+      # Found by auditing for the pattern after introducing a fresh instance of it in
+      # chrony-onoffline.timer. Five plays had it.
     - name: Enable and start loop-device service
       ansible.builtin.systemd:
         name: microshift-lvm-loop.service
         enabled: true
         state: started
         daemon_reload: true
+      when: not ansible_check_mode
 
     - name: Verify loop device is attached
       ansible.builtin.command: losetup {{ microshift_loop_dev }}

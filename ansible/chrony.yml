@@ -216,12 +216,35 @@
       # exist on exactly the hosts that rely on the dispatcher hook — which is also
       # event-driven and has the same blind spot.
 
+      # CHECK-MODE CASCADE GUARD — 2026-09-02. This enables a unit whose file is
+      # written earlier in this same play. Under --check that write is simulated, so
+      # on a host that does not already have the unit systemd reports "Could not find
+      # the requested service" and the play fails. It passes today only because the
+      # unit already exists everywhere it runs — so this would surface on a REBUILD or
+      # a new host, which is the worst time to discover it.
+      #
+      # Found by auditing for the pattern after introducing a fresh instance of it in
+      # chrony-onoffline.timer. Five plays had it.
     - name: Enable chrony-onoffline
       ansible.builtin.systemd:
         name: chrony-onoffline.service
         enabled: true
         daemon_reload: true
-      when: _networkd.stdout | default('') is search('^active')
+      # BOTH conditions, as a list. `not ansible_check_mode` is the check-mode
+      # cascade guard: the unit file is written earlier in this play, so under
+      # --check systemd has never heard of it and this fails on any host that does
+      # not already have it — a rebuild, or a new node.
+      #
+      # The `_networkd` condition is the ORIGINAL and must not be lost: enabling
+      # binds the unit to systemd-networkd's lifecycle, which only means anything
+      # where networkd is running. On 2026-09-02 a scripted edit replaced this
+      # condition instead of combining with it, and the file still parsed — a stray
+      # `when:` thirty-five lines below became a DUPLICATE KEY on this task, and YAML
+      # silently takes the last one. Reading the task showed the right condition
+      # while the parser used the wrong one.
+      when:
+        - not ansible_check_mode
+        - _networkd.stdout | default('') is search('^active')
 
     # ---- PERIODIC RECONCILIATION — added 2026-09-02, BACKLOG §1.13 ----
     #
@@ -281,12 +304,23 @@
       # exist: `default()` does NOT rescue an undefined variable, because the
       # attribute access fails first. It would have failed on every host.
 
+    # SKIPPED UNDER --check: CHECK-MODE CASCADE. The task above writes the unit file,
+    # which under --check is simulated — so systemd has never heard of
+    # chrony-onoffline.timer and this fails with "Could not find the requested
+    # service". Same shape as github-runner.yml's get_url -> unarchive,
+    # mount-nvme.yml's file -> link, and kvm-netplan-fix.yml's mkdir -> copy.
+    #
+    # It bites only on FIRST introduction of a unit, which is why the older
+    # `Enable chrony-onoffline` task never showed it: that file already existed on
+    # the hosts the task ran against. A new unit is exactly when this class appears,
+    # and exactly when nobody is expecting it.
     - name: Enable the periodic reconciliation timer
       ansible.builtin.systemd:
         name: chrony-onoffline.timer
         enabled: true
         state: started
         daemon_reload: true
+      when: not ansible_check_mode
 
     # WHICH MECHANISM COVERS THIS HOST.
     #
