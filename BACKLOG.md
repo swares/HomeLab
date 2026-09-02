@@ -2846,8 +2846,23 @@ apply it** — the apply step is `netplan try`, by hand, deliberately.
       close this came to a wrong conclusion: the events' applied line reads
       `.148 .116 .184`, which is exactly what the H4 now has — so the message looks like
       it is describing the fixed host. Only `-o wide` distinguishes them.
-- [ ] Decide whether the H4 should join `node-dns.yml` rather than staying unmanaged.
-      Being the only unmanaged node is how this happened.
+- [ ] **Should the H4 join `node-dns.yml`? Answer 2026-09-02: eventually yes, but NOT
+      as a simple group addition — it would recreate this very entry's bug.**
+
+      The two mechanisms supply resolvers by different routes:
+        - `node-dns.yml` writes a GLOBAL `DNS=` drop-in for systemd-resolved
+        - the H4 gets its three PER-LINK on enp2s0, from netplan
+
+      Measured after the 2026-08-31 reboot: `resolvectl dns` shows `Global:` empty and
+      `Link 3 (enp2s0): .148 .116 .184`. Adding the global drop-in on top would give
+      **3 global + 3 link = 6 nameserver lines** — exactly the >3 condition this entry
+      exists to fix, reintroduced on the node that just got fixed. It is the same
+      concatenation that put the N150s at five.
+
+      So joining requires FIRST removing the netplan-supplied nameservers from the H4,
+      then letting the drop-in provide them — a second DNS change to the core, on top
+      of a reboot it has just had. Worth doing for consistency and drift coverage;
+      not worth doing casually. Sequence it deliberately.
 - [x] **`lab_dns_servers` in `node-dns.yml` corrected** 2026-08-21, from
       `.148 .184 .217` (one Pi-hole, two dnsmasq) to `.148 .116 .184` (two Pi-holes,
       one dnsmasq). ~~**Not yet applied**~~ — **APPLIED 2026-08-31**, incidentally: the
@@ -2892,13 +2907,49 @@ apply it** — the apply step is `netplan try`, by hand, deliberately.
       the count. Suppressing the DHCP-supplied global DNS on those nodes is a netplan
       change (`dhcp4-overrides: use-dns: false`), the same mechanism that worked on the
       H4's `enp1s0` — and a separate piece of work from this list.
-- [ ] Resolve the docs disagreement found alongside this: `CLAUDE.md` calls
-      opi-zero2w-1 (`.184`) "secondary DNS", while `README.md` lists `.184` as the
-      *tertiary* dnsmasq fallback and rpi4b (`.116`) as the Pi-hole secondary. One is
-      wrong and it is load-bearing for the decision above.
-- [ ] Decide whether `.152` should exist at all. **It is no longer on the H4** as of
-      the 2026-08-31 reboot — that resolver list is now `.148 .116 .184`. The question
-      stands for anywhere else it may be configured. An address documented as "avoid" that
+- [x] **Docs disagreement RESOLVED 2026-09-02: README was right.** The code settles
+      it — `node-dns.yml`'s `lab_dns_servers` is the only list cluster nodes resolve
+      against, and its own comments name each role:
+
+          .148   Pi-hole v6 PRIMARY     (octopi-dns)
+          .116   Pi-hole v6 SECONDARY   (rpi4b)
+          .184   dnsmasq TERTIARY       (opi-zero2w-1)
+
+      CLAUDE.md called `.184` "secondary" and `docs/HARDWARE.md` was internally
+      inconsistent, calling BOTH `.116` and `.184` secondary in different tables. Both
+      corrected, plus three more instances found while checking. A reference table now
+      lives in HARDWARE.md so the next reader gets position, not adjective.
+
+      **The confusion has a traceable origin: the legacy names.** `.184` is `dns-2` by
+      NAME but third by POSITION, because the old `dns-1..dns-4` numbering never
+      matched resolver order. §3.12 collapsed those names; the mismatch outlived them.
+
+      **AND IT SURFACED A THIRD THING.** The docs called FOUR boxes "DNS secondary".
+      The fourth is `.217` (opi-zero2w-3), which is **in the `dns` inventory group —
+      so `dns.yml` configures and maintains it — but is NOT in `lab_dns_servers`.**
+      `node-dns.yml`'s comment preserves why: the old list was `[.148, .184, .217]`
+      (one Pi-hole, two dnsmasq), corrected on 2026-08-21 to `[.148, .116, .184]`
+      (two Pi-holes, one dnsmasq). `.217` was dropped from the list and no document
+      was updated. It is a configured DNS server that nothing resolves against.
+
+- [ ] **Decide what `.217` is for.** It is maintained by `dns.yml` and used by nobody.
+      Either it is a deliberate warm spare — in which case say so, and note that
+      promoting it is a `lab_dns_servers` edit — or it should leave the `dns` group so
+      the lab stops configuring a resolver it does not use. Cheap either way; the cost
+      of leaving it ambiguous is that the next person reads "DNS secondary" somewhere
+      and believes a query might land there.
+- [x] **`.152` — ANSWERED 2026-09-02: the interface is fine; it was never the problem.**
+      `.152` is octopi's WiFi — the SAME box as the DNS primary `.148`, by a flakier
+      path. It appears nowhere live: not in `lab_dns_servers`, and gone from the H4
+      since the 2026-08-31 reboot. It survives only in `h4-dns-resolvers.yml`'s
+      historical comments, this backlog, and HARDWARE.md's `(avoid)` marker.
+
+      The fault was never that `.152` exists — it was that it got INTO a resolver list,
+      where it added a fourth entry pointing at a box already listed as `.148`. That is
+      fixed at the source. Keeping the interface is defensible: a second path to the
+      DNS primary is useful for out-of-band access, and disabling WiFi on a Pi 3B that
+      serves DNS removes the fallback if its wired link dies. The `(avoid)` note is the
+      right control, and it worked — nothing put `.152` back. An address documented as "avoid" that
       is nonetheless in a production resolver list is worse than an undocumented one.
 
 **A fourth set (`.148 .184 .152`) appeared under `node-exporter-tqxdl`** — a pod that

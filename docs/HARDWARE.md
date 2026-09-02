@@ -22,9 +22,9 @@ Last verified: 2026-07-18.
 | **RPi 3B #2** | Cortex-A53 4C | 1 GB | `192.168.1.148` | `192.168.1.152` (avoid) | DNS primary (Pi-hole v6.4.3, Bookworm) |
 | **RPi 3B #1** | Cortex-A53 4C | 1 GB | — | — | ⚠ on-board power fault — retired |
 | **Odroid-XU3 #1** | Exynos5422 8C | 2 GB | `192.168.1.64` | — | Build agent (Python <3.8 — excluded from Ansible auto-updates) |
-| **Orange Pi Zero 2W #1** | H618 A53 4C | 4 GB | — | `192.168.1.184` | DNS secondary (dnsmasq) |
+| **Orange Pi Zero 2W #1** | H618 A53 4C | 4 GB | — | `192.168.1.184` | DNS **tertiary** fallback (dnsmasq) — third in `lab_dns_servers` |
 | **Orange Pi Zero 2W #2** | H618 A53 4C | 4 GB | — | `192.168.1.188` | MQTT broker (Mosquitto) |
-| **Orange Pi Zero 2W #3** | H618 A53 4C | 4 GB | — | `192.168.1.217` | DNS secondary · Armbian Trixie (Debian 13) |
+| **Orange Pi Zero 2W #3** | H618 A53 4C | 4 GB | — | `192.168.1.217` | dnsmasq, configured but **NOT in `lab_dns_servers`** — see note · Armbian Trixie (Debian 13) |
 | **Orange Pi Zero 2W #4** | H618 A53 4C | 4 GB | — | `192.168.1.99` | MQTT secondary broker · OrangePi image (Debian) |
 | **M5Stack LLM** | ESP32-S3 | — | — | USB | Edge AI inference |
 | **HostMon** | ESP32-S3 (Waveshare 4.3") | 8 MB PSRAM | LAN | — | Host prober + status panel |
@@ -79,19 +79,44 @@ Last verified: 2026-07-18.
 >
 > | inventory name | IP | actual hostname | role |
 > |---|---|---|---|
-> | `opi-zero2w-1` | `.184` | **`opizero2w-4`** | **DNS secondary** |
+> | `opi-zero2w-1` | `.184` | **`opizero2w-4`** | **DNS tertiary fallback** |
 > | `opi-zero2w-2` | `.188` | **`opizero2w-1`** | MQTT broker |
-> | `opi-zero2w-3` | `.217` | **`orangepizero2w`** | DNS secondary |
+> | `opi-zero2w-3` | `.217` | **`orangepizero2w`** | dnsmasq, not in `lab_dns_servers` |
 > | `opi-zero2w-4` | `.99` | `opi-zero2w-4` | MQTT secondary |
 >
 > **`opizero2w-4` is NOT `opi-zero2w-4`.** The first is the hostname of the DNS
-> secondary at `.184`; the second is the inventory name of the MQTT board at `.99`.
+> tertiary fallback at `.184`; the second is the inventory name of the MQTT board at
+> `.99`.
 > A journal line, Loki label or alert saying `opizero2w-4` refers to the DNS box —
 > addressing `opi-zero2w-4` in Ansible reaches the MQTT box instead.
 >
 > **Always address these boards by IP or inventory name, never by what a log says.**
 > And note `.184` and `.188` have no `hostname` binary, so `hostname` returns empty
 > there; use `cat /etc/hostname`.
+
+> **What each DNS box actually is, because the docs called four different boxes
+> "secondary".** Settled 2026-09-02 against `ansible/node-dns.yml`, which defines the
+> only list the cluster nodes actually resolve against:
+>
+> | position | address | box | role |
+> |---|---|---|---|
+> | 1 | `.148` | octopi-dns (RPi 3B #2) | Pi-hole **primary** |
+> | 2 | `.116` | rpi4b | Pi-hole **secondary** |
+> | 3 | `.184` | opi-zero2w-1 | dnsmasq **tertiary fallback** |
+> | — | `.217` | opi-zero2w-3 | dnsmasq, **in the `dns` group but NOT in the list** |
+>
+> `.184` was called "secondary" in CLAUDE.md and here; it is third. The confusion has
+> a traceable origin: the legacy names. `.184` is `dns-2` by NAME but third by
+> POSITION, because the old `dns-1..dns-4` numbering never matched resolver order.
+> §3.12 collapsed those names; the mismatch they created outlived them.
+>
+> **`.217` is a leftover.** `node-dns.yml`'s own comment preserves the old list —
+> `[.148, .184, .217]`, one Pi-hole and two dnsmasq — which was corrected on
+> 2026-08-21 to `[.148, .116, .184]` (two Pi-holes, one dnsmasq). `.217` was dropped
+> from the list and nobody updated a document. It is still in the `dns` inventory
+> group, so `dns.yml` still configures it: a maintained DNS server that nothing
+> resolves against. Decide whether it is a warm spare or should leave the group —
+> BACKLOG §4.12.
 
 > **LXD was removed from the H4 on 2026-08-31. Do not reinstall it.** Found by the
 > first fleet-wide `systemctl list-units --failed` sweep (BACKLOG §3.16), which showed
@@ -136,7 +161,7 @@ Last verified: 2026-07-18.
 | RPi 5 (WiFi) | `2C:CF:67:EF:E2:B4` | Avoid — use wired |
 | RPi 3B #2 (wired) | `B8:27:EB:E7:43:73` | DNS primary |
 | RPi 3B #2 (WiFi) | `B8:27:EB:B2:16:26` | Avoid |
-| OPi Zero 2W #1 | `20:1A:F8:6B:D8:CB` | DNS secondary |
+| OPi Zero 2W #1 | `20:1A:F8:6B:D8:CB` | DNS tertiary fallback (`.184`, third in `lab_dns_servers`) |
 | OPi Zero 2W #2 | `E0:22:90:6E:5E:3A` | MQTT |
 | OPi Zero 2W #3 | `5C:B3:9F:3B:63:27` | WiFi 2.4G · `192.168.1.217` |
 | OPi Zero 2W #4 | `38:BD:01:3B:8A:30` | — |
@@ -197,7 +222,7 @@ CoreDNS extended with `coredns-custom` ConfigMap for in-cluster `*.apps.lab.home
 | lldap | k3s lldap namespace | `https://lldap.apps.lab.home.arpa` (UI) · ClusterIP `:3890` (LDAP) |
 | HashiCorp Vault | RPi 5 | `http://192.168.1.128:8200` |
 | DNS primary | RPi 3B #2 | `192.168.1.148` (Pi-hole v6.4.3) |
-| DNS secondary | OPi Zero 2W #1 | `192.168.1.184` (dnsmasq fallback) |
+| DNS tertiary | OPi Zero 2W #1 | `192.168.1.184` (dnsmasq fallback — third in `lab_dns_servers`) |
 | Home Assistant | k3s (any node) | `https://ha.apps.lab.home.arpa` |
 | MQTT primary | OPi Zero 2W #2 | `192.168.1.188:1883` (bridges to .99) |
 | MQTT secondary | OPi Zero 2W #4 | `192.168.1.99:1883` (bridges to .188) |
