@@ -1596,15 +1596,37 @@ config change plus a rolling restart of three etcd voters, then the monitoring s
       moved *and* etcd is healthy. A check against 127.0.0.1 would have passed before
       any of this existed, which is the whole point.
 
-- [ ] **Run order: `n150-2`, then `n150-1`, then `h4-core`**, one host per invocation,
-      `--check` first. n150-2 holds no kube-vip VIPs; h4-core is the NAS core and the
-      original cluster-init node, so it goes last. Restarting k3s does not touch
-      `smbd`/`nfs-server` — those are host services outside the cluster.
+- [x] **APPLIED 2026-09-02 to all three voters**, `n150-2` → `n150-1` → `h4-core`, one
+      host per invocation with `--check` first. Every run `failed=0`, `ok=13`, and each
+      closed with the assert reading the node IP:
 
-      If the assert fails with `http_code=000`, the flag did not take: see
-      k3s-io/k3s#6833 and use `etcd-arg: listen-metrics-urls=http://127.0.0.1:2381,
-      http://<node-ip>:2381` instead. **Do not repoint the check at loopback** — that
-      is the condition being fixed.
+          192.168.1.21   etcd_server_has_leader=1     (was http_code=000)
+          192.168.1.42   etcd_server_has_leader=1     (was http_code=000)
+          192.168.1.160  etcd_server_has_leader=1     (was http_code=000)
+
+      The `--check` run behaved exactly as intended and is worth noting as a positive
+      result: it reported `config WOULD be updated (check mode — no restart, nothing
+      below is verified)` and skipped all six downstream tasks. A dry run that claims
+      nothing is the point — this was written the day after a play was found asserting
+      success during a run that changed nothing.
+
+      **kube-vip VIPs bracketed by hand around `n150-1`**, which carries both. The
+      playbook has no knowledge of them, so before and after:
+
+          https://192.168.1.200:6443/healthz -> 401    (unchanged)
+          http://192.168.1.201/              -> 404    (unchanged)
+
+      Both are "alive" answers — auth required, and Traefik with no route for `/`.
+      `000` on `.201` would have taken every service URL in the lab with it.
+
+      k3s#6833 did not bite; the boolean flag was sufficient on `v1.36.2+k3s1` and the
+      `etcd-arg: listen-metrics-urls` fallback was not needed.
+
+      **Found while verifying this, unrelated to it: there is no Samba on the H4 at
+      all** — see §6.13. A `systemctl is-active smbd nfs-server` added to confirm the
+      restart stayed inside CLAUDE.md's NAS boundary returned `inactive`, which meant
+      "not installed" rather than "stopped". The boundary was respected; the
+      documentation describing it was wrong.
 
 #### Half two — NOT STARTED, and this is the handoff note
 
@@ -3852,6 +3874,50 @@ and a reminder that a citation landing does not make the sentence around it true
       `for d in sda sdb; do sudo smartctl -a /dev/$d | grep UDMA_CRC; done`
 Called the critical path, referenced nowhere else. Either resolved and undocumented,
 or a lost thread.
+
+### 6.13 `CLAUDE.md` protected a NAS service that does not exist — **found and corrected 2026-09-02**
+
+`CLAUDE.md` read *"the NAS services (`smbd`/`nfs`) and the data they serve are
+off-limits"*. Half of that had no referent. Measured on h4-core:
+
+    systemctl show smbd -p LoadState      ->  LoadState=not-found
+    ss -ltnp | grep -E ':(139|445)\b'     ->  (nothing)
+    list-units --all | grep -iE smb|nmb|samba  ->  (nothing)
+
+There is no Samba on this box — not stopped, not masked, **absent**. Corrected in
+`CLAUDE.md` to name `nfs-server` alone, with the measurement inline so the next person
+does not helpfully restore `smbd` to the sentence.
+
+**Why this is more than a doc nit: it changes an availability statement.** "One of the
+two NAS services was down" and "the only NAS export path was down" are different
+sentences, and the repo has been asserting the first. `nfs-server` is the sole path to
+the NAS data, and §3.16 records it exiting 1/FAILURE on 2026-07-24 and staying down
+**37 days** with nothing able to alert on it. Anyone sizing that risk from `CLAUDE.md`
+would have believed a second export path was available. None was.
+
+**How it was found, which is the part worth keeping.** It surfaced from a throwaway
+`systemctl is-active smbd nfs-server` added to a verification block for something else
+entirely — a check that a k3s restart had stayed inside its lane. It returned
+`inactive` / `active`, and `inactive` was read as "installed and stopped", producing a
+round trip diagnosing a service outage that could not exist.
+
+**`systemctl is-active` returns `inactive` for a stopped unit AND for a unit that is not
+installed.** Identical word, opposite meanings, and only `LoadState` separates them.
+That is the same shape as `findmnt` printing nothing whatever is mounted, `No resources
+found` covering both a deleted workload and a typo'd selector, and an Alertmanager
+receiver logging nothing on success — the family this repo keeps re-learning. Use
+`systemctl show <unit> -p LoadState` when absence is one of the possible answers.
+
+**A live consequence for the alerting, not yet fixed:**
+
+- [ ] `LabSystemdUnitFailed` matches `node_systemd_unit_state{state="failed"} == 1`
+      with **no `absent()` guard**. If `nfs-server` were removed rather than failed,
+      its series would vanish and the alert would go *silent*, not red — the exact
+      generalisation of what happened to `smbd` here. Every other watcher-watching rule
+      in this file has a companion (`LabDNSProbesMissing`,
+      `LabAnsibleDriftMetricMissing`, `LabPrometheusRetentionMetricMissing`); this one
+      does not. Add `absent(node_systemd_unit_state{name="nfs-server.service"})` at
+      minimum, since it is now known to be a single point of failure.
 
 ---
 

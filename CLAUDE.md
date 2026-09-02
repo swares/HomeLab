@@ -34,9 +34,16 @@ Read this before acting. Full context is in `docs/` (start with `ARCHITECTURE.md
 
 ## This box has two roles — keep them separate
 
-- The **cluster layer is yours to manage**. The **NAS services (`smbd`/`nfs`) and the data
-  they serve are off-limits** — never stop, restart, or reconfigure them, and never disable
+- The **cluster layer is yours to manage**. The **NAS service (`nfs-server`) and the data
+  it serves are off-limits** — never stop, restart, or reconfigure it, and never disable
   the backup timers (`backup-nas`, `backup-etcd`).
+- **There is no Samba on this box, and this line used to say there was.** Measured
+  2026-09-02: `systemctl show smbd` returns `LoadState=not-found`, nothing listens on
+  139 or 445, and `list-units --all` matches no `smb`/`nmb`/`samba` unit. So
+  **`nfs-server` is the ONLY export path for the NAS data** — not one of two. That
+  matters when reasoning about availability: it exited 1/FAILURE on 2026-07-24 and
+  stayed down 37 days unnoticed (§3.16). Do not restore `smbd` to this sentence
+  without checking the box first. See BACKLOG §6.13.
 
 ## Storage — separation is logical, so be precise
 
