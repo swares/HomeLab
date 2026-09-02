@@ -74,6 +74,25 @@ Last verified: 2026-07-18.
 > `ansible/playbooks/mount-nvme.yml` now owns this policy and converges both nodes
 > on zram-only, so a weekly `--check` will catch a recurrence.
 
+> **Three of the four Zero 2W boards have hostnames that do not match their inventory
+> names, and one pair is actively misleading.** Measured 2026-08-31 (BACKLOG §4.14):
+>
+> | inventory name | IP | actual hostname | role |
+> |---|---|---|---|
+> | `opi-zero2w-1` | `.184` | **`opizero2w-4`** | **DNS secondary** |
+> | `opi-zero2w-2` | `.188` | **`opizero2w-1`** | MQTT broker |
+> | `opi-zero2w-3` | `.217` | **`orangepizero2w`** | DNS secondary |
+> | `opi-zero2w-4` | `.99` | `opi-zero2w-4` | MQTT secondary |
+>
+> **`opizero2w-4` is NOT `opi-zero2w-4`.** The first is the hostname of the DNS
+> secondary at `.184`; the second is the inventory name of the MQTT board at `.99`.
+> A journal line, Loki label or alert saying `opizero2w-4` refers to the DNS box —
+> addressing `opi-zero2w-4` in Ansible reaches the MQTT box instead.
+>
+> **Always address these boards by IP or inventory name, never by what a log says.**
+> And note `.184` and `.188` have no `hostname` binary, so `hostname` returns empty
+> there; use `cat /etc/hostname`.
+
 > **LXD was removed from the H4 on 2026-08-31. Do not reinstall it.** Found by the
 > first fleet-wide `systemctl list-units --failed` sweep (BACKLOG §3.16), which showed
 > `snap.lxd.activate.service` failed since 2026-08-26 — a boot-time race with
