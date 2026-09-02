@@ -666,3 +666,60 @@ spec:
               timestamps and an exit code as the entire record. A unit with Restart=no
               stays failed until a human intervenes; `enabled` says nothing about
               whether it is running.
+
+    # BACKLOG §3.14 — retention that quietly shrinks.
+    #
+    # Prometheus enforces whichever of `retention` (time) or `retentionSize` (bytes)
+    # binds first. Here size always wins: on 2026-09-02 the counters read
+    # size_retentions_total=19, time_retentions_total=0 — time-based retention had
+    # never fired once — and the real horizon was 14.33 days against a config that
+    # said 30d.
+    #
+    # That gap is invisible without asking. An empty Prometheus result looks identical
+    # to a metric that never existed, so a post-incident query reaching back three
+    # weeks returns nothing and reads as "the problem did not occur". This alert is
+    # the detector that would have caught it without a control query.
+    #
+    # Same class as a backup that quietly stops: the config keeps advertising a
+    # guarantee the system stopped providing.
+    - name: lab.prometheus-retention
+      rules:
+        - alert: LabPrometheusRetentionShort
+          # 12 days: the config claims 15d, and a healthy TSDB sits a little under its
+          # nominal window because the oldest block is only deleted once fully aged
+          # out. Below 12d means the size cap is biting harder than intended and the
+          # window in git is drifting away from the window on disk again.
+          expr: |
+            (time() - prometheus_tsdb_lowest_timestamp_seconds) < (12 * 24 * 3600)
+          # 6h, because a genuinely fresh TSDB (a wiped PV, a rebuilt node) legitimately
+          # has a short horizon while it refills, and that must not page.
+          for: 6h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Prometheus history is only {{ $value | humanizeDuration }} deep"
+            description: >
+              The oldest sample in the TSDB is {{ $value | humanizeDuration }} old,
+              below the 15d the config claims. Check
+              prometheus_tsdb_size_retentions_total against
+              prometheus_tsdb_time_retentions_total to confirm the size cap is the
+              binding limit, and prometheus_tsdb_storage_blocks_bytes against
+              prometheus_tsdb_retention_limit_bytes. Either reclaim disk on n150-1 and
+              raise retentionSize, or lower `retention` so git tells the truth —
+              but do not leave the two disagreeing. Any analysis reaching back further
+              than this window returns empty vectors that look like healthy zeroes.
+
+        # The metric disappearing is not the same as the horizon being short, and a
+        # rule on a gauge cannot fire when the gauge is absent. Same reasoning as
+        # LabAnsibleDriftMetricMissing.
+        - alert: LabPrometheusRetentionMetricMissing
+          expr: absent(prometheus_tsdb_lowest_timestamp_seconds)
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Prometheus TSDB retention metrics have disappeared"
+            description: >
+              prometheus_tsdb_lowest_timestamp_seconds is absent, so
+              LabPrometheusRetentionShort cannot fire whatever the real horizon is.
+              Prometheus may not be scraping itself.
