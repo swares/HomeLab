@@ -1,0 +1,253 @@
+---
+# k3s-etcd-metrics.yml — expose the embedded etcd metrics endpoint on the node IP.
+#
+# BACKLOG §3.2. `kubeEtcd: enabled: false` in gitops/apps/monitoring.yaml on a 3-node
+# HA cluster, so **quorum loss is currently invisible**. Losing one etcd voter is
+# survivable and silent; losing two stops the cluster. Nothing today reports the
+# difference between three healthy members and two.
+#
+# ---- THIS IS HALF THE JOB, ON PURPOSE ----
+# Enabling `kubeEtcd` in the Helm chart is NOT sufficient and must not be done first.
+# Measured on h4-core 2026-09-02, both curls run FROM h4-core:
+#
+#     http://127.0.0.1:2381/metrics        -> 200
+#     http://192.168.1.160:2381/metrics    -> 000     <- its own LAN IP
+#
+# Same host, two addresses, no network path and no firewall in between: k3s binds the
+# etcd metrics listener to loopback only. Prometheus runs as a pod on n150-1 and cannot
+# reach a loopback port on three different machines, so turning on `kubeEtcd` alone
+# would produce a target that exists and never scrapes — which reads as coverage on
+# every dashboard. That is the §3.16 failure shape and worse than having no target.
+#
+# So: this playbook makes the endpoint reachable. NOTHING SCRAPES IT YET. After this
+# runs, the lab has an open metrics port with no consumer, which is a deliberate
+# intermediate state and not an abandoned one. The remaining work is a monitoring.yaml
+# change needing explicit `endpoints:` (the three node IPs), `port: 2381` and
+# `scheme: http` — the chart's kubeEtcd defaults assume 2379 with client certs against
+# kube-system etcd static pods, which do not exist under k3s's embedded etcd.
+#
+# ---- IF THE FLAG ALONE DOES NOT TAKE ----
+# k3s-io/k3s#6833 reports `--etcd-expose-metrics` not binding as expected on some
+# releases. The fallback is an explicit listener rather than the boolean:
+#
+#     etcd-arg:
+#       - "listen-metrics-urls=http://127.0.0.1:2381,http://<node-ip>:2381"
+#
+# The assert at the end of this play is what tells you which case you are in: it reads
+# etcd_server_has_leader FROM THE NODE IP, so it cannot pass while the listener is
+# still on loopback. Do not "fix" a failure here by pointing the check at 127.0.0.1.
+#
+# ---- WHY serial: 1 AND any_errors_fatal ----
+# These three hosts are the etcd voters. Restarting two before the first has rejoined
+# costs quorum and stops the cluster. `serial: 1` restarts one at a time and
+# `any_errors_fatal: true` stops the run entirely if a node does not come back, rather
+# than proceeding to break the second one. Every host is also gated on a pre-flight
+# health check, so a run started against an already-degraded cluster refuses instead of
+# making it worse.
+#
+# ---- RECOMMENDED ORDER, one host per invocation ----
+# Following k3s-ha-join.yml's precedent ("run one node at a time and verify"). n150-2
+# first because it carries no kube-vip VIPs; h4-core last because it is the NAS core
+# and the original cluster-init node.
+#
+#   ansible-playbook -i inventory/hosts.yml playbooks/k3s-etcd-metrics.yml --check -l n150-2
+#   ansible-playbook -i inventory/hosts.yml playbooks/k3s-etcd-metrics.yml         -l n150-2
+#   ansible-playbook -i inventory/hosts.yml playbooks/k3s-etcd-metrics.yml         -l n150-1
+#   ansible-playbook -i inventory/hosts.yml playbooks/k3s-etcd-metrics.yml         -l h4-core
+#
+# Restarting k3s does NOT touch smbd or nfs-server on the H4 — those are host services
+# outside the cluster, and CLAUDE.md's prohibition on them is respected here.
+#
+# ---- CHECK MODE ----
+# Under --check nothing is restarted, so every task that reads state carries
+# `check_mode: false` (or a dry run reports success having verified nothing — written
+# twice in one day on 2026-08-31), and every task that depends on the restart having
+# happened is gated on `not ansible_check_mode`. A --check run therefore proves the
+# pre-flight gate passes and shows whether the config line is missing; it proves
+# nothing about the endpoint, and says so.
+
+- name: Expose k3s embedded etcd metrics on the node IP
+  hosts: microshift:k3s_new_servers
+  become: true
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+
+  vars:
+    k3s_config: /etc/rancher/k3s/config.yaml
+    k3s_bin: /usr/local/bin/k3s
+
+  tasks:
+    # ---- 0. refuse to run anywhere that is not a k3s SERVER --------------------
+    - name: Read k3s server state
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "active=$(systemctl is-active k3s 2>/dev/null)"
+        echo "config=$([ -f {{ k3s_config }} ] && echo yes || echo no)"
+        echo "binary=$([ -x {{ k3s_bin }} ] && echo yes || echo no)"
+      args:
+        executable: /bin/bash
+      register: server_state
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Refuse to continue unless this host is a running k3s server
+      ansible.builtin.assert:
+        that:
+          - server_state.stdout is search('active=active')
+          - server_state.stdout is search('config=yes')
+          - server_state.stdout is search('binary=yes')
+        fail_msg: >-
+          {{ inventory_hostname }}: not a running k3s server
+          ({{ server_state.stdout_lines | default([]) | join(' ') }}).
+          This play restarts the control plane and will not guess.
+
+    # ---- 1. pre-flight: the cluster must be FULLY healthy before we touch it ----
+    #
+    # Counting "not Ready" alone is not enough. If kubectl fails the output is empty,
+    # a count of bad nodes is 0, and the gate passes on a cluster it never saw — the
+    # empty-output trap this lab has hit repeatedly. So the total is captured too and
+    # asserted to be at least 3, which no failed kubectl can produce.
+    #
+    # /healthz/etcd is the apiserver's own etcd probe, and is the one signal here that
+    # is specifically about etcd rather than about nodes.
+    - name: Measure cluster health before restarting an etcd voter
+      ansible.builtin.shell: |
+        set -o pipefail
+        nodes=$({{ k3s_bin }} kubectl get nodes \
+          -o jsonpath='{range .items[*]}{.metadata.name}={.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>/dev/null)
+        echo "total=$(printf '%s' "$nodes" | grep -c '=' || true)"
+        echo "notready=$(printf '%s' "$nodes" | grep -cv '=True$' || true)"
+        echo "etcd=$({{ k3s_bin }} kubectl get --raw /healthz/etcd 2>/dev/null || echo FAIL)"
+      args:
+        executable: /bin/bash
+      register: pre_health
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Show cluster health
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }} PRE: {{ pre_health.stdout_lines | default([]) | join(' | ') }}"
+
+    - name: Refuse to restart an etcd voter unless the cluster is fully healthy
+      ansible.builtin.assert:
+        that:
+          # >= 3 proves kubectl actually answered. A failed call yields total=0.
+          - (pre_health.stdout | regex_search('total=(\d+)', '\\1') | first | int) >= 3
+          - (pre_health.stdout | regex_search('notready=(\d+)', '\\1') | first | int) == 0
+          - pre_health.stdout is search('etcd=ok')
+        fail_msg: >-
+          {{ inventory_hostname }}: cluster is not fully healthy
+          ({{ pre_health.stdout_lines | default([]) | join(' | ') }}).
+          Restarting an etcd voter now risks quorum. Fix the cluster first.
+
+    # ---- 2. the change ---------------------------------------------------------
+    # No `mode:` — the two configs differ deliberately (0644 on h4-core, 0600 on the
+    # N150s, whose file references the token path). lineinfile preserves the existing
+    # mode; setting one here would silently loosen the N150s.
+    - name: Set etcd-expose-metrics in the k3s server config
+      ansible.builtin.lineinfile:
+        path: "{{ k3s_config }}"
+        regexp: '^etcd-expose-metrics:'
+        line: 'etcd-expose-metrics: true'
+        insertafter: EOF
+        state: present
+      register: cfg_change
+
+    - name: Report whether a restart is needed
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}:
+          {{ 'config already correct — no restart needed'
+             if not (cfg_change is changed)
+             else ('config updated; k3s WILL be restarted' if not ansible_check_mode
+                   else 'config WOULD be updated (check mode — no restart, nothing below is verified)') }}
+
+    # ---- 3. restart, one voter at a time ---------------------------------------
+    - name: Restart k3s to pick up the flag
+      ansible.builtin.systemd:
+        name: k3s
+        state: restarted
+      when:
+        - not ansible_check_mode
+        - cfg_change is changed
+
+    - name: Wait for etcd to report healthy again
+      ansible.builtin.command: "{{ k3s_bin }} kubectl get --raw /healthz/etcd"
+      register: post_etcd
+      until: post_etcd.rc == 0 and (post_etcd.stdout | trim) == 'ok'
+      retries: 30
+      delay: 10
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when:
+        - not ansible_check_mode
+        - cfg_change is changed
+
+    - name: Wait for every node to be Ready again
+      ansible.builtin.shell: |
+        set -o pipefail
+        {{ k3s_bin }} kubectl get nodes \
+          -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}' 2>/dev/null \
+          | grep -cv '^True$' || true
+      args:
+        executable: /bin/bash
+      register: post_nodes
+      until: (post_nodes.stdout | trim) == '0'
+      retries: 30
+      delay: 10
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when:
+        - not ansible_check_mode
+        - cfg_change is changed
+
+    # ---- 4. THE verification ---------------------------------------------------
+    # Deliberately reads the NODE IP, never 127.0.0.1. The whole point of this play is
+    # the bind address, and a check against loopback would have passed before any of
+    # this ran. etcd_server_has_leader is a value that cannot be produced unless the
+    # listener moved AND etcd is actually healthy — one number covering both.
+    - name: Read etcd_server_has_leader from the exposed endpoint
+      ansible.builtin.shell: |
+        set -o pipefail
+        code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://{{ node_ip }}:2381/metrics)
+        leader=$(curl -sf --max-time 5 http://{{ node_ip }}:2381/metrics 2>/dev/null \
+          | awk '/^etcd_server_has_leader /{print $2}')
+        echo "http_code=${code} has_leader=${leader:-<none>}"
+      args:
+        executable: /bin/bash
+      register: metrics_check
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: not ansible_check_mode
+
+    - name: Confirm etcd metrics are reachable on the node IP with a healthy leader
+      ansible.builtin.assert:
+        that:
+          - metrics_check.stdout is search('http_code=200')
+          - metrics_check.stdout is search('has_leader=1')
+        fail_msg: >-
+          {{ inventory_hostname }}: etcd metrics are NOT correctly exposed on
+          {{ node_ip }}:2381 — {{ metrics_check.stdout | default('no output') | trim }}.
+          http_code=000 means the listener is still on loopback: see k3s-io/k3s#6833 in
+          this file's header and use the etcd-arg listen-metrics-urls fallback. Do NOT
+          repoint this check at 127.0.0.1 — that is the condition being fixed.
+        success_msg: >-
+          {{ inventory_hostname }}: etcd metrics reachable on {{ node_ip }}:2381 and
+          etcd_server_has_leader=1 (was http_code=000 on the node IP before this ran).
+      when:
+        - not ansible_check_mode
+        - metrics_check.stdout is defined
+
+    - name: Note that nothing scrapes this yet
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: endpoint is live and UNCONSUMED. Prometheus is not
+          configured for it — that is monitoring.yaml's kubeEtcd block (endpoints =
+          the three node IPs, port 2381, scheme http). BACKLOG §3.2.
+      when: not ansible_check_mode

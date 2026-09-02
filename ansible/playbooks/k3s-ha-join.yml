@@ -96,6 +96,11 @@
             - "{{ k3s_node_ip }}"
             - api.lab.home.arpa
           write-kubeconfig-mode: "0644"
+          # See the matching note in k3s-h4.yml. BACKLOG §3.2: binds the embedded
+          # etcd metrics listener to the node IP so it can be scraped from off-box.
+          # Written here for rebuilds only — this play does not restart a running
+          # server. Use playbooks/k3s-etcd-metrics.yml to apply it live.
+          etcd-expose-metrics: true
       no_log: true    # config contains token path; token written separately below
 
     - name: Write k3s token
