@@ -1725,12 +1725,32 @@ empty result from Prometheus is indistinguishable from a metric that never exist
 
 **REMAINING, both opened by this work:**
 
-- [ ] **Loki claims 30 days and nobody has checked it.** Its PV is 12 GB on the same
-      constrained root filesystem as Prometheus's 13 GB, and the same
-      size-versus-time question applies. Given `30d` turned out to be decorative for
-      Prometheus, the prior on Loki's identical claim is poor. `LEDGER-DESIGN.md`
-      states 30 days for Loki in the logs-vs-ledger table, so the same correction may
-      be needed there. Cheap to check.
+- [x] **Loki claims 30 days and nobody has checked it** — **CHECKED 2026-09-02, and
+      unlike Prometheus the claim is now true.** The prior was poor and deserved to be:
+      `30d` was decorative here too until the compactor was enabled the same day.
+
+          Loki PV      12 GB  ->  4.4 GB
+          July window  0 results          (2026-07-01..07-10, limit 1)
+          control      1 result           (last 1h, same query)
+
+      The control ran first and is why the second line means anything. An empty Loki
+      response and a malformed query are indistinguishable, and this exact confusion —
+      a control query for `up` coming back empty at the same instant as the query under
+      investigation — is how §3.14 was found in the first place.
+
+      **The first attempt at this check was the wrong check, and it is worth recording
+      why.** `find -printf '%T+' | head -1` on the PV returned `2026-07-04`, unchanged,
+      which read as "retention deleted nothing" while the size had in fact dropped by
+      7.6 GB. Oldest *file mtime* is a filesystem fact; retention is about what Loki
+      will *return*. The stale timestamp is a bootstrap artifact — a WAL or index file
+      written at PV creation and never rewritten — and no amount of chunk deletion
+      moves it. Same failure as reading `resolvectl` when the kubelet reads
+      `resolv.conf` (§4.12): check the artifact the consumer reads.
+
+      `LEDGER-DESIGN.md` needs no correction on this row after all — 30 days for Loki
+      is now accurate. Note the asymmetry with Prometheus directly above: there the fix
+      was to lower the config to match reality (15d), here it was to make reality match
+      the config. Both were `30d` that meant nothing; they were not the same defect.
 - [ ] **302 GB sits idle in `vm-storage` while retention is disk-bound.** Measured
       2026-09-02: the LV is 400 GB, `/var/lib/libvirt/images` holds 72 GB (one 71 GB
       gitlab-1 qcow2, fully allocated), 20% used. Reclaiming even 100 GB into
