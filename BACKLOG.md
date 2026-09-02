@@ -2819,7 +2819,10 @@ apply it** — the apply step is `netplan try`, by hand, deliberately.
       Verified by reading `/etc/systemd/resolved.conf.d/10-lab-dns.conf` on n150-1 and
       n150-2. A correction that sat unapplied for ten days went out as a side effect of
       unrelated work — which is §3.11's whole thesis, arriving from the other direction.
-- [ ] **The N150 warning persists, exactly as predicted** — and 2026-08-31 measured the
+- [x] **The N150 warning — RESOLVED 2026-09-01.** Root cause was NOT what this entry
+      assumed. See the block appended at the end of this section.
+
+- [x] ~~The N150 warning persists, exactly as predicted~~ — and 2026-08-31 measured the
       composition rather than inferring it. Both hypervisors carry FIVE lines that are
       only THREE distinct servers:
 
@@ -3965,3 +3968,52 @@ Related: §3.10 and §4.14 — the fleet's identity is inconsistent at the host 
 - `community.general` vs Ansible 2.17.14 version mismatch.
 - Mirror `bitnamilegacy/kubectl` into zot before the archive is withdrawn
   (`gitops/apps/kyverno.yaml:43-44`); blocked on §4.2.
+
+---
+
+**§4.12 N150 RESOLUTION, 2026-09-01 — the entry's own diagnosis was incomplete.**
+
+This section assumed the N150 warning was a *union* problem: our routing-only drop-in
+plus DHCP-supplied global resolvers, unavoidable without suppressing DHCP DNS. That was
+half right. Suppressing DHCP DNS was indeed the fix for the count — but the same file
+carried a second, worse defect that nobody had looked for.
+
+**Two netplan files contradicted each other, and the wrong one won:**
+
+    10-kvm-bridge.yaml   enp1s0:  dhcp4: no      <- correct; it is a bridge port
+    50-cloud-init.yaml   enp1s0:  dhcp4: true    <- and 50 sorts after 10, so THIS won
+
+`netplan get ethernets.enp1s0` returned `dhcp4: true`, and the generated unit proved
+the consequence — `DHCP=ipv4` and `Bridge=br0` in the same stanza. **A bridge port
+running its own DHCP client, which can never complete**, so networkd never marked the
+link `configured`. That is why `systemd-networkd-wait-online` failed on n150-1 since
+2026-06-29 and n150-2 since 2026-07-25 (§3.16), and §3.16's br0-scoped drop-in was a
+correct workaround for a cause nobody had found yet.
+
+Cloud-init network regeneration was **not disabled** on either hypervisor, so
+`50-cloud-init.yaml` was rewritten at every boot — editing it would have achieved
+nothing. The H4 has carried that disable stanza since this entry was written; the
+hypervisors never got it.
+
+Fixed by `playbooks/kvm-netplan-fix.yml`: disable cloud-init networking, remove the
+conflicting file (pristine copies to `/var/backups/netplan/`), and add
+`dhcp4-overrides: {use-dns: false}` to br0. Measured after applying:
+
+    nameserver lines   5 -> 3
+    enp1s0 setup       configuring -> configured
+    n150-1 VIPs        .200 and .201 survived the apply
+    new pod on n150-1  no DNSConfigForming event
+
+**`netplan try` cannot be used on these hosts** and this is worth remembering:
+
+    br0: reverting custom parameters for bridges and bonds is not supported
+
+It refuses for any bridge with `parameters:`, applying nothing. A `systemd-run
+--on-active` revert timer, armed before the apply and cancelled after verification,
+gives the same guarantee. The playbook header carries the exact procedure.
+
+**Method note.** The `DNSConfigForming` events kept updating their timestamps after the
+fix, because Kubernetes refreshes `lastTimestamp` on recurrence and existing pods keep
+their old `resolv.conf`. Read casually that says the fix failed. The honest test was to
+delete a DaemonSet pod and check whether the *replacement* emitted the event. It did
+not.

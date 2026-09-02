@@ -44,17 +44,46 @@
 # THIS PLAY WRITES AND VALIDATES. IT DOES NOT APPLY.
 # br0 on n150-1 carries the kube-vip VIPs 192.168.1.200 (control-plane) and
 # 192.168.1.201 (Traefik ingress) — confirmed by the kubevip-traefik-vip lease. An
-# apply that drops the bridge takes both with it. `netplan try` reverts after 120s if
-# not confirmed, and it prompts interactively, which Ansible cannot do. So the play
-# stops and hands over, exactly as h4-dns-resolvers.yml does.
+# apply that drops the bridge takes both with it, so the play stops and hands over,
+# exactly as h4-dns-resolvers.yml does.
 #
-# ORDER OF OPERATIONS ON THE HOSTS:
-#   1. Run this play (writes config, validates, applies nothing).
-#   2. On n150-2 FIRST — it holds no VIPs:
-#        sudo netplan try          # confirm within 120s, or it reverts itself
-#   3. Verify: grep -c nameserver /run/systemd/resolve/resolv.conf   -> 3
-#              networkctl list | grep enp1s0                          -> configured
-#   4. Only then repeat on n150-1, watching that .200/.201 survive.
+# `netplan try` DOES NOT WORK ON THESE HOSTS. Discovered 2026-09-01:
+#
+#     br0: reverting custom parameters for bridges and bonds is not supported
+#     Please carefully review the configuration and use 'netplan apply' directly.
+#
+# It refuses outright — it cannot guarantee a revert for a bridge carrying
+# `parameters:` (here stp/forward-delay), so it applies NOTHING. That is a property of
+# the config, not a transient, and it will refuse every time. Do not plan around it.
+#
+# USE A SYSTEMD REVERT TIMER INSTEAD. It reproduces what `netplan try` would have
+# given: arm it BEFORE applying, cancel it only after verifying. If the apply breaks
+# the network, SSH drops, the timer fires unattended, and the host comes back on the
+# original config.
+#
+# ORDER OF OPERATIONS ON THE HOSTS — n150-2 FIRST, it holds no VIPs:
+#
+#   sudo systemd-run --on-active=300 --unit=netplan-revert /bin/sh -c \
+#     'cp /var/backups/netplan/10-kvm-bridge.yaml.orig /etc/netplan/10-kvm-bridge.yaml; \
+#      cp /var/backups/netplan/50-cloud-init.yaml.orig /etc/netplan/50-cloud-init.yaml; \
+#      netplan apply'
+#   sudo systemctl list-timers netplan-revert --no-pager     # confirm it is armed
+#   sudo netplan apply
+#
+#   # verify, and ONLY then cancel:
+#   grep -c nameserver /run/systemd/resolve/resolv.conf      # want 3
+#   networkctl list | grep enp1s0                            # want configured
+#   ip -4 -br addr show br0                                  # address still present
+#   sudo systemctl stop netplan-revert.timer
+#
+# On n150-1 also check br0 still carries 192.168.1.200/32 and 192.168.1.201/32 before
+# cancelling. If the VIPs do not return, LET THE TIMER FIRE rather than cancelling.
+#
+# APPLIED 2026-09-01 on both hosts by exactly this procedure. Results:
+#     nameserver lines   5 -> 3
+#     enp1s0 setup       configuring -> configured   (stuck since Jun 29 / Jul 25)
+#     VIPs on n150-1     .200 and .201 both survived the apply
+#     all 5 k3s nodes    Ready throughout
 #
 # Usage:
 #   ansible-playbook -i inventory/hosts.yml playbooks/kvm-netplan-fix.yml --check --diff
