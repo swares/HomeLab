@@ -1550,7 +1550,31 @@ the non-existent `..._last_trigger_time_seconds`.
 ### 3.2 No etcd metrics, therefore no quorum-loss alerting
 `docs/REVIEW-2026-07-24.md:306` (H26) — `kubeEtcd: enabled: false` on a 3-node HA cluster.
 
-### 3.3 Nothing verifies that DNS actually resolves — **BUILT 2026-09-02, NOT YET VERIFIED**
+### 3.3 ~~Nothing verifies that DNS actually resolves~~ — **BUILT AND VERIFIED 2026-09-02**
+
+> Applied via #547. All four checks passed, in the order that makes them mean something:
+>
+>     Service name          blackbox-exporter-prometheus-blackbox-exporter   (matches the
+>                           string hardcoded in all four Probes)
+>     Probes                4
+>     Series                count(probe_dns_answer_rrs{job=~"dns-.*"}) = 16
+>     Rules loaded          6 of 6, all inactive
+>     probe_success         16 of 16 = 1
+>
+> **The control is the result that matters**, and it was run before believing any of the
+> rest: the same module against a real resolver and against 1.1.1.1, which cannot know
+> `api.lab.home.arpa`:
+>
+>     real resolver (want 1): probe_success 1
+>     cloudflare    (want 0): probe_success 0
+>
+> Green on arrival proves only that Prometheus is scraping something. `1` then `0` proves
+> the answer assertion is actually applied — the difference between six working rules and
+> six decorative ones, and not visible from any dashboard.
+>
+> A first read reported the Application NotFound. That was an early read, not a defect:
+> `root` reported `Synced 677f48d` moments later and the child appeared. Recorded because
+> the reflex to debug a pipeline that has none cost an hour on 2026-08-26.
 
 `docs/REVIEW-2026-07-24.md:306` (H29) — no blackbox exporter, so
 `api.lab.home.arpa` and `*.apps.lab.home.arpa` failing to resolve is invisible.
@@ -3063,12 +3087,47 @@ apply it** — the apply step is `netplan try`, by hand, deliberately.
       (two Pi-holes, one dnsmasq). `.217` was dropped from the list and no document
       was updated. It is a configured DNS server that nothing resolves against.
 
-- [ ] **Decide what `.217` is for.** It is maintained by `dns.yml` and used by nobody.
-      Either it is a deliberate warm spare — in which case say so, and note that
-      promoting it is a `lab_dns_servers` edit — or it should leave the `dns` group so
-      the lab stops configuring a resolver it does not use. Cheap either way; the cost
-      of leaving it ambiguous is that the next person reads "DNS secondary" somewhere
-      and believes a query might land there.
+- [ ] **Decide what `.217` is for** — **half answered 2026-09-02 by §3.3's probes; the
+      decision is now an informed one rather than a guess.**
+
+      **Measured, not assumed.** `.217` answers every probe correctly, alongside the
+      three resolvers actually in `lab_dns_servers`:
+
+          dns-api-vip           192.168.1.217:53  1
+          dns-apps-wildcard     192.168.1.217:53  1
+          dns-nxdomain-control  192.168.1.217:53  1
+          dns-recursion         192.168.1.217:53  1
+
+      **And it is genuinely independent, which the probe alone does not prove.** A
+      dnsmasq that merely forwarded to `.148` would return identical answers and look
+      just as green — so redundancy has to be read from the config, not the response.
+      Both dnsmasq boxes carry:
+
+          domain=lab.home.arpa
+          local=/lab.home.arpa/                          <- never forward this zone
+          address=/apps.lab.home.arpa/192.168.1.201
+          host-record=api.lab.home.arpa,192.168.1.200
+
+      `local=` is the load-bearing line: it makes dnsmasq answer the zone from local
+      config and never ask upstream. So `.184` and `.217` are authoritative for
+      `lab.home.arpa`, not proxies. The lab has **four real resolvers**, not two and two
+      pass-throughs. (`.148`/`.116` hold their records in Pi-hole's own `hosts` list —
+      that half of the check was cut short by a `head -8`, the same truncation mistake
+      logged three times already this fortnight, so read their independence from
+      `probe_success` rather than from that output.)
+
+      **What this changes.** The entry previously read as dead weight: "a configured DNS
+      server that nothing resolves against." It is now a **verified** warm spare, proved
+      good every 60 seconds by a probe that would go red the moment it stopped being
+      one. That is a different proposition — the usual objection to an unused spare is
+      that nobody knows whether it still works, and that objection no longer applies.
+
+      **Still a decision, and still open.** Promoting it is a one-line `lab_dns_servers`
+      edit; removing it from the `dns` group would discard a resolver now known to be
+      correct. Leaving it exactly as it is has become defensible for the first time.
+      What is NOT acceptable is leaving the docs disagreeing — see the CLAUDE.md fix
+      below, and note `monitoring.yaml` calls it "DNS quaternary" while `hosts.yml`
+      gives it `dns_role: secondary`.
 - [x] **`.152` — ANSWERED 2026-09-02: the interface is fine; it was never the problem.**
       `.152` is octopi's WiFi — the SAME box as the DNS primary `.148`, by a flakier
       path. It appears nowhere live: not in `lab_dns_servers`, and gone from the H4
