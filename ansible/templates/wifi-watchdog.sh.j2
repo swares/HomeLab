@@ -1,0 +1,268 @@
+#!/bin/sh
+# wifi-watchdog.sh — MANAGED BY ANSIBLE (playbooks/wifi-watchdog.yml). Do not edit here.
+#
+# The OPi Zero 2W pool drops off WiFi at random. This checks the link, escalates
+# through reconnect attempts, and reboots as a last resort under a hard cap.
+#
+# ---- THE RISK THIS SCRIPT CREATES, AND WHY IT PUBLISHES METRICS ----
+# A watchdog that silently repairs WiFi 40 times a day makes a broken board look
+# healthy. The fault stops being visible precisely because something is papering
+# over it. So every run writes counters to the node_exporter textfile collector:
+# the point is not only to recover, but to make the recovery COUNTABLE. If
+# lab_wifi_watchdog_reconnect_total climbs steadily, the answer is an antenna, a
+# channel change, or a different board — not a more aggressive watchdog.
+#
+# ---- ASSOCIATED vs REACHABLE, recorded separately on purpose ----
+# "Cannot ping the gateway" has two very different causes:
+#   associated=1, up=0  ->  we hold an AP association but traffic does not flow,
+#                           or the gateway/AP itself is down. Rebooting this board
+#                           fixes nothing; if all four report it at once, the AP is
+#                           the fault and the 24h cap is what stops a fleet-wide
+#                           reboot storm.
+#   associated=0, up=0  ->  the radio is not connected. This is the local fault the
+#                           script exists for.
+# Both are emitted every run so the distinction can be made AFTER the fact from
+# metrics, rather than being guessed at here by logic that cannot see the fleet.
+#
+# ---- STACK IS DETECTED AT RUNTIME, NOT TEMPLATED ----
+# This pool is split: opi-zero2w-1/-2 are Arch with NetworkManager owning wlan0,
+# -3 runs systemd-networkd, -4 neither. Baking the manager in at template time
+# would produce a script that silently does nothing on the hosts it was not
+# written for — and a no-op reconnect is indistinguishable from a successful one
+# in every log it writes. Detecting per-run also survives re-imaging a board.
+#
+# Exit codes are deliberately always 0 except on usage errors: cron mailing a
+# failure every two minutes during an outage is how a mailbox becomes unreadable.
+
+set -u
+
+IFACE_HINT="{{ wifi_watchdog_iface | default('') }}"
+GATEWAY="{{ wifi_watchdog_gateway }}"
+REBOOT_AFTER={{ wifi_watchdog_reboot_after_seconds }}      # continuous down-seconds
+MAX_REBOOTS_24H={{ wifi_watchdog_max_reboots_24h }}
+MIN_UPTIME={{ wifi_watchdog_min_uptime_seconds }}          # never reboot sooner than this after boot
+STATE_DIR=/var/lib/wifi-watchdog
+TEXTFILE_DIR="{{ wifi_watchdog_textfile_dir }}"
+PROM="$TEXTFILE_DIR/wifi_watchdog.prom"
+TAG=wifi-watchdog
+
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+log() { logger -t "$TAG" -- "$*" 2>/dev/null || true; echo "$TAG: $*"; }
+
+now=$(date +%s)
+uptime_s=$(cut -d' ' -f1 /proc/uptime | cut -d. -f1)
+
+# ---- discover the wireless interface ---------------------------------------
+IFACE="$IFACE_HINT"
+if [ -z "$IFACE" ]; then
+  for d in /sys/class/net/*/wireless; do
+    [ -e "$d" ] || continue
+    IFACE=$(basename "$(dirname "$d")")
+    break
+  done
+fi
+
+DRIVER=""
+[ -n "$IFACE" ] && DRIVER=$(basename "$(readlink -f "/sys/class/net/$IFACE/device/driver" 2>/dev/null)" 2>/dev/null)
+[ -n "$DRIVER" ] || DRIVER=unknown
+
+# ---- detect who manages the link -------------------------------------------
+detect_mgr() {
+  if systemctl is-active --quiet NetworkManager 2>/dev/null; then echo nm; return; fi
+  if systemctl is-active --quiet iwd 2>/dev/null; then echo iwd; return; fi
+  if systemctl is-active --quiet "wpa_supplicant@$IFACE" 2>/dev/null; then echo wpa_iface; return; fi
+  if systemctl is-active --quiet wpa_supplicant 2>/dev/null; then echo wpa; return; fi
+  if systemctl is-active --quiet systemd-networkd 2>/dev/null; then echo networkd; return; fi
+  echo unknown
+}
+MGR=$(detect_mgr)
+
+# ---- state helpers ----------------------------------------------------------
+read_num() { v=$(cat "$STATE_DIR/$1" 2>/dev/null); case "$v" in ''|*[!0-9]*) echo 0 ;; *) echo "$v" ;; esac; }
+write_num() { echo "$2" > "$STATE_DIR/$1.tmp" 2>/dev/null && mv -f "$STATE_DIR/$1.tmp" "$STATE_DIR/$1" 2>/dev/null; }
+
+fails=$(read_num consecutive_failures)
+first_fail=$(read_num first_failure_epoch)
+reconnects=$(read_num reconnect_total)
+reboots=$(read_num reboot_total)
+
+# Reboot stamps, one epoch per line, pruned to the last 24h. Persisted in
+# /var/lib so the cap SURVIVES the reboot it is counting — a counter in /run
+# would reset on every reboot and cap nothing at all.
+prune_reboots() {
+  [ -f "$STATE_DIR/reboot_stamps" ] || return 0
+  cutoff=$((now - 86400))
+  awk -v c="$cutoff" '$1 ~ /^[0-9]+$/ && $1 > c' "$STATE_DIR/reboot_stamps" > "$STATE_DIR/reboot_stamps.tmp" 2>/dev/null \
+    && mv -f "$STATE_DIR/reboot_stamps.tmp" "$STATE_DIR/reboot_stamps" 2>/dev/null
+}
+prune_reboots
+reboots_24h=$(wc -l < "$STATE_DIR/reboot_stamps" 2>/dev/null | tr -d ' ')
+case "$reboots_24h" in ''|*[!0-9]*) reboots_24h=0 ;; esac
+
+# ---- metrics ----------------------------------------------------------------
+# Written atomically: node_exporter reads this file on every scrape and REJECTS
+# THE WHOLE FILE on a parse error, so a half-written file would silently remove
+# every metric here rather than just the truncated one.
+write_metrics() {
+  _up=$1; _assoc=$2; _down=$3; _action=$4
+  [ -d "$TEXTFILE_DIR" ] || return 0
+  t="$PROM.$$"
+  {
+    echo "# HELP lab_wifi_watchdog_up Gateway reachable over the wireless link (1) or not (0)."
+    echo "# TYPE lab_wifi_watchdog_up gauge"
+    echo "lab_wifi_watchdog_up $_up"
+    echo "# HELP lab_wifi_watchdog_associated Radio holds an AP association (1) or not (0)."
+    echo "# TYPE lab_wifi_watchdog_associated gauge"
+    echo "lab_wifi_watchdog_associated $_assoc"
+    echo "# HELP lab_wifi_watchdog_consecutive_failures Consecutive failed checks."
+    echo "# TYPE lab_wifi_watchdog_consecutive_failures gauge"
+    echo "lab_wifi_watchdog_consecutive_failures $fails"
+    echo "# HELP lab_wifi_watchdog_down_seconds Seconds since the first failure of the current outage."
+    echo "# TYPE lab_wifi_watchdog_down_seconds gauge"
+    echo "lab_wifi_watchdog_down_seconds $_down"
+    echo "# HELP lab_wifi_watchdog_reconnect_total Reconnect actions taken since install."
+    echo "# TYPE lab_wifi_watchdog_reconnect_total counter"
+    echo "lab_wifi_watchdog_reconnect_total $reconnects"
+    echo "# HELP lab_wifi_watchdog_reboot_total Reboots triggered by this watchdog since install."
+    echo "# TYPE lab_wifi_watchdog_reboot_total counter"
+    echo "lab_wifi_watchdog_reboot_total $reboots"
+    echo "# HELP lab_wifi_watchdog_reboots_24h Watchdog reboots in the last rolling 24h."
+    echo "# TYPE lab_wifi_watchdog_reboots_24h gauge"
+    echo "lab_wifi_watchdog_reboots_24h $reboots_24h"
+    echo "# HELP lab_wifi_watchdog_last_run_timestamp_seconds Unix time of the last completed run."
+    echo "# TYPE lab_wifi_watchdog_last_run_timestamp_seconds gauge"
+    echo "lab_wifi_watchdog_last_run_timestamp_seconds $now"
+    echo "# HELP lab_wifi_watchdog_info Static labels for the watchdog on this host."
+    echo "# TYPE lab_wifi_watchdog_info gauge"
+    echo "lab_wifi_watchdog_info{iface=\"$IFACE\",driver=\"$DRIVER\",manager=\"$MGR\",action=\"$_action\"} 1"
+  } > "$t" 2>/dev/null && mv -f "$t" "$PROM" 2>/dev/null
+  rm -f "$t" 2>/dev/null || true
+}
+
+if [ -z "$IFACE" ]; then
+  log "no wireless interface found — nothing to watch"
+  write_metrics 0 0 0 no-interface
+  exit 0
+fi
+
+# ---- keep power save off ----------------------------------------------------
+# Re-asserted every run, not only at boot. NetworkManager re-applies its own
+# powersave setting on each reconnect, so a value set once at install is not a
+# value that stays set. Cheap enough to do unconditionally.
+if command -v iw >/dev/null 2>&1; then
+  iw dev "$IFACE" set power_save off >/dev/null 2>&1 || true
+fi
+
+# ---- health check -----------------------------------------------------------
+associated=0
+if command -v iw >/dev/null 2>&1; then
+  iw dev "$IFACE" link 2>/dev/null | grep -qi '^Connected to' && associated=1
+else
+  # No iw: carrier is a weaker proxy, but better than asserting nothing.
+  [ "$(cat "/sys/class/net/$IFACE/operstate" 2>/dev/null)" = "up" ] && associated=1
+fi
+
+has_ip=0
+ip -4 -o addr show dev "$IFACE" 2>/dev/null | grep -q 'inet ' && has_ip=1
+
+reachable=0
+if [ "$has_ip" = 1 ] && ping -c 2 -W 3 -I "$IFACE" "$GATEWAY" >/dev/null 2>&1; then
+  reachable=1
+fi
+
+# ---- healthy ----------------------------------------------------------------
+if [ "$reachable" = 1 ]; then
+  if [ "$fails" -gt 0 ]; then
+    log "recovered after $fails failed checks ($(( now - first_fail ))s down, manager=$MGR)"
+  fi
+  write_num consecutive_failures 0
+  write_num first_failure_epoch 0
+  fails=0
+  write_metrics 1 "$associated" 0 ok
+  exit 0
+fi
+
+# ---- unhealthy --------------------------------------------------------------
+fails=$((fails + 1))
+[ "$first_fail" -eq 0 ] && first_fail=$now
+down=$((now - first_fail))
+write_num consecutive_failures "$fails"
+write_num first_failure_epoch "$first_fail"
+
+log "DOWN check=$fails down=${down}s associated=$associated has_ip=$has_ip iface=$IFACE manager=$MGR"
+
+reconnect() {
+  reconnects=$((reconnects + 1))
+  write_num reconnect_total "$reconnects"
+  case "$MGR" in
+    nm)        nmcli device disconnect "$IFACE" >/dev/null 2>&1 || true
+               nmcli device connect "$IFACE" >/dev/null 2>&1 || true ;;
+    iwd)       systemctl restart iwd >/dev/null 2>&1 || true ;;
+    wpa_iface) wpa_cli -i "$IFACE" reassociate >/dev/null 2>&1 || systemctl restart "wpa_supplicant@$IFACE" >/dev/null 2>&1 || true ;;
+    wpa)       wpa_cli -i "$IFACE" reassociate >/dev/null 2>&1 || systemctl restart wpa_supplicant >/dev/null 2>&1 || true ;;
+    networkd)  networkctl reconfigure "$IFACE" >/dev/null 2>&1 || systemctl restart systemd-networkd >/dev/null 2>&1 || true ;;
+    *)         ip link set "$IFACE" down 2>/dev/null || true
+               sleep 2
+               ip link set "$IFACE" up 2>/dev/null || true ;;
+  esac
+}
+
+bounce_iface() {
+  reconnects=$((reconnects + 1))
+  write_num reconnect_total "$reconnects"
+  ip link set "$IFACE" down 2>/dev/null || true
+  sleep 3
+  ip link set "$IFACE" up 2>/dev/null || true
+}
+
+restart_manager() {
+  reconnects=$((reconnects + 1))
+  write_num reconnect_total "$reconnects"
+  case "$MGR" in
+    nm)        systemctl restart NetworkManager >/dev/null 2>&1 || true ;;
+    iwd)       systemctl restart iwd >/dev/null 2>&1 || true ;;
+    wpa_iface) systemctl restart "wpa_supplicant@$IFACE" >/dev/null 2>&1 || true ;;
+    wpa)       systemctl restart wpa_supplicant >/dev/null 2>&1 || true ;;
+    networkd)  systemctl restart systemd-networkd >/dev/null 2>&1 || true ;;
+    *)         bounce_iface ;;
+  esac
+}
+
+action=none
+
+# Escalation. Ordered cheapest-first and deliberately gentle at the start: a
+# reassociate storm against a marginal AP makes things worse, not better.
+if   [ "$fails" -le 2 ]; then action=reassociate;     reconnect
+elif [ "$fails" -le 5 ]; then action=bounce-interface; bounce_iface
+else                          action=restart-manager;  restart_manager
+fi
+
+# ---- last resort ------------------------------------------------------------
+# THREE independent guards, all of which must pass:
+#   1. down long enough      — a short outage is not a wedged driver
+#   2. under the 24h cap     — survives reboots because the stamps are in /var/lib
+#   3. booted long enough    — without this a board that comes back still broken
+#                              re-reboots immediately and loops until the cap,
+#                              burning both allowances in ten minutes
+if [ "$down" -ge "$REBOOT_AFTER" ] && [ "$reboots_24h" -lt "$MAX_REBOOTS_24H" ] && [ "$uptime_s" -ge "$MIN_UPTIME" ]; then
+  reboots=$((reboots + 1))
+  write_num reboot_total "$reboots"
+  echo "$now" >> "$STATE_DIR/reboot_stamps"
+  reboots_24h=$((reboots_24h + 1))
+  action=reboot
+  log "REBOOTING: down ${down}s >= ${REBOOT_AFTER}s, ${reboots_24h}/${MAX_REBOOTS_24H} reboots in 24h, uptime ${uptime_s}s"
+  write_metrics 0 "$associated" "$down" reboot
+  sync
+  # systemd-managed, deferred slightly so the metric file and journal are flushed.
+  (sleep 5; systemctl reboot) >/dev/null 2>&1 &
+  exit 0
+elif [ "$down" -ge "$REBOOT_AFTER" ]; then
+  # Say WHICH guard held, so a board that stays down is explainable from the log
+  # alone rather than requiring someone to re-derive the conditions.
+  log "reboot withheld: down=${down}s reboots_24h=${reboots_24h}/${MAX_REBOOTS_24H} uptime=${uptime_s}s (min ${MIN_UPTIME}s)"
+  action=reboot-withheld
+fi
+
+write_metrics 0 "$associated" "$down" "$action"
+exit 0
