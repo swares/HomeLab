@@ -2638,16 +2638,60 @@ Grep patterns run under `sudo` land in the journal they are searching.
 
 **To do:**
 
-- [ ] `--check` then apply `playbooks/wifi-watchdog.yml`. The play asserts
-      `lab_wifi_watchdog_up 1` from a real first run rather than reporting success from a
-      dry run that verified nothing.
-- [ ] **Enable the node_exporter textfile collector on these four.** The play creates
-      `/var/lib/node_exporter/textfile_collector` and the script writes
-      `wifi_watchdog.prom` into it, but nothing reads it yet: the exporter needs
-      `--collector.textfile.directory`, and its unit name and argument plumbing differ
-      between the Debian package and Arch. The play probes and reports rather than
-      guessing at `ExecStart` surgery on a running exporter. Directory first, flag second
-      — a collector aimed at a missing directory logs a read error on every scrape.
+- [x] **Applied to all four, 2026-09-04**, `--check` first then `-3` → `-4` → the Arch
+      pair. Every host `failed=0`, `ok=22`, and each closed on the assert reading a file
+      the script had actually written:
+
+          lab_wifi_watchdog_up 1  associated 1  reconnect_total 0  reboots_24h 0
+
+      **The runtime stack detection is demonstrated, not assumed** — the one real design
+      risk in the script. `lab_wifi_watchdog_info` came back with three different
+      configurations resolving correctly:
+
+          opi-zero2w-3   manager="wpa"   networkd + wpa_supplicant, NM inactive
+          opi-zero2w-4   manager="nm"    NetworkManager, networkd inactive
+          opi-zero2w-1   manager="nm"    NM + networkd + wpa all active
+          opi-zero2w-2   manager="nm"    ditto
+
+      A manager templated in at install time would have produced a silent no-op on at
+      least one of these, and a no-op reconnect logs identically to a successful one.
+
+      The `--check` run behaved correctly too: `changed=6`, then every task below
+      `Enable and start the watchdog timer` skipped, with the report saying in its own
+      output that nothing beneath it had been verified.
+
+      **Two small things noted and not fixed.** `manager=networkd` is effectively
+      unreachable on a WiFi host — wpa_supplicant is checked first and you cannot
+      associate without a supplicant, so that branch is dead code that reads as live
+      coverage. And the `reload NetworkManager` handler is `changed_when: true` with
+      `failed_when: false`, so it reported `changed` on `-3` where NM is inactive and
+      `nmcli` must have failed: a task claiming success without checking.
+
+- [x] **Textfile collector enablement written into `playbooks/node-exporter.yml`**
+      2026-09-04 — not yet run. It belongs there rather than in a new play: that file
+      already owns node_exporter on exactly these hosts and already carries the
+      Debian/Arch split.
+
+      **Measured rather than branched on.** The reports from all four boards gave
+      `unit=prometheus-node-exporter` uniformly, but `default_file=yes` only on the
+      Debian pair — `/etc/default/prometheus-node-exporter` does not exist on Arch. So
+      instead of branching on `os_family` (which this same file got wrong on 2026-08-27,
+      having listed `opi-zero2w-4` as Arch when it is Debian), the play **reads the
+      ExecStart the unit actually has** and re-issues it with the flag appended. That
+      preserves whatever `$ARGS`/EnvironmentFile indirection each package uses and works
+      on both — and on whatever the next re-image does.
+
+      Guarded: the drop-in is written only if the captured ExecStart is non-empty and
+      contains a path. An empty capture written into `ExecStart=` leaves the unit
+      unstartable, and that failure would surface at the *next* restart rather than
+      during the run that caused it.
+
+      The assert checks the **flag in ExecStart**, not a metric name.
+      `node_textfile_scrape_error` is the expected indicator but its exact spelling was
+      not measured on these exporter versions, and an assert on a metric that does not
+      exist fails identically to one on a collector that is not running. The series
+      counts are reported so the real names can be read off a working host and the check
+      tightened afterwards.
 - [ ] **Alert rules — deliberately NOT written yet.** Metrics cannot reach Prometheus
       until the item above lands, so a `lab.wifi` group added today would fire on arrival
       because the series are absent. An alert that is noise on day one is an alert that
