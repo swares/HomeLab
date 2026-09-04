@@ -1547,7 +1547,21 @@ collector "cannot read `/run/systemd/private`" — a diagnosis that
 cannot fire`. It is now suppressing a working metric. One of the two key names is also
 the non-existent `..._last_trigger_time_seconds`.
 
-### 3.2 No etcd metrics, therefore no quorum-loss alerting — **HALF DONE 2026-09-02: endpoint exposed, nothing scrapes it yet**
+### 3.2 ~~No etcd metrics, therefore no quorum-loss alerting~~ — **CLOSED 2026-09-04**
+
+> Both halves done and verified. Three targets `health=up`, `etcd_server_has_leader=1`
+> on all three, and fifteen built-in etcd rules now evaluating against real data.
+>
+> **The title's "therefore" was wrong, and that is the useful part.** The alerting was
+> never missing: `defaultRules.rules.etcd` is on by default, so `etcdInsufficientMembers`,
+> `etcdNoLeader` and thirteen others have been loaded and reporting `inactive` this whole
+> time — against no data. **An `inactive` rule with no data and an `inactive` rule with a
+> healthy cluster are indistinguishable from the rules API.** Nothing was broken, nothing
+> was missing, and every status signal was green while quorum loss would have gone
+> unremarked. What changed today is that those rules acquired something to evaluate.
+>
+> Same shape as §3.16's systemd collector and §3.14's retention: the machinery existed,
+> looked healthy, and was pointed at nothing.
 
 `docs/REVIEW-2026-07-24.md:306` (H26) — `kubeEtcd: enabled: false` on a 3-node HA cluster.
 Losing one etcd voter is survivable and silent; losing two stops the cluster. Nothing
@@ -1656,22 +1670,38 @@ days after the rolling restart and with nothing scraping them.
       inventory's `node_ip` values — but adding or replacing a server node means editing
       both, and only the target count will notice a missed edit.
 
-- [ ] **Verify, and do not stop at "the target exists".** In order:
+- [x] **Verified 2026-09-04.** The Endpoints object carried all three addresses, and
+      after one scrape interval:
 
-          up{job="kps-kube-etcd"}                       -> want 1, THREE times
-          etcd_server_has_leader                        -> want 1, three times
-          count(etcd_server_id)                         -> want 3, the missed-edit detector
-          /api/v1/rules | etcdMembersDown, etcdInsufficientMembers  -> present
+          targets   http://192.168.1.160:2381/metrics  health=up
+                    http://192.168.1.42:2381/metrics   health=up
+                    http://192.168.1.21:2381/metrics   health=up
+          count(etcd_server_id)          = 3
+          count(etcd_server_has_leader)  = 3
+          count(up{job=~".*etcd.*"})     = 3
+          rules     15 etcd rules loaded, all inactive
 
-      The rules matter as much as the metrics: `defaultRules.rules.etcd` is on by
-      default, so those rules have been *loaded and evaluating against no data* this
-      whole time. A rule group that fails to load is silent rather than broken, and
-      silence here is what §3.2 has been complaining about since July.
+      **The first read said `NO DATA`, 26 seconds after the Endpoints object appeared,
+      and that was simply too early** — config reload plus one scrape interval. It was
+      not investigated as a fault, because the identical early read on §3.3's blackbox
+      Application two days earlier already cost a round trip.
 
-- [ ] The remaining risk is that a wrong `endpoints` list fails **silently** — green
-      Argo Application, target that never scrapes. `up == 0` and a missing series look
-      different in Prometheus but identical on a dashboard, so check `up` explicitly
-      rather than inferring from an empty graph.
+      **Use `/api/v1/targets`, not a metric query, when asking whether scraping works.**
+      A metric query returning nothing conflates three different states — target absent,
+      target failing, wrong metric name — while the targets API reports the scrape URL,
+      health and `lastError` verbatim. That distinction was live here: `etcd_server_id`
+      was chosen from memory and its `NO DATA` could equally have meant the metric does
+      not exist on this etcd version. It does (3), but the check was ambiguous until the
+      targets API disambiguated it.
+
+      `count(etcd_server_id) = 3` is the standing detector for the endpoints/inventory
+      divergence noted above — a server node added to `hosts.yml` and not here shows up
+      as a 3 that should have become a 4, and nothing else would notice.
+
+- [x] The silent-failure risk was real but did not materialise: a wrong `endpoints` list
+      gives a green Argo Application and a target that never scrapes. `up == 0` and a
+      missing series look different in Prometheus and identical on a dashboard, which is
+      why `up` was read explicitly rather than inferred from an empty graph.
 
 ### 3.3 ~~Nothing verifies that DNS actually resolves~~ — **BUILT AND VERIFIED 2026-09-02**
 
