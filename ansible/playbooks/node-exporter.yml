@@ -222,6 +222,125 @@
         comment: Prometheus node exporter
       when: ansible_os_family == 'Archlinux'
 
+    # ---- textfile collector — BACKLOG §3.17 ---------------------------------
+    # Lets scripts on these hosts publish metrics. First consumer is
+    # playbooks/wifi-watchdog.yml on the Zero 2W pool, which writes
+    # wifi_watchdog.prom and had nowhere for Prometheus to read it from: the file
+    # existed on disk and no exporter was looking at the directory.
+    #
+    # DIRECTORY FIRST, FLAG SECOND, AND THE ORDER IS NOT NEGOTIABLE. A textfile
+    # collector aimed at a missing directory logs a read error on EVERY scrape, on
+    # every host. Permanent low-grade exporter noise is how §3.15's 19-day
+    # crashloop went unexamined. Play 1 above does this for the cluster nodes.
+    - name: Create the node_exporter textfile collector directory
+      ansible.builtin.file:
+        path: /var/lib/node_exporter/textfile_collector
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    - name: Ensure the node_exporter drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/system/prometheus-node-exporter.service.d
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+
+    # THE UNIT NAME IS UNIFORM ACROSS BOTH DISTROS; THE ARGUMENT PLUMBING IS NOT.
+    # Measured 2026-09-04 on the Zero 2W pool: unit=prometheus-node-exporter on all
+    # four, but /etc/default/prometheus-node-exporter exists only on the Debian
+    # boards. Rather than branch on that — and be wrong again the next time a
+    # package changes, as this file's own 2026-08-27 correction did about which
+    # boards were Arch — take the ExecStart the unit ACTUALLY has and re-issue it
+    # with the flag appended. Works on both, and on whatever comes next.
+    - name: Read the current node_exporter ExecStart
+      ansible.builtin.shell: |
+        set -o pipefail
+        systemctl show -p ExecStart --value prometheus-node-exporter 2>/dev/null \
+          | sed -n 's/.*argv\[\]=\([^;]*\).*/\1/p' | head -1
+      args:
+        executable: /bin/bash
+      register: ne_execstart
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    # Guarded on the parse having produced something that looks like a command.
+    # An empty or malformed capture written into `ExecStart=` would leave the unit
+    # unstartable, and the failure would arrive at the next restart rather than
+    # here — the worst possible distance between cause and symptom.
+    - name: Enable the textfile collector via a systemd drop-in
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/prometheus-node-exporter.service.d/10-textfile.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Managed by Ansible (playbooks/node-exporter.yml) — BACKLOG §3.17.
+          # ExecStart is reset and re-issued because systemd appends otherwise; the
+          # base command below was READ FROM THE RUNNING UNIT rather than assumed,
+          # so any $ARGS/EnvironmentFile indirection the package uses is preserved.
+          [Service]
+          ExecStart=
+          ExecStart={{ ne_execstart.stdout | trim }} --collector.textfile.directory=/var/lib/node_exporter/textfile_collector
+      register: textfile_dropin
+      when:
+        - ne_execstart.stdout is defined
+        - (ne_execstart.stdout | trim | length) > 0
+        - "'/' in ne_execstart.stdout"
+        - "'collector.textfile.directory' not in ne_execstart.stdout"
+
+    # Restart CAUSED BY the drop-in changing, not by the clock — the lesson recorded
+    # below about `state: restarted` bouncing five hosts on every run.
+    - name: Restart node_exporter to pick up the textfile collector
+      ansible.builtin.systemd:
+        name: prometheus-node-exporter
+        daemon_reload: true
+        state: restarted
+      when:
+        - not ansible_check_mode
+        - textfile_dropin is defined
+        - textfile_dropin is changed
+
+    - name: Verify the collector is actually enabled and serving
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "flag=$(systemctl show -p ExecStart --value prometheus-node-exporter 2>/dev/null | grep -c 'collector.textfile.directory')"
+        m=$(curl -s --max-time 5 http://localhost:9100/metrics 2>/dev/null)
+        echo "node_textfile_series=$(printf '%s' "$m" | grep -c '^node_textfile')"
+        echo "wifi_watchdog_series=$(printf '%s' "$m" | grep -c '^lab_wifi_watchdog')"
+      args:
+        executable: /bin/bash
+      register: textfile_verify
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: not ansible_check_mode
+
+    # Asserts on the FLAG, not on a metric name. `node_textfile_scrape_error` is
+    # the expected indicator but its exact spelling was not measured on these
+    # exporter versions, and an assert on a metric that does not exist fails
+    # identically to one on a collector that is not running. The flag in ExecStart
+    # cannot be ambiguous. The series counts are reported so the real names can be
+    # read off a working host and the check tightened later.
+    - name: Confirm the textfile collector flag is live
+      ansible.builtin.assert:
+        that:
+          - textfile_verify.stdout is search('flag=1')
+        fail_msg: >-
+          {{ inventory_hostname }}: textfile collector not enabled —
+          {{ textfile_verify.stdout | default('no output') | trim }}.
+          Check the drop-in at
+          /etc/systemd/system/prometheus-node-exporter.service.d/10-textfile.conf
+          and that the ExecStart it captured is a valid command.
+        success_msg: >-
+          {{ inventory_hostname }}: {{ textfile_verify.stdout_lines | default([]) | join(' | ') }}
+      when:
+        - not ansible_check_mode
+        - textfile_verify.stdout is defined
+
     - name: Collect service facts
       ansible.builtin.service_facts:
 
