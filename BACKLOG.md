@@ -2582,6 +2582,100 @@ by accident. The drift check found this one on its first run, which is encouragi
 a weekly Ansible dry run is a poor substitute for a metric that would have fired the same
 afternoon.
 
+### 3.17 Nothing can see a WiFi drop on the Zero 2W pool — **watchdog written 2026-09-04, not yet applied**
+
+**Reported symptom:** the Orange Pi Zero 2Ws disconnect from WiFi at random. **Measured
+finding: nothing in the lab records a WiFi disconnect on those boards, so the symptom
+can be neither confirmed nor sized.** That is the actual gap, and it is why the valuable
+half of `playbooks/wifi-watchdog.yml` is its telemetry rather than its reconnect logic.
+
+**The discovery pass contradicted three assumptions, including two of mine.**
+
+- **Power save was already off on all four.** `iw dev wlan0 get power_save` → `off`
+  everywhere, and NetworkManager already had `wifi.powersave = 2` on `-3` and `-4`. The
+  requested fix was a no-op. It is worth codifying anyway — NM re-applies powersave on
+  every reconnect, so a value that is correct today is not one that stays correct — but
+  it was never the cause.
+
+- **No disconnects in seven days: `0, 1, 0, 0`.** Unusually, this negative is
+  trustworthy, because the check was proven able to speak: wpa_supplicant and
+  NetworkManager both log to the journal here (`CTRL-EVENT-*` and
+  `device (wlan0): state changed` were both observed). What *cannot* speak is the
+  kernel — `journalctl -k` holds 560–668 lines with **zero** mentions of
+  `wlan|unisoc|cfg80211|nl80211`. The out-of-tree `unisoc_wifi` driver is silent at
+  kernel level. Do not build a kernel-log detector; it has nothing to read.
+
+- **The reboots were manual.** `--list-boots` showed `-2` restarting twice in five days
+  and `-3` four times inside 45 minutes; both were hand power-cycles. Worth recording
+  because an automated reboot escalation is only defensible once spontaneous reboots are
+  ruled out — a watchdog that reboots boards which already reboot on their own turns one
+  fault into two.
+
+**And one finding that was an artefact of looking.** A first pass counted **2 hits each**
+of `under-voltage`, `out of memory`, `kernel panic` and `hardware error` — on all four
+boards, identical counts, four unrelated causes. They were `sudo`'s log of the diagnostic
+command, whose grep pattern contained all four phrases. `journalctl -k`, which cannot
+contain sudo lines, returns 0 for every one. **The measurement had been reading itself**,
+and "under-voltage on all four boards" was one sentence from being written down as fact.
+Grep patterns run under `sudo` land in the journal they are searching.
+
+**Design decisions, recorded because they were close calls:**
+
+- **systemd timer, not cron, though cron was what was asked for.** `cron`/`crond` are
+  inactive and `crontab` absent on `-1` and `-2` (Arch); `-3`/`-4` (Debian) have cron.
+  Honouring cron means installing `cronie` on half the pool and managing two package and
+  two unit names for something a timer does natively on all four.
+- **The script detects its network stack at runtime rather than being templated.** The
+  pool is split three ways: `-1`/`-2` NetworkManager, `-3` systemd-networkd, `-4` NM with
+  networkd inactive. A manager baked in at template time produces a script that silently
+  no-ops on the hosts it was not written for — and a no-op reconnect is indistinguishable
+  from a successful one in every log it writes.
+- **Reboot policy 30 min / max 2 per 24h, uniform across the pool.** Reboot stamps live
+  in `/var/lib` so the cap survives the reboot it is counting; a counter in `/run` would
+  reset each time and cap nothing. Three independent guards must all pass, including a
+  15-minute minimum uptime that stops a board which comes back still broken from burning
+  both allowances in ten minutes.
+
+**To do:**
+
+- [ ] `--check` then apply `playbooks/wifi-watchdog.yml`. The play asserts
+      `lab_wifi_watchdog_up 1` from a real first run rather than reporting success from a
+      dry run that verified nothing.
+- [ ] **Enable the node_exporter textfile collector on these four.** The play creates
+      `/var/lib/node_exporter/textfile_collector` and the script writes
+      `wifi_watchdog.prom` into it, but nothing reads it yet: the exporter needs
+      `--collector.textfile.directory`, and its unit name and argument plumbing differ
+      between the Debian package and Arch. The play probes and reports rather than
+      guessing at `ExecStart` surgery on a running exporter. Directory first, flag second
+      — a collector aimed at a missing directory logs a read error on every scrape.
+- [ ] **Alert rules — deliberately NOT written yet.** Metrics cannot reach Prometheus
+      until the item above lands, so a `lab.wifi` group added today would fire on arrival
+      because the series are absent. An alert that is noise on day one is an alert that
+      trains the eye past it — `LabExternalHostDown`, three weeks critical, is the lab's
+      own case study. Write them once `lab_wifi_watchdog_up` is being scraped, and
+      include the `absent()` companion.
+- [ ] **Re-ask the original question with data.** After a week, `increase(
+      lab_wifi_watchdog_reconnect_total[7d])` answers whether the boards actually drop
+      WiFi. If it is ~0, the reported symptom is something else — most likely the manual
+      power-cycles above, which are indistinguishable from a WiFi drop when observed from
+      the network.
+
+**Two findings from this work that belong elsewhere:**
+
+- **Hostname collision — §4.14.** `/etc/hostname` against the Ansible key:
+  `.184` → `opizero2w-4`, `.188` → `opizero2w-1`, `.217` → `orangepizero2w`,
+  `.99` → `opi-zero2w-4`. **`.184` and `.99` differ by a single hyphen.** Metrics are
+  unaffected (`monitoring.yaml` relabels `instance` from the scrape address), but journal
+  entries and anything Promtail/Alloy ships carry the hostname, so logs from `.184` land
+  under a name belonging to a different machine. Not fixed in passing: renaming hosts
+  mid-play would invalidate the metrics being installed.
+- **No battery-backed RTC, and `fake-hwclock` only on `-4` — §1.13.** `/dev/rtc0` exists
+  on all four and reads correctly while powered, but `fake-hwclock` is `not-found` on the
+  Arch pair and `masked` on `-3`. `-1` came up stamped **2024-07-06** and `-2`
+  **2026-07-24**, until NTP corrected them. This is §1.13's "warm RTC" exposure realised:
+  every boot passes through a window where TLS sees certificates as not-yet-valid, and
+  any `journalctl --since` query is unreliable across it.
+
 ---
 
 ## 4. Broken or blocked, live
