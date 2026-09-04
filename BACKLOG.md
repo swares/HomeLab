@@ -1628,25 +1628,50 @@ config change plus a rolling restart of three etcd voters, then the monitoring s
       "not installed" rather than "stopped". The boundary was respected; the
       documentation describing it was wrong.
 
-#### Half two — NOT STARTED, and this is the handoff note
+#### Half two — WRITTEN 2026-09-04, NOT YET VERIFIED
 
-After half one the lab has **an open metrics port with no consumer**. That is a
-deliberate intermediate state, not an abandoned one, and it is written down here
-precisely because six months from now it would be impossible to tell which.
+Half one left the lab with **an open metrics port and no consumer** — a deliberate
+intermediate state, recorded so it could not later be mistaken for an abandoned one.
+It held: re-checked 2026-09-04, `etcd_server_has_leader=1` on all three node IPs, two
+days after the rolling restart and with nothing scraping them.
 
-- [ ] `kubeEtcd` in `gitops/apps/monitoring.yaml` needs **explicit** configuration, not
-      just `enabled: true`. The chart's defaults assume port 2379 with client certs
-      against `kube-system` etcd static pods, none of which exist under k3s's embedded
-      etcd. It needs `endpoints:` listing the three node IPs, `port: 2381`, and
-      `scheme: http`.
-- [ ] Verify the way everything else was verified this week: the target `up == 1` for
-      all three, `etcd_server_has_leader == 1` × 3, and the built-in
-      `etcdMembersDown` / `etcdInsufficientMembers` rules present in `/api/v1/rules`.
-      A rule group that fails to load is silent, not broken.
-- [ ] Most of the remaining uncertainty is in the value shape, and it fails **silently**
-      by default — a wrong `endpoints` list gives a green Argo Application and a target
-      that never scrapes. Budget for iterating, and treat "the target exists" as the
-      beginning of the check rather than the end of it.
+- [x] `kubeEtcd` in `gitops/apps/monitoring.yaml` configured **explicitly**. Every value
+      is load-bearing because the chart's defaults describe kubeadm, not k3s:
+
+          default                     k3s reality
+          -------------------------------------------------------------
+          port 2379                   metrics are on 2381, not the client port
+          https + client certs        2381 is plain HTTP, no client auth
+          selector on kube-system     embedded etcd runs INSIDE the k3s process;
+            etcd static pods            there is no etcd pod to select
+
+      Left at defaults this yields a ServiceMonitor with no endpoints and a target that
+      never scrapes — which renders as coverage. Worse than `enabled: false`, which is
+      at least honest about what it does not watch.
+
+      `endpoints` is hardcoded because there is no Service to discover; the chart builds
+      an Endpoints object from the list. **That makes it a second place the control-plane
+      node IPs are written down**, after `inventory/hosts.yml`, with nothing enforcing
+      agreement. Checked mechanically at write time — the three are a subset of the
+      inventory's `node_ip` values — but adding or replacing a server node means editing
+      both, and only the target count will notice a missed edit.
+
+- [ ] **Verify, and do not stop at "the target exists".** In order:
+
+          up{job="kps-kube-etcd"}                       -> want 1, THREE times
+          etcd_server_has_leader                        -> want 1, three times
+          count(etcd_server_id)                         -> want 3, the missed-edit detector
+          /api/v1/rules | etcdMembersDown, etcdInsufficientMembers  -> present
+
+      The rules matter as much as the metrics: `defaultRules.rules.etcd` is on by
+      default, so those rules have been *loaded and evaluating against no data* this
+      whole time. A rule group that fails to load is silent rather than broken, and
+      silence here is what §3.2 has been complaining about since July.
+
+- [ ] The remaining risk is that a wrong `endpoints` list fails **silently** — green
+      Argo Application, target that never scrapes. `up == 0` and a missing series look
+      different in Prometheus but identical on a dashboard, so check `up` explicitly
+      rather than inferring from an empty graph.
 
 ### 3.3 ~~Nothing verifies that DNS actually resolves~~ — **BUILT AND VERIFIED 2026-09-02**
 
@@ -1799,6 +1824,43 @@ empty result from Prometheus is indistinguishable from a metric that never exist
 
       `retention: 30d` had never evicted a single block. The number in git was
       decorative for as long as it has existed.
+
+      **CORRECTION 2026-09-04 — "NEVER fired" overstates what those counters can
+      say.** Re-read two days later they were BOTH zero:
+
+          prometheus_tsdb_size_retentions_total    0     (was 19)
+
+      A counter cannot decrease. It reset because Prometheus restarted when Argo
+      applied the `30d -> 15d` change — so these two only ever mean "since the last
+      restart", and this pod restarts on every `monitoring.yaml` merge.
+
+      **The conclusion above still holds**, because both figures were read in the
+      same process lifetime: 19-against-0 in one window is real evidence that size
+      bound first and time never did *in that window*. What does not hold is the
+      absolute reading. On a pod that restarts weekly the counters can never
+      accumulate enough to support "never once", and anyone re-running the query to
+      confirm this entry would find two zeros and no way to tell a healthy TSDB from
+      one that has just been restarted.
+
+      **Use the horizon instead — it survives restarts, because the blocks do:**
+
+          (time() - prometheus_tsdb_lowest_timestamp_seconds) / 86400
+
+      Measured 2026-09-04: **16.57 days**, against a config that now says 15d.
+
+      That reads as "over the limit" and is not. Prometheus deletes whole blocks, and
+      a block survives until its *newest* sample ages out — so a healthy TSDB sits
+      slightly ABOVE its nominal window by up to one block width. The 1.57-day
+      overshoot is consistent with blocks laid down under the old 30d config, which
+      permitted wider ones. It also confirms nothing has evicted since the restart,
+      exactly as the two zeros say.
+
+      **So the direction of the error has flipped, which is the outcome §3.14 wanted.**
+      Before: config claimed 30d, reality gave 14.33 — git promised more than the
+      system delivered. Now: config claims 15d, reality gives 16.57 — the config is
+      conservative. `LabPrometheusRetentionShort` fires below 12d and is comfortably
+      clear. Two days is not enough to say where it settles once size binds again;
+      re-read the horizon, not the counters, in a fortnight.
 - [x] **Made the config honest** — `retention: 30d -> 15d` 2026-09-02. Lowering was the
       only option available today; raising `retentionSize` has nowhere to go. Measured
       on n150-1:

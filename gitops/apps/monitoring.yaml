@@ -161,7 +161,19 @@ spec:
             # are unambiguous:
             #
             #     prometheus_tsdb_size_retentions_total   19
-            #     prometheus_tsdb_time_retentions_total    0     <- never once
+            #     prometheus_tsdb_time_retentions_total    0     <- never, in this window
+            #
+            # THOSE COUNTERS RESET ON RESTART — corrected 2026-09-04, when both read 0
+            # because applying this very change restarted the pod. They mean "since the
+            # last restart", and this pod restarts on every merge here, so do NOT re-read
+            # them to confirm the reasoning below; two zeros are the normal state shortly
+            # after any change. The comparison held because both were read in one process
+            # lifetime. The durable measure is the horizon, which survives restarts
+            # because the blocks do:
+            #     (time() - prometheus_tsdb_lowest_timestamp_seconds) / 86400
+            # 2026-09-04 it read 16.57d against this 15d config — slightly OVER, which is
+            # correct: a block is deleted only once its newest sample ages out, so a
+            # healthy TSDB sits a little above its nominal window.
             #
             # Size has evicted 19 times; time has evicted zero. The measured horizon:
             #
@@ -532,8 +544,54 @@ spec:
           enabled: false
         kubeScheduler:
           enabled: false
+        # ---- etcd — BACKLOG §3.2, half two. Half one is playbooks/k3s-etcd-metrics.yml ----
+        #
+        # `enabled: true` ALONE DOES NOT WORK HERE, and this block is entirely about why.
+        # The chart's defaults describe upstream kubeadm, not k3s:
+        #
+        #   default                      k3s reality
+        #   ----------------------------------------------------------------
+        #   port 2379                    metrics are on 2381, not the client port
+        #   https + client certs         2381 is plain HTTP, no client auth
+        #   selector on kube-system      embedded etcd runs INSIDE the k3s process;
+        #     etcd static pods             there is no etcd pod to select
+        #
+        # So every one of the values below is load-bearing. Left at defaults this
+        # produces a ServiceMonitor with no endpoints and a target that never scrapes —
+        # which renders on a dashboard as coverage. That is worse than `enabled: false`,
+        # because false is at least honest about what it does not watch.
+        #
+        # PREREQUISITE, and it is not optional: k3s binds the etcd metrics listener to
+        # 127.0.0.1 unless `etcd-expose-metrics: true` is set. Measured on h4-core
+        # 2026-09-02, both curls run FROM h4-core: 127.0.0.1:2381 -> 200, and its own
+        # 192.168.1.160:2381 -> 000. Prometheus is a pod on n150-1 and cannot reach
+        # loopback on three separate machines. playbooks/k3s-etcd-metrics.yml applied the
+        # flag to all three voters on 2026-09-02 (rolling, one at a time, behind a quorum
+        # gate); confirmed still exposed on 2026-09-04, etcd_server_has_leader=1 on all
+        # three node IPs. If those return 000 again, fix that before touching this block.
+        #
+        # `endpoints` IS HARDCODED AND HAS TO BE. There is no Service to discover: the
+        # chart builds an Endpoints object from this list. It is therefore a second place
+        # the control-plane node IPs are written down — inventory/hosts.yml is the first.
+        # Adding or replacing a server node means editing both, and nothing enforces it.
+        # The detector for a missed edit is the target count, which is why the
+        # verification below counts to 3 rather than checking that "etcd is up".
         kubeEtcd:
-          enabled: false
+          enabled: true
+          endpoints:
+            - 192.168.1.160   # h4-core
+            - 192.168.1.42    # n150-1
+            - 192.168.1.21    # n150-2
+          service:
+            enabled: true
+            port: 2381
+            targetPort: 2381
+          serviceMonitor:
+            enabled: true
+            # Explicit rather than inherited. The chart's default scheme is "", which
+            # resolves to http today — but relying on an empty string to mean the right
+            # thing is how a chart upgrade changes behaviour with no diff to review.
+            scheme: http
         kubeProxy:
           enabled: false
 
