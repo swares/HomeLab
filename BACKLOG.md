@@ -2667,8 +2667,34 @@ Grep patterns run under `sudo` land in the journal they are searching.
       `failed_when: false`, so it reported `changed` on `-3` where NM is inactive and
       `nmcli` must have failed: a task claiming success without checking.
 
-- [x] **Textfile collector enablement written into `playbooks/node-exporter.yml`**
-      2026-09-04 — not yet run. It belongs there rather than in a new play: that file
+- [x] **Textfile collector enabled and APPLIED to all seven `node_exporter` hosts**
+      2026-09-04. The number that proves the whole chain, on each Zero 2W:
+
+          flag=1 | node_textfile_series=2 | wifi_watchdog_series=9
+
+      `wifi_watchdog_series=9` — all nine metrics the script emits — means the script
+      wrote the file, the collector read the directory, and the exporter served it.
+      `flag=1` alone would only have proved the argument landed. And Prometheus has
+      them: `lab_wifi_watchdog_up` returns 1 for `.184`, `.188`, `.217`, `.99`.
+
+      **It also measured the metric names the assert could not risk.** Non-watchdog
+      hosts (`octopi-dns`, `rpi4b`, `rpi5`) report `node_textfile_series=1` against 2 on
+      the pool — the second series is the mtime gauge, which exists only once a `.prom`
+      file is present. So the names are now known and the assert can be tightened from
+      the ExecStart flag to the metric itself.
+
+      **Found while doing it: `gitlab-1` is in neither `node_exporter` nor
+      `node_exporter_binary`.** The groups hold 7 hosts and 1 (`xu3-1`) respectively.
+      Yet this play's header claims *"Debian — octopi-dns, rpi4b, rpi5, gitlab-1,
+      opi-zero2w-3, opi-zero2w-4 (apt)"*, and `monitoring.yaml` scrapes
+      `192.168.1.50:9100`. `up{instance="192.168.1.50"}` is **1**, so it has a working
+      exporter that something else installed — no outage, but nothing in Ansible manages
+      it and the header describes coverage this play does not provide. Same shape as
+      `rpi4b` answering DNS for weeks while outside the `dns` group (§4.12), and as this
+      very file listing `opi-zero2w-4` as Arch when it is Debian (corrected 2026-08-27).
+      Fix is to add it to the group or state plainly why not.
+
+      It belongs there rather than in a new play: that file
       already owns node_exporter on exactly these hosts and already carries the
       Debian/Arch split.
 
@@ -2692,12 +2718,37 @@ Grep patterns run under `sudo` land in the journal they are searching.
       exist fails identically to one on a collector that is not running. The series
       counts are reported so the real names can be read off a working host and the check
       tightened afterwards.
-- [ ] **Alert rules — deliberately NOT written yet.** Metrics cannot reach Prometheus
-      until the item above lands, so a `lab.wifi` group added today would fire on arrival
-      because the series are absent. An alert that is noise on day one is an alert that
-      trains the eye past it — `LabExternalHostDown`, three weeks critical, is the lab's
-      own case study. Write them once `lab_wifi_watchdog_up` is being scraped, and
-      include the `absent()` companion.
+- [x] **Alert rules written 2026-09-04**, deliberately after the metrics were confirmed
+      arriving rather than alongside them — a `lab.wifi` group added earlier would have
+      fired on arrival because the series did not exist yet, and an alert that is noise
+      on day one is an alert that trains the eye past it (`LabExternalHostDown`, three
+      weeks critical, is the lab's own case study). Five rules in `lab-alerts.yaml`.
+
+      **What these rules can and cannot see, which is not obvious.** If a board drops
+      WiFi entirely, **Prometheus cannot scrape it** — the scrape fails before any gauge
+      can be read, and the event surfaces as `up{job="node-exporter-external"} == 0`,
+      already covered by `LabExternalHostDown` at critical. So none of these are the
+      primary detector for "the board fell off the network". What they add is the part
+      that was previously invisible: the **recovery**. Counters are read after the board
+      is back.
+
+      - `LabWifiFlapping` — `increase(reconnect_total[6h]) > 5`. The answer to the
+        original question, and the reason the watchdog exists: a board reconnecting
+        repeatedly is working *and* broken at once, which is exactly the state that
+        leaves no trace without this counter.
+      - `LabWifiWatchdogRebooted` — an automated reboot must never be silent.
+      - `LabWifiWatchdogStale` — **the subtle one.** The `.prom` file persists on disk,
+        so if the timer stops, node_exporter keeps serving the last values forever:
+        every gauge stays at its final healthy reading and `absent()` never fires. Only
+        `time() - last_run_timestamp` reveals it. Without this rule a dead watchdog is
+        indistinguishable from a perfectly behaved one.
+      - `LabWifiGatewayUnreachable` — `up == 0` while the board is still scrapable.
+        Possible because Prometheus and these boards share a subnet, so traffic between
+        them does not traverse the router: the board can fail to reach `192.168.1.1`
+        while remaining perfectly visible. Different fault, different response.
+      - `LabWifiWatchdogMetricsMissing` — the `absent()` companion. Note it does **not**
+        cover a stopped watchdog; the file outlives the writer, which is what
+        `LabWifiWatchdogStale` is for.
 - [ ] **Re-ask the original question with data.** After a week, `increase(
       lab_wifi_watchdog_reconnect_total[7d])` answers whether the boards actually drop
       WiFi. If it is ~0, the reported symptom is something else — most likely the manual
