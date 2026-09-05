@@ -942,6 +942,49 @@ spec:
               driver logs NOTHING to the kernel, so `journalctl -k` is not a diagnostic
               here; wpa_supplicant and NetworkManager userspace logs are.
 
+        # ADDED 2026-09-04 AFTER THREE EVENT COUNTERS FAILED TO SEE THIS FAULT.
+        #
+        # reconnect_total, degraded_total and a proposed packet-loss percentage were
+        # each built to detect a weak link on opi-zero2w-2, and each counted an EVENT
+        # derived from the problem rather than the problem. Events are intermittent;
+        # measured on that board two hours apart:
+        #
+        #            signal    tx bitrate      loss    rtt avg / max
+        #   14:xx    -63 dBm   87.8 (MCS 2)    15%      38 /  168 ms
+        #   16:xx    -66 dBm   87.8 (MCS 2)     0%      61 /  211 ms
+        #   healthy  -38 dBm   390  (MCS 9)     0%       6 /    9 ms
+        #
+        # Loss went 15% -> 0% while the link got WORSE — 802.11 retransmits
+        # successfully and you get latency, gives up and you get loss. Signal was
+        # unambiguous both times, and `iw dev wlan0 link` had been printing it as a
+        # number the whole time.
+        #
+        # ONE ALERT, NOT THREE. Signal, tx bitrate and rtt are three faces of one
+        # physical cause; a rule on each would page three times for one loose antenna.
+        # The other two are recorded as metrics and cited here as confirming evidence.
+        # -60 dBm sits 20 dB clear of the healthy boards, so there is no threshold
+        # ambiguity in either direction.
+        - alert: LabWifiWeakSignal
+          expr: |
+            lab_wifi_watchdog_signal_dbm < -60
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.instance }} WiFi signal is {{ $value }} dBm"
+            description: >
+              The link is marginal. Confirm with
+              `lab_wifi_watchdog_tx_bitrate_mbps` (healthy boards negotiate 390 Mbit/s
+              at MCS 9; a collapse to ~87 Mbit/s at MCS 2 is the radio saying the
+              signal cannot sustain a higher modulation) and
+              `lab_wifi_watchdog_rtt_seconds` (healthy ~0.007s; this board measured
+              0.038–0.061s with peaks over 0.2s). Expect loss and latency to trade off
+              against each other over time rather than both being present — that is
+              retransmission working, then failing. **The fix is physical**: distance,
+              obstruction, antenna orientation, a loose u.FL connector, or moving the
+              board to 2.4GHz, which penetrates better than 5GHz at the same distance.
+              No watchdog setting improves 25 dB.
+
         # ADDED 2026-09-04, and this is the rule that would have found the real fault.
         # A degraded check is one where the gateway answered only after a retry: the
         # radio is associated and addressed, packets are simply being lost. That is a

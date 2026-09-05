@@ -2805,6 +2805,57 @@ Grep patterns run under `sudo` land in the journal they are searching.
       definition changes needs its thresholds revisited in the same commit, or the rule
       silently weakens into one that cannot trip.
 
+- [x] **THREE EVENT COUNTERS FAILED TO SEE THE FAULT. The physical quantities are now
+      measured directly — 2026-09-04.**
+
+      An hour of the corrected script produced `increase(degraded_total[1h]) = 0` and
+      `increase(reconnect_total[1h]) = 0` on every board including the broken one, over
+      a full 120-sample window. That looked like success and was not. The arithmetic:
+      `ping -c 3` succeeds if **any one** of three packets returns, which at 15% loss is
+      99.66% per round — about **0.1 expected failures per hour**. Zero degraded checks
+      is exactly what a 15%-loss link predicts. **The corrected watchdog had become
+      blind to the problem it had just found.**
+
+      The direct re-measurement, two hours after the first:
+
+          board          signal    tx bitrate      loss    rtt avg / max
+          opi-zero2w-2   -63 dBm   87.8 (MCS 2)    15%      38 /  168 ms   (14:xx)
+          opi-zero2w-2   -66 dBm   87.8 (MCS 2)     0%      61 /  211 ms   (16:xx)
+          healthy        -38 dBm   390  (MCS 9)     0%       6 /    9 ms
+
+      **Loss went 15% to 0% while the link got worse.** When 802.11 retransmits
+      successfully you get latency; when it gives up you get loss. Same fault, two
+      expressions — so any counter keyed to one of them is blind half the time, which is
+      why `reconnect_total`, `degraded_total` and the packet-loss percentage proposed to
+      replace them were all wrong. Three metrics, three rejections by measurement.
+
+      **The lesson, and it is the useful part:** each counted an *event* derived from the
+      problem. The problem itself is a physical quantity that `iw dev wlan0 link` had
+      been printing as a number the entire time. Signal and tx bitrate were unambiguous
+      in every measurement; rtt was 10x the healthy boards in every measurement.
+      **A fault a command prints as a number should be recorded as that number, not
+      inferred from how often something trips.**
+
+      Now emitted from data already being collected — no extra packets; the ping output
+      was simply being discarded:
+
+          lab_wifi_watchdog_signal_dbm            -38 healthy / -66 on this board
+          lab_wifi_watchdog_tx_bitrate_mbps       390 (MCS 9) / 87.8 (MCS 2)
+          lab_wifi_watchdog_rtt_seconds           0.007 healthy / 0.038-0.061
+          lab_wifi_watchdog_packet_loss_percent   recorded, NOT alerted on — the least
+                                                  reliable of the four
+
+      Each is emitted **only when actually read**. An omitted metric is honest about not
+      knowing, whereas `signal_dbm 0` would read as a perfect link rather than a missing
+      measurement. The parsers were validated against the real command output captured
+      during this investigation, not against invented samples.
+
+      **One alert, not three.** `LabWifiWeakSignal` fires below -60 dBm, 20 dB clear of
+      the healthy boards. Signal, bitrate and rtt are three faces of one physical cause,
+      and a rule on each would page three times for one loose antenna — the same noise
+      problem as the eleven permanently-failing units in §3.16. The other two are cited
+      in its annotation as confirming evidence.
+
 **Still open:**
 
 - [ ] **Fix opi-zero2w-2's radio link — physical, and the only real cure.** Move the

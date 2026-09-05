@@ -88,6 +88,12 @@ reconnects=$(read_num reconnect_total)
 reboots=$(read_num reboot_total)
 degraded=$(read_num degraded_total)
 attempts=0
+# Initialised here because write_metrics can be reached before the health check
+# runs (the no-interface path), and `set -u` would abort on an unset variable.
+signal_dbm=""
+tx_mbps=""
+rtt_ms=""
+loss_pct=""
 
 # Reboot stamps, one epoch per line, pruned to the last 24h. Persisted in
 # /var/lib so the cap SURVIVES the reboot it is counting — a counter in /run
@@ -142,6 +148,35 @@ write_metrics() {
     echo "# HELP lab_wifi_watchdog_reboots_24h Watchdog reboots in the last rolling 24h."
     echo "# TYPE lab_wifi_watchdog_reboots_24h gauge"
     echo "lab_wifi_watchdog_reboots_24h $reboots_24h"
+    # ---- the physical quantities ----------------------------------------
+    # Emitted only when actually read. An omitted metric is honest about not
+    # knowing; a zero would be indistinguishable from a real 0 dBm reading, and
+    # `signal_dbm 0` would look like a perfect link rather than a missing one.
+    if [ -n "$signal_dbm" ]; then
+      echo "# HELP lab_wifi_watchdog_signal_dbm Received signal strength of the current AP association."
+      echo "# TYPE lab_wifi_watchdog_signal_dbm gauge"
+      echo "lab_wifi_watchdog_signal_dbm $signal_dbm"
+    fi
+    if [ -n "$tx_mbps" ]; then
+      # The radio's own verdict on the link: healthy boards negotiate 390 Mbit/s
+      # (MCS 9), opi-zero2w-2 sits at 87.8 (MCS 2). A collapsed rate is the driver
+      # saying the signal cannot sustain a higher modulation.
+      echo "# HELP lab_wifi_watchdog_tx_bitrate_mbps Negotiated transmit bitrate."
+      echo "# TYPE lab_wifi_watchdog_tx_bitrate_mbps gauge"
+      echo "lab_wifi_watchdog_tx_bitrate_mbps $tx_mbps"
+    fi
+    if [ -n "$rtt_ms" ]; then
+      echo "# HELP lab_wifi_watchdog_rtt_seconds Average round-trip time to the gateway on the last check."
+      echo "# TYPE lab_wifi_watchdog_rtt_seconds gauge"
+      echo "lab_wifi_watchdog_rtt_seconds $(awk -v v="$rtt_ms" 'BEGIN{printf "%.6f", v/1000}')"
+    fi
+    if [ -n "$loss_pct" ]; then
+      # Recorded but NOT alerted on: measured 15% then 0% two hours apart on a link
+      # that was getting worse, so it is the least reliable of the three.
+      echo "# HELP lab_wifi_watchdog_packet_loss_percent Packet loss on the last check (3 packets — noisy, average it)."
+      echo "# TYPE lab_wifi_watchdog_packet_loss_percent gauge"
+      echo "lab_wifi_watchdog_packet_loss_percent $loss_pct"
+    fi
     echo "# HELP lab_wifi_watchdog_last_run_timestamp_seconds Unix time of the last completed run."
     echo "# TYPE lab_wifi_watchdog_last_run_timestamp_seconds gauge"
     echo "lab_wifi_watchdog_last_run_timestamp_seconds $now"
@@ -167,9 +202,33 @@ if command -v iw >/dev/null 2>&1; then
 fi
 
 # ---- health check -----------------------------------------------------------
+#
+# ---- MEASURE THE LINK, DO NOT INFER IT FROM EVENTS ----
+# Three event counters were built for this fault before this block existed —
+# reconnect_total, degraded_total, and a proposed packet-loss percentage — and the
+# data rejected all three, because each counted an EVENT derived from the problem
+# and the events are intermittent. Measured on opi-zero2w-2 two hours apart:
+#
+#            signal    tx bitrate       loss    rtt avg / max
+#   14:xx    -63 dBm   87.8 (MCS 2)     15%      38 /  168 ms
+#   16:xx    -66 dBm   87.8 (MCS 2)      0%      61 /  211 ms
+#   healthy  -38 dBm   390  (MCS 9)      0%       6 /    9 ms
+#
+# Loss went 15% -> 0% while the link got WORSE: 802.11 retransmits successfully and
+# you get latency, it gives up and you get loss. Same fault, different expression,
+# so any counter keyed to one of them is blind half the time.
+#
+# The three quantities below were unambiguous in every single measurement and needed
+# no inference at all — `iw dev link` reports two of them and `ping` the third. A
+# fault that a command prints as a number should be recorded as that number.
 associated=0
+link=""
 if command -v iw >/dev/null 2>&1; then
-  iw dev "$IFACE" link 2>/dev/null | grep -qi '^Connected to' && associated=1
+  link=$(iw dev "$IFACE" link 2>/dev/null)
+  printf '%s' "$link" | grep -qi '^Connected to' && associated=1
+  # `-\{0,1\}` not `-\?` — BRE portability; busybox sed lacks the GNU shorthand.
+  signal_dbm=$(printf '%s' "$link" | sed -n 's/.*signal: *\(-\{0,1\}[0-9]*\) dBm.*/\1/p' | head -1)
+  tx_mbps=$(printf '%s' "$link" | sed -n 's/.*tx bitrate: *\([0-9.]*\) MBit\/s.*/\1/p' | head -1)
 else
   # No iw: carrier is a weaker proxy, but better than asserting nothing.
   [ "$(cat "/sys/class/net/$IFACE/operstate" 2>/dev/null)" = "up" ] && associated=1
@@ -190,14 +249,23 @@ ip -4 -o addr show dev "$IFACE" 2>/dev/null | grep -q 'inet ' && has_ip=1
 #
 # Three rounds spread over ~20 seconds cannot be defeated by bursty loss, and still
 # detect a genuine outage inside a single 2-minute cycle.
+# The ping output is CAPTURED rather than discarded: it already carries the rtt and
+# loss figures that were previously being read by hand over SSH. No extra packets.
 reachable=0
+ping_out=""
 if [ "$has_ip" = 1 ]; then
   while [ "$attempts" -lt 3 ]; do
     attempts=$((attempts + 1))
-    if ping -c 3 -W 2 -I "$IFACE" "$GATEWAY" >/dev/null 2>&1; then reachable=1; break; fi
+    if ping_out=$(ping -c 3 -W 2 -I "$IFACE" "$GATEWAY" 2>/dev/null); then reachable=1; break; fi
     [ "$attempts" -lt 3 ] && sleep 5
   done
 fi
+
+# rtt line is "rtt min/avg/max/mdev = 5.629/61.426/211.133/57.791 ms" — take avg.
+# Three packets per check is a noisy sample; that is fine, because the consumer is
+# avg_over_time() across ~30 checks an hour, not any single reading.
+rtt_ms=$(printf '%s' "$ping_out" | sed -n 's|.*= *[0-9.]*/\([0-9.]*\)/.*|\1|p' | head -1)
+loss_pct=$(printf '%s' "$ping_out" | sed -n 's/.*[^0-9]\([0-9]\{1,3\}\)% packet loss.*/\1/p' | head -1)
 
 # ---- healthy ----------------------------------------------------------------
 if [ "$reachable" = 1 ]; then
