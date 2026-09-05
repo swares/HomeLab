@@ -101,6 +101,29 @@ spec:
           volumeMounts:
             - name: config
               mountPath: /config
+          # BACKLOG §4.10. This initContainer ran with NO resources block at all while
+          # the main container above has limits — and `require-resource-limits` is in
+          # **Enforce**, so this was a live workload sitting in a hole in an enforced
+          # policy, not a hypothetical audit gap.
+          #
+          # The policy's pattern validates `spec.containers` only. Kubernetes treats
+          # initContainers as a separate list, so they were never examined. Fixing the
+          # policy without fixing this first would make Home Assistant fail admission
+          # on its next pod recreation, which is why this lands as its own change:
+          # kyverno-policies and home-assistant are separate Argo Applications with no
+          # controllable sync order between them.
+          #
+          # Sized for what it does — a busybox `sh` that writes one file and exits.
+          # Verified 2026-09-05 as the ONLY offender cluster-wide, by querying live
+          # pods rather than the repo, since Helm-rendered pods have no manifest here:
+          #   kubectl get pods -A -o json | jq '... .spec.initContainers[] ...'
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
       volumes:
         - name: config
           persistentVolumeClaim:
