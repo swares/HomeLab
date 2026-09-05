@@ -33,16 +33,77 @@ runners:
         namespace = "gitlab-runner"
         image = "ubuntu:22.04"
         pull_policy = ["if-not-present"]
+
+        # ---- RESOURCE LIMITS ON JOB PODS — BACKLOG §2.2 ----------------------
+        # THESE MUST STAY ABOVE THE FIRST [runners.kubernetes.*] SUB-TABLE.
+        # TOML ignores indentation: a key written after [runners.kubernetes.pod_labels]
+        # belongs to pod_labels, however it is indented. Placed there on the first
+        # attempt at this change and caught before merge — the runner would have
+        # started with a nonsense pod_labels map and NO job limits, and job pods would
+        # have gone on being rejected exactly as before, with the config looking fixed.
+        #
+        # These were absent, and `gitlab-runner` is NOT in require-resource-limits'
+        # exclude list, so every job pod was REJECTED AT ADMISSION. Proved 2026-09-05
+        # with a server-side dry-run of the shape the runner creates:
+        #
+        #   kubectl -n gitlab-runner run citest --image=ubuntu:22.04 \
+        #     --restart=Never --dry-run=server
+        #   -> denied: rule require-limits failed at
+        #      path /spec/containers/0/resources/limits/
+        #
+        # So this is a REPAIR, not hardening: no GitLab job could start, which takes
+        # the auto-rollback stage with it — the safety net for a bad merge to main
+        # lives in the same pipeline as the checks it protects.
+        #
+        # helper_* is separate and equally required: the helper is another container
+        # in the same pod, and the policy validates every one of them. Sized for what
+        # these jobs actually do — yq, kubectl, argocd, curl, git.
+        cpu_request = "100m"
+        cpu_limit = "1"
+        memory_request = "128Mi"
+        memory_limit = "1Gi"
+        helper_cpu_request = "50m"
+        helper_cpu_limit = "500m"
+        helper_memory_request = "64Mi"
+        helper_memory_limit = "256Mi"
+        service_cpu_request = "50m"
+        service_cpu_limit = "500m"
+        service_memory_request = "64Mi"
+        service_memory_limit = "256Mi"
+
         [runners.kubernetes.node_selector]
           "kubernetes.io/hostname" = "n150-1"   # build jobs on the x86 node
         [runners.kubernetes.pod_labels]
           "app" = "gitlab-runner-job"
-        [[runners.kubernetes.volumes.host_path]]
-          name = "docker-sock"
-          mount_path = "/var/run/docker.sock"
-          host_path = "/var/run/docker.sock"
-          read_only = false
-          mount_propagation = ""
+
+        # ---- THE DOCKER SOCKET IS GONE — BACKLOG §2.2 ------------------------
+        # This block used to mount /var/run/docker.sock into every job pod with
+        # read_only = false:
+        #
+        #   [[runners.kubernetes.volumes.host_path]]
+        #     name = "docker-sock"
+        #     mount_path = "/var/run/docker.sock"
+        #     host_path = "/var/run/docker.sock"
+        #     read_only = false
+        #
+        # Docker is genuinely running on n150-1 (socket present, daemon active,
+        # /usr/bin/docker installed — checked 2026-09-05), the job container runs
+        # as root by default, and n150-1 is a control-plane node and etcd voter.
+        # A writable docker.sock is root on that host for anything that can open a
+        # merge request. Not theoretical: dormant would have required Docker to be
+        # absent, and it is not.
+        #
+        # NOTHING USED IT. Both pipelines — .gitlab-ci.yml and
+        # ansible/.gitlab-ci.yml — run only yq, kubectl, argocd, curl and git. No
+        # job builds an image; the m5stack-adapter image is built by hand on a
+        # workstation, per its own README. So there is no replacement to design:
+        # no dind, no kaniko, no buildkit. The block is simply deleted.
+        #
+        # IF A FUTURE JOB NEEDS TO BUILD IMAGES: do not restore this. Use an
+        # in-pod builder that needs no daemon and no host mount (kaniko or
+        # buildah), or keep building on a workstation as the adapter does.
+        # Mounting the host daemon socket into a pod that arbitrary MR authors
+        # control hands them the node.
 
 ## Resource limits for the runner manager pod itself
 resources:
