@@ -261,12 +261,7 @@ spec:
           #
           # Known gap: a CronJob that has NEVER succeeded exposes no
           # last_successful_time series at all, so this rule cannot see it.
-          # To cover that case as well:
-          #   kube_cronjob_info
-          #     unless on(namespace, cronjob)
-          #   kube_cronjob_status_last_successful_time
-          # (not added here — it also fires for a newly created CronJob until
-          # its first run completes.)
+          # CLOSED 2026-09-05 by LabCronJobNeverSucceeded below — see BACKLOG §3.5.
           expr: |
             (
               time() - kube_cronjob_status_last_successful_time
@@ -284,6 +279,58 @@ spec:
               with nothing alerting on it. Check:
               kubectl -n {{ $labels.namespace }} get jobs
               --sort-by=.metadata.creationTimestamp
+
+        # BACKLOG §3.5. The rule above keys off kube_cronjob_status_last_successful_time,
+        # WHICH DOES NOT EXIST UNTIL THE FIRST SUCCESS — so a CronJob that has never
+        # once worked produces no series, and a rule on an absent series is silent
+        # rather than firing. A job that has never run correctly is exactly the case
+        # you most want to hear about, and it was the only one not covered.
+        #
+        # This is the same family as §3.16 (a systemd collector scoped so narrowly that
+        # no rule could see a failed unit) and LabDNSProbesMissing: the absence of a
+        # metric is not the absence of a problem.
+        #
+        # It is also the leading explanation for §1.12 — lldap-backup silent for 15
+        # days in August — though that remains UNPROVEN, because the metric history
+        # that would settle it was evicted by §3.14's retention. Recorded so nobody
+        # promotes a plausible fit to a diagnosis.
+        #
+        # WHY THE CREATION-TIME GUARD. The sketch left in the comment above was
+        # `kube_cronjob_info unless on(...) kube_cronjob_status_last_successful_time`,
+        # and it was deliberately not added because it also fires for a CronJob created
+        # thirty seconds ago that simply has not run yet. `kube_cronjob_created` closes
+        # that: 93600s of grace, the same 26h the rule above allows, after which never
+        # having succeeded is a finding rather than a startup state.
+        #
+        # VERIFY BEFORE TRUSTING THIS: kube_cronjob_created and kube_cronjob_info are
+        # kube-state-metrics series, not ones measured on this cluster. Confirm with
+        #   count(kube_cronjob_created)  and  count(kube_cronjob_info)
+        # — both should equal the number of CronJobs. If either is empty this rule is
+        # silent, not broken, which is the failure mode it exists to fix.
+        - alert: LabCronJobNeverSucceeded
+          expr: |
+            (
+              kube_cronjob_info
+              unless on(namespace, cronjob)
+              kube_cronjob_status_last_successful_time
+            )
+            and on(namespace, cronjob)
+            (time() - kube_cronjob_created > 93600)
+          for: 30m
+          labels:
+            severity: critical
+          annotations:
+            summary: >-
+              CronJob {{ $labels.namespace }}/{{ $labels.cronjob }} has NEVER
+              succeeded
+            description: >
+              This CronJob was created more than 26 hours ago and has no recorded
+              successful run at all — not a stale success, no success ever. Critical
+              rather than warning because LabCronJobStale cannot see this state, so
+              nothing else will tell you. Check whether any Job was created at all
+              (`kubectl -n {{ $labels.namespace }} get jobs`), then whether it is
+              failing or never being scheduled — a suspended CronJob, a bad schedule,
+              or an unschedulable pod all present identically here.
 
     # -----------------------------------------------------------------------
     # Time sync

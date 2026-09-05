@@ -148,7 +148,12 @@ spec:
             - name: backup-secrets
               secret:
                 secretName: lldap-backup-secrets
+            # BACKLOG §1.8. This was an inline `nfs:` volume until 2026-09-05.
+            # Inline NFS volumes cannot carry mountOptions (a PV-only field), so it
+            # mounted **hard** and this job hung for 3d15h on 2026-08-02 when the H4's
+            # export went away. The PV in restic-pv.yaml mounts the same path soft, so
+            # the same event now produces a failed job that LabBackupJobFailed reports
+            # and the next run retries.
             - name: restic-repo
-              nfs:
-                server: 192.168.1.160
-                path: /mnt/cold-8t/restic
+              persistentVolumeClaim:
+                claimName: lldap-restic
