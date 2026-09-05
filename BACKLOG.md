@@ -3312,7 +3312,34 @@ IR conversion, and a valid `config.json` (the deployed one contains `//` comment
 ### 4.9 Kyverno `cleanupJobs` block is a confirmed no-op
 `gitops/apps/kyverno.yaml:55-66` — creates nothing as of chart 3.3.4.
 
-### 4.10 ~~Kyverno `require-resource-limits` skips initContainers~~ — **FIXED 2026-09-05, in two PRs**
+### 4.10 ~~Kyverno `require-resource-limits` skips initContainers~~ — **FIXED AND VERIFIED 2026-09-05, in two PRs**
+
+> **Verified by three server-side dry-runs, because two of them would have passed
+> against the unchanged policy too.**
+>
+>     case                                  expect   result
+>     pod with a compliant initContainer    admit    ok — home-assistant rolled out
+>     pod with NO initContainers field      admit    ok — anchortest
+>     initContainer with NO limits          REJECT   denied
+>
+> The third is the only one that proves anything about the fix. The first two show
+> nothing broke — which is also what an unedited policy looks like. Green on arrival is
+> not evidence; the same mistake as fifteen etcd rules loaded and evaluating against no
+> data (§3.2), or a DNS probe whose assertion never applied (§3.3).
+>
+> And the denial names the path, which is what makes it conclusive rather than merely
+> negative:
+>
+>     rule require-limits failed at path /spec/initContainers/0/resources/limits/
+>
+> Not a generic refusal — Kyverno is examining `initContainers` specifically. A pod
+> rejected for some unrelated reason would have looked identical in the exit status.
+>
+> **The second case is the one that would have caused an outage.** A pod with no
+> `initContainers` field must still admit; had `=()` been written as a plain
+> `initContainers:` key, the pattern would require the field to exist and nearly every
+> pod in every non-excluded namespace would have been rejected in Enforce mode.
+> `anchortest` is the standing control for that, and takes one command to repeat.
 
 > The pattern validated `spec.containers` only, and Kubernetes keeps initContainers in a
 > separate list, so they were never examined. Enforce mode made that worse rather than
