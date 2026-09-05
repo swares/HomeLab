@@ -9,8 +9,29 @@
 # no exporter at all while Prometheus scraped them. Corrected 2026-07-26.
 #
 # Supported OS families:
-#   Debian    — octopi-dns, rpi4b, rpi5, gitlab-1, opi-zero2w-3, opi-zero2w-4 (apt)
+#   Debian    — octopi-dns, rpi4b, rpi5, opi-zero2w-3, opi-zero2w-4           (apt)
 #   Archlinux — opi-zero2w-1, opi-zero2w-2                                    (pacman)
+#
+# CORRECTED 2026-09-05: this listed gitlab-1 as a Debian target. IT IS NOT IN EITHER
+# GROUP, deliberately, and the reason has been recorded in inventory/hosts.yml the
+# whole time — one file away from the header claiming otherwise:
+#
+#   GitLab Omnibus ships its own node_exporter already bound to 127.0.0.1:9100, so
+#   the Debian package cannot bind 0.0.0.0:9100 and its unit dies on start. The
+#   bundled one is exposed instead, via node_exporter['listen_address'] in
+#   /etc/gitlab/gitlab.rb.
+#
+# So ADDING gitlab-1 TO node_exporter WOULD BREAK A WORKING SCRAPE — it installs a
+# package whose unit cannot start, on a host Prometheus is already scraping
+# successfully (up{instance="192.168.1.50"} = 1, confirmed 2026-09-04).
+#
+# Consequence, so nobody goes looking for it: gitlab-1 never receives the textfile
+# collector added below, because its exporter is not managed here. The collector is on
+# seven hosts by design, not eight by omission.
+#
+# This header has now been wrong about group membership twice — see the opi-zero2w-4
+# correction immediately below. `ansible node_exporter --list-hosts` is the
+# measurement; this comment is a summary of it and drifts from it.
 #
 # CORRECTED 2026-08-27. This listed opi-zero2w-4 as Archlinux. It is not: on the
 # first run after that board came back online, it took the Debian path —
