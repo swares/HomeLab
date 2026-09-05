@@ -874,6 +874,9 @@ spec:
         #
         # Critical, because its silence is indistinguishable from DNS being fine,
         # and DNS is the lab's most load-bearing dependency.
+        # NONE OF THE ABOVE CAN FIRE IF THE PROBES STOP EXISTING. blackbox down,
+        # the Probe CRs pruned, the operator's probeSelector narrowed by a chart
+        # upgrade — in every case the alerts go quiet and quiet reads as healthy.
         - alert: LabDNSProbesMissing
           expr: absent(probe_success{job="dns-api-vip"})
           for: 10m
@@ -889,3 +892,126 @@ spec:
               prober URL in dns-probes.yaml still matches the Service name
               (`kubectl -n monitoring get svc | grep blackbox`) — a chart upgrade
               that changes the generated name breaks every probe at once.
+
+    # -----------------------------------------------------------------------
+    # WiFi watchdog on the OPi Zero 2W pool — BACKLOG §3.17.
+    # Metrics come from playbooks/wifi-watchdog.yml via the node_exporter
+    # textfile collector (enabled in playbooks/node-exporter.yml).
+    #
+    # WHAT THESE RULES CAN AND CANNOT SEE, because it is not obvious.
+    # If a board drops WiFi entirely, PROMETHEUS CANNOT SCRAPE IT — the scrape
+    # fails before any of these gauges can be read, and the event surfaces as
+    # `up{job="node-exporter-external"} == 0`, already covered by
+    # LabExternalHostDown at severity critical. So none of the rules below are
+    # the primary detector for "the board fell off the network".
+    #
+    # What they add is the part that was previously invisible: the RECOVERY.
+    # Counters are read after the board is back, so a board that silently
+    # self-heals forty times a day now shows up instead of looking healthy.
+    # That was the entire point of building the watchdog — see §3.17, where the
+    # reported symptom could be neither confirmed nor sized because nothing
+    # recorded it.
+    # -----------------------------------------------------------------------
+    - name: lab.wifi
+      rules:
+        # The answer to the original question, and the reason the watchdog exists.
+        # A board reconnecting repeatedly is working *and* broken at the same time,
+        # which is exactly the state that leaves no trace without this counter.
+        - alert: LabWifiFlapping
+          expr: |
+            increase(lab_wifi_watchdog_reconnect_total[6h]) > 5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.instance }} reconnected WiFi {{ $value | printf \"%.0f\" }} times in 6h"
+            description: >
+              The watchdog is repairing this link repeatedly. It is succeeding — which
+              is the problem: a board that self-heals looks healthy from every other
+              signal in the lab. Do NOT respond by making the watchdog more aggressive.
+              Check `lab_wifi_watchdog_associated` to tell a radio that keeps dropping
+              association from one that associates fine but cannot pass traffic, then
+              look at antenna, AP channel, or 2.4GHz congestion. All four boards use
+              the out-of-tree unisoc_wifi driver, which logs NOTHING to the kernel —
+              `journalctl -k` is not a diagnostic here, wpa_supplicant and
+              NetworkManager userspace logs are.
+
+        # An automated reboot must never be silent. Capped at 2 per 24h by the
+        # script, so this firing twice means the cap is holding and the board is
+        # still broken — at which point rebooting is not the answer.
+        - alert: LabWifiWatchdogRebooted
+          expr: |
+            increase(lab_wifi_watchdog_reboot_total[24h]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.instance }} was rebooted by the WiFi watchdog"
+            description: >
+              The watchdog rebooted this board after WiFi was unreachable for 30
+              minutes. Check `lab_wifi_watchdog_reboots_24h` — the cap is 2 per rolling
+              24h, and hitting it means rebooting is not fixing whatever this is.
+              opi-zero2w-2 and -4 carry the MQTT bridge to Home Assistant and
+              opi-zero2w-1 is a DNS resolver in lab_dns_servers, so a reboot here has
+              service consequences beyond the board.
+
+        # THE SUBTLE ONE. The .prom file persists on disk, so if the timer stops
+        # running node_exporter keeps serving the LAST VALUES FOREVER — every gauge
+        # stays at its final healthy reading and absent() never fires. Only the
+        # timestamp reveals that nothing is writing them. Without this rule a dead
+        # watchdog is indistinguishable from a perfectly behaved one.
+        - alert: LabWifiWatchdogStale
+          expr: |
+            time() - lab_wifi_watchdog_last_run_timestamp_seconds > 900
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "WiFi watchdog on {{ $labels.instance }} has not run for {{ $value | humanizeDuration }}"
+            description: >
+              The metrics are still being served but nothing is updating them — the
+              textfile collector reads whatever the file last contained. The timer runs
+              every 2 minutes, so 15 minutes of silence means wifi-watchdog.timer is
+              stopped, masked or failing. Check
+              `systemctl list-timers wifi-watchdog` and
+              `journalctl -t wifi-watchdog -n 20`. Every other rule in this group is
+              reading stale values until this is fixed.
+
+        # Gateway unreachable while the board itself is still scrapable. That
+        # combination is possible because Prometheus (on n150-1) and these boards are
+        # on the SAME SUBNET — traffic between them does not traverse the router — so
+        # the board can fail to reach 192.168.1.1 while remaining perfectly visible.
+        # Different fault, different response: suspect the router, not the board.
+        - alert: LabWifiGatewayUnreachable
+          expr: |
+            lab_wifi_watchdog_up == 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.instance }} cannot reach the gateway but is still reachable"
+            description: >
+              The watchdog cannot ping 192.168.1.1 from this board, yet Prometheus is
+              scraping it — so the board is on the network and the gateway path is not.
+              If several boards report this at once the router is the fault, and the
+              script's 30-minute / 2-per-24h reboot cap is what stops the pool
+              rebooting itself over an AP outage. `lab_wifi_watchdog_associated` says
+              whether the radio still holds an association.
+
+        # Companion guard, same reasoning as LabDNSProbesMissing and
+        # LabAnsibleDriftMetricMissing. Note it does NOT cover a stopped watchdog —
+        # LabWifiWatchdogStale does, because the file outlives the writer.
+        - alert: LabWifiWatchdogMetricsMissing
+          expr: absent(lab_wifi_watchdog_up)
+          for: 30m
+          labels:
+            severity: warning
+          annotations:
+            summary: "WiFi watchdog metrics have disappeared entirely"
+            description: >
+              lab_wifi_watchdog_up is absent, so every rule in lab.wifi is silent
+              regardless of what the pool is doing. Check the textfile collector is
+              still enabled (`systemctl show -p ExecStart --value
+              prometheus-node-exporter | grep collector.textfile.directory`) — a
+              package upgrade that replaces the unit can drop the drop-in — and that
+              /var/lib/node_exporter/textfile_collector/wifi_watchdog.prom exists.
+
