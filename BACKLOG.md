@@ -3312,7 +3312,35 @@ IR conversion, and a valid `config.json` (the deployed one contains `//` comment
 ### 4.9 Kyverno `cleanupJobs` block is a confirmed no-op
 `gitops/apps/kyverno.yaml:55-66` — creates nothing as of chart 3.3.4.
 
-### 4.10 Kyverno `require-resource-limits` skips initContainers — **a live workload is exploiting the hole**
+### 4.10 ~~Kyverno `require-resource-limits` skips initContainers~~ — **FIXED 2026-09-05, in two PRs**
+
+> The pattern validated `spec.containers` only, and Kubernetes keeps initContainers in a
+> separate list, so they were never examined. Enforce mode made that worse rather than
+> better: an enforced policy with a hole reads as coverage.
+>
+> **Two PRs, and the ordering was the whole risk.** `kyverno-policies` and
+> `home-assistant` are separate Argo Applications with no controllable sync order, so a
+> single PR could have landed the tightened policy while a pod was recreated from the
+> old spec — Home Assistant failing admission. #564 gave `seed-config` limits
+> (10m/16Mi requests, 100m/64Mi limits — it is a busybox `sh` that writes one file);
+> the new pod was confirmed running on the fixed template; only then did the policy
+> tighten.
+>
+> **Swept against live pods, not the repo, before tightening.** A repo scan found one
+> offender but cannot see Helm-rendered pods, which have no manifest in git. Querying
+> the cluster for initContainers missing cpu+memory limits across all non-excluded
+> namespaces returned exactly one — `home-assistant/seed-config`. Had it returned more,
+> each would have had to be fixed first, and the repo scan would have been a false
+> all-clear.
+>
+> **`=()` is the equality anchor and it is load-bearing.** Written as a plain
+> `initContainers:` key the pattern would require the field to be *present*, and every
+> pod without an initContainer — nearly all of them — would fail admission. In Enforce
+> mode that is a cluster-wide outage produced by a policy edit.
+>
+> **`ephemeralContainers` deliberately not covered.** A real bypass, but validating it
+> blocks `kubectl debug` on a running pod unless limits are passed by hand — a bad trade
+> during an incident. Accepted gap, not an oversight.
 
 **Found 2026-08-21:** this is not hypothetical. `gitops/workloads/home-assistant/deployment.yaml:51-53`
 runs an initContainer `seed-config` on `busybox:1.38` with **no `resources` block at all**, while
