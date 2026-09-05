@@ -64,6 +64,37 @@
         state: present
       when: ansible_os_family == 'Archlinux'
 
+    # ---- persistence directory — BACKLOG §3.17 -------------------------------
+    # FOUND 2026-09-04 ON opi-zero2w-2 (Arch, MQTT PRIMARY). mosquitto had been
+    # logging this every 30 minutes, for as long as the journal goes back:
+    #
+    #   Error saving in-memory database, unable to open
+    #   /var/lib/mosquitto//mosquitto.db.new for writing, error No such file or directory
+    #
+    # The directory did not exist. Not full (18% used, 9% inodes), not read-only
+    # (rw,relatime) — simply absent, because the Arch package does not ship it while
+    # the Debian one does. `persistence true` in mosquitto.conf.j2 was therefore
+    # writing nowhere on the Arch hosts, and **every retained message and
+    # subscription was lost on each restart**. That board restarted twice in five
+    # days, so it happened twice.
+    #
+    # Nothing surfaced it. mosquitto keeps serving happily with persistence broken —
+    # the error is logged at info level and the broker does not fail — so the only
+    # symptom is state quietly vanishing across a reboot, which reads as "Home
+    # Assistant lost its retained topics again" rather than as a broker fault.
+    #
+    # Found while diagnosing something else entirely (a WiFi complaint on the same
+    # board), which is the third time this week a symptom investigation has turned up
+    # an unrelated fault in the same box.
+    - name: Ensure the mosquitto persistence directory exists
+      ansible.builtin.file:
+        path: /var/lib/mosquitto
+        state: directory
+        owner: mosquitto
+        group: mosquitto
+        mode: "0755"
+      notify: restart mosquitto
+
     - name: Broker config
       ansible.builtin.template:
         src: ../templates/mosquitto.conf.j2
@@ -76,6 +107,48 @@
         name: mosquitto
         enabled: true
         state: started
+
+    - name: Flush handlers so the broker restarts before we test persistence
+      ansible.builtin.meta: flush_handlers
+
+    # PROVE IT, rather than trusting that a directory now exists. mosquitto only
+    # writes the db on shutdown or at autosave_interval, so the file's presence is
+    # the evidence that persistence actually works — `state: directory` reporting
+    # `changed` says only that Ansible made a directory.
+    - name: Check whether persistence is actually working now
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "dir=$([ -d /var/lib/mosquitto ] && echo yes || echo NO)"
+        echo "owner=$(stat -c '%U:%G' /var/lib/mosquitto 2>/dev/null)"
+        echo "db=$([ -f /var/lib/mosquitto/mosquitto.db ] && echo present || echo 'not-yet-written')"
+        echo "recent_errors=$(journalctl -u mosquitto --since -2min --no-pager 2>/dev/null | grep -ci 'Error saving in-memory database')"
+      args:
+        executable: /bin/bash
+      register: mosq_persist
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Report persistence state
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: {{ mosq_persist.stdout_lines | default([]) | join(' | ') }}
+          — db=not-yet-written is normal immediately after a restart; it appears at the
+          next autosave or on clean shutdown. recent_errors must be 0.
+
+    - name: Fail if mosquitto still cannot write its database
+      ansible.builtin.assert:
+        that:
+          - mosq_persist.stdout is search('dir=yes')
+          - mosq_persist.stdout is search('recent_errors=0')
+        fail_msg: >-
+          {{ inventory_hostname }}: mosquitto still cannot persist —
+          {{ mosq_persist.stdout | default('no output') | trim }}.
+          Check the persistence_location in mosquitto.conf against this directory and
+          that the mosquitto user owns it.
+      when:
+        - not ansible_check_mode
+        - mosq_persist.stdout is defined
 
   handlers:
     - name: restart mosquitto
