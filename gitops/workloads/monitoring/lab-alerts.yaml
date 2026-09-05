@@ -714,6 +714,39 @@ spec:
               stays failed until a human intervenes; `enabled` says nothing about
               whether it is running.
 
+        # BACKLOG §6.13. The rule above can only fire on a unit that EXISTS and is
+        # failed. If nfs-server were removed, renamed, or dropped from the collector's
+        # unit-include regex, its series would vanish and LabSystemdUnitFailed would go
+        # SILENT rather than red — indistinguishable from a healthy NAS.
+        #
+        # That is not hypothetical here. It is exactly what happened to smbd: CLAUDE.md
+        # protected `smbd`/`nfs` as a pair for months while `systemctl show smbd`
+        # returned LoadState=not-found, and `systemctl is-active` reported `inactive`
+        # for the absent unit in the same word it uses for a stopped one.
+        #
+        # SCOPED TO nfs-server ALONE, not generalised across the include list. It is the
+        # only unit in that set known to be a single point of failure — since there is
+        # no Samba on the H4, it is the ONLY export path for the NAS data, and it
+        # already sat dead for 37 days once. A generic "a unit disappeared" rule across
+        # all hosts would fire legitimately whenever a unit is absent on a host that
+        # never had it, which is most of them.
+        - alert: LabNfsServerMetricMissing
+          expr: absent(node_systemd_unit_state{name="nfs-server.service", state="failed"})
+          for: 1h
+          labels:
+            severity: critical
+          annotations:
+            summary: "nfs-server is no longer reported by any node_exporter"
+            description: >
+              The series LabSystemdUnitFailed watches for nfs-server has disappeared, so
+              that alert is now silent about the lab's ONLY NAS export path regardless
+              of what the service is doing. Check the unit still exists on the H4
+              (`systemctl show nfs-server -p LoadState` — `not-found` means removed, and
+              `is-active` says `inactive` for both removed and stopped), that the H4's
+              node_exporter is up, and that `nfs-server` is still inside
+              --collector.systemd.unit-include in gitops/apps/monitoring.yaml. A 1h
+              `for:` rides out a node_exporter restart.
+
     # BACKLOG §3.14 — retention that quietly shrinks.
     #
     # Prometheus enforces whichever of `retention` (time) or `retentionSize` (bytes)

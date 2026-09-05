@@ -3001,9 +3001,32 @@ Grep patterns run under `sudo` land in the journal they are searching.
       profile on `wlan0` to `bg` and re-measure. **Measure before codifying:** prove
       2.4 GHz actually helps on that board before putting it in Ansible, or the repo
       acquires a fix nobody verified.
-- [ ] **`gitlab-1` is in neither node_exporter group** while the playbook header claims
-      it and Prometheus scrapes it (`up` = 1, so no outage). Add it to the group or say
-      plainly why not — §4.14 territory.
+- [x] **`gitlab-1` — ANSWERED 2026-09-05, and the answer was already written down.**
+      Not an omission: the exclusion is deliberate, and `inventory/hosts.yml` has carried
+      the reason all along, immediately below the group membership I read —
+
+          gitlab-1 deliberately NOT here. GitLab Omnibus ships its own node_exporter
+          already bound to 127.0.0.1:9100, so the Debian package can't bind
+          0.0.0.0:9100 and its unit dies on start. Expose the bundled one instead.
+
+      **So adding it to the group would have broken a working scrape** — installing a
+      package whose unit cannot start, on a host Prometheus is scraping successfully.
+      What was actually wrong is `node-exporter.yml`'s header, which listed `gitlab-1`
+      as a Debian target it manages. Corrected, with the reason inline and a pointer to
+      the inventory.
+
+      That header has now been wrong about group membership **twice** — it also called
+      `opi-zero2w-4` Arch until 2026-08-27. `ansible node_exporter --list-hosts` is the
+      measurement; the header is a summary that drifts from it.
+
+      **Recorded because the mistake was mine and it has a shape:** I read the group
+      membership and stopped, without reading the comment directly beneath it, then filed
+      an open question whose answer was four lines further down the same file. Cheaper to
+      grep the inventory for the hostname than to open an item about it.
+
+      Consequence, so nobody hunts for it: gitlab-1 never receives the textfile
+      collector, because its exporter is not managed here. Seven hosts by design, not
+      eight by omission.
 
 **Found while diagnosing the above, unrelated to WiFi:**
 
@@ -4467,14 +4490,18 @@ receiver logging nothing on success — the family this repo keeps re-learning. 
 
 **A live consequence for the alerting, not yet fixed:**
 
-- [ ] `LabSystemdUnitFailed` matches `node_systemd_unit_state{state="failed"} == 1`
-      with **no `absent()` guard**. If `nfs-server` were removed rather than failed,
-      its series would vanish and the alert would go *silent*, not red — the exact
-      generalisation of what happened to `smbd` here. Every other watcher-watching rule
-      in this file has a companion (`LabDNSProbesMissing`,
-      `LabAnsibleDriftMetricMissing`, `LabPrometheusRetentionMetricMissing`); this one
-      does not. Add `absent(node_systemd_unit_state{name="nfs-server.service"})` at
-      minimum, since it is now known to be a single point of failure.
+- [x] **`LabNfsServerMetricMissing` added 2026-09-05.** `LabSystemdUnitFailed` could only
+      fire on a unit that exists and is failed; if `nfs-server` were removed, renamed, or
+      dropped from the collector's `unit-include` regex, its series would vanish and the
+      alert would go **silent rather than red** — indistinguishable from a healthy NAS.
+      That is precisely what happened to `smbd`, and it is why the guard exists.
+
+      **Scoped to `nfs-server` alone, deliberately.** A generic "a unit disappeared" rule
+      across the include list would fire legitimately on every host that never had a
+      given unit. `nfs-server` earns a rule of its own because it is the only member of
+      that set known to be a single point of failure — no Samba on the H4 means it is
+      the sole export path for the NAS data, and it already sat dead 37 days once.
+      `for: 1h` rides out a node_exporter restart.
 
 ---
 
