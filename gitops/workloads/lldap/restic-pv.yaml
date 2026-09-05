@@ -1,0 +1,70 @@
+---
+# lldap restic repository — BACKLOG §1.8.
+#
+# Replaces the INLINE `nfs:` volume that backup-cronjob.yaml used to carry. Inline NFS
+# volumes cannot take `mountOptions` — that is a PV-only field — so the old mount used
+# kernel defaults, which means **hard**. On 2026-08-02 the H4's export went away and
+# `lldap-backup` hung for **3d15h** rather than failing.
+#
+# ---- WHY soft HERE AND hard ON immich-library, TEN METRES AWAY ----
+# `gitops/workloads/immich/library-pv.yaml` deliberately uses `hard`, and that is still
+# right there: immich-server is a long-running Deployment serving user uploads, where a
+# blocked write is recoverable and an EIO returned mid-write is data loss.
+#
+# This volume is the opposite case. It is touched only by a bounded CronJob whose whole
+# failure mode is hanging: `hard` converts "the NAS is briefly unreachable" into a job
+# that blocks until `activeDeadlineSeconds: 1800` kills it, thirty minutes later. `soft`
+# converts the same event into a clean, alerted failure that the next scheduled run
+# retries. For a backup, a failed attempt you are told about beats a successful-looking
+# one you are not.
+#
+# ---- WHY timeo=600,retrans=5 AND NOT THE timeo=100,retrans=3 IN §1.8's SKETCH ----
+# soft is not free: it returns EIO where hard would block, so an over-eager timeout
+# fails backups that would otherwise have completed. 100/3 gives up after roughly 30
+# seconds — short enough that an ordinary NFS blip becomes a failed backup.
+# 600/5 is about five minutes: long enough to ride out a blip, and still far inside the
+# 30-minute deadline. restic writes temp-then-rename, so an EIO here leaves a stray
+# temp file rather than a corrupt pack.
+#
+# ---- THE TRAP: local-path IS THE DEFAULT STORAGECLASS ----
+# `storageClassName: ""` is load-bearing on BOTH objects, and `volumeName` pins the
+# binding. Omit them and the PVC does not bind this PV — it gets satisfied by
+# local-path instead, which provisions a directory on the node's root filesystem. The
+# backups would then write to node-local disk, the CronJob would report success, and
+# the restic repository on the cold mirror would silently stop receiving snapshots.
+# Everything would look healthy. Same shape as §3.11: a green run proving nothing.
+#
+# ---- RECLAIM POLICY ----
+# Retain, explicitly. The cold disks are the only copy-of-record (CLAUDE.md), and a
+# reclaim policy of Delete on a path holding a restic repository is not a risk worth
+# leaving to a default.
+
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: lldap-restic
+spec:
+  # NFS does not enforce capacity; this figure exists only so the PVC below can
+  # request a matching value and bind. It is not a quota.
+  capacity: { storage: 500Gi }
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  mountOptions:
+    - soft                                   # fail, do not hang — see the header
+    - timeo=600                              # 60s per attempt (deciseconds)
+    - retrans=5                              # ~5 min total before EIO
+  nfs:
+    server: 192.168.1.160                    # odroid-nas
+    path: /mnt/cold-8t/restic                # 8 TB RAID 1 mirror — copy-of-record
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: lldap-restic
+  namespace: lldap
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: ""                       # NOT optional — see the header
+  resources: { requests: { storage: 500Gi } }
+  volumeName: lldap-restic                   # pin the binding to the PV above

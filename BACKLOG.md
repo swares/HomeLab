@@ -368,7 +368,44 @@ Three deliberate choices:
   receiving copies three weeks ago still passes. `nas`-tagged snapshot age is compared
   against the same threshold the local repos use.
 
-### 1.8 lldap's restic mount is a **hard** NFS mount
+### 1.8 ~~lldap's restic mount is a **hard** NFS mount~~ — **FIXED 2026-09-05, not yet applied**
+
+> `gitops/workloads/lldap/restic-pv.yaml` adds a PV/PVC pair mounting the same path
+> `soft,timeo=600,retrans=5`, and the CronJob's volume switches from inline `nfs:` to
+> `persistentVolumeClaim:`. A repeat of 2026-08-02 now produces a failed job that
+> `LabBackupJobFailed` reports and the next run retries, instead of a 3d15h hang.
+>
+> **`soft` here, `hard` on immich-library, and both are right.** `library-pv.yaml`
+> keeps `hard` deliberately: immich-server is a long-running Deployment serving user
+> uploads, where a blocked write is recoverable and an EIO mid-write is data loss. This
+> volume is the opposite — touched only by a bounded CronJob whose entire failure mode
+> is hanging. For a backup, a failed attempt you are told about beats a
+> successful-looking one you are not.
+>
+> **Timeouts raised from the sketch in this entry.** `timeo=100,retrans=3` gives up
+> after ~30 s, short enough that an ordinary NFS blip becomes a failed backup. 600/5 is
+> ~5 minutes: rides out a blip, still far inside the 30-minute deadline. `soft` is not
+> free — it returns EIO where `hard` would block — so the timeout is the whole design.
+> restic writes temp-then-rename, so an EIO leaves a stray temp file, not a corrupt pack.
+>
+> **The trap that would have made this silently worse:** `local-path` is the default
+> StorageClass. A PVC without `storageClassName: ""` does not bind this PV — local-path
+> satisfies it by provisioning a directory on the node's root filesystem. Backups would
+> then write to node-local disk, the CronJob would report success, and the restic
+> repository on the cold mirror would stop receiving snapshots with every signal green.
+> Both objects set it explicitly, `volumeName` pins the binding, and the PV is `Retain`
+> because that path is a copy-of-record.
+>
+> **The entry's own hedge was right and is preserved:** `activeDeadlineSeconds: 1800`
+> plus `LabBackupJobFailed` had already converted an indefinite hang into a bounded,
+> alerted failure — the actual damage. This removes the stall itself; the outer bound
+> stays as the backstop.
+>
+> **To verify after applying:** `kubectl -n lldap get pvc lldap-restic` must show
+> **Bound** to `lldap-restic`, not to a `pvc-<uuid>` — the latter means local-path won
+> and the backups are going to the wrong disk. Then let one scheduled run complete and
+> confirm a new snapshot with `restic snapshots --tag lldap`.
+
 `gitops/workloads/lldap/backup-cronjob.yaml:151-154`
 
 ```yaml
@@ -1812,7 +1849,32 @@ the timer.
 `docs/REVIEW-2026-07-24.md:306` (H27) — *possibly fixed; verify the timer cadence
 against the 25h threshold.*
 
-### 3.5 A CronJob that has never succeeded is invisible
+### 3.5 ~~A CronJob that has never succeeded is invisible~~ — **FIXED 2026-09-05, not yet applied**
+
+> `LabCronJobNeverSucceeded` in `lab-alerts.yaml`. The sketch had been sitting in
+> `LabCronJobStale`'s own comment, unused, with the reason recorded: it also fires for a
+> CronJob created thirty seconds ago that has simply not run yet.
+>
+> **`kube_cronjob_created` closes that** — 93600 s of grace, the same 26 h
+> `LabCronJobStale` allows, after which never having succeeded is a finding rather than
+> a startup state. Critical rather than warning, because `LabCronJobStale` structurally
+> **cannot** see this case: it keys off `kube_cronjob_status_last_successful_time`,
+> which does not exist until the first success, and a rule on an absent series is silent
+> rather than firing. Nothing else would tell you.
+>
+> Same family as §3.16 (a systemd collector scoped so narrowly no rule could see a
+> failed unit) and `LabDNSProbesMissing`: **the absence of a metric is not the absence
+> of a problem**, and the job that has never worked is precisely the one you most want
+> to hear about.
+>
+> **Verify before trusting it** — `kube_cronjob_created` and `kube_cronjob_info` are
+> kube-state-metrics series, taken from documentation rather than measured on this
+> cluster: `count(kube_cronjob_created)` and `count(kube_cronjob_info)` should both
+> equal the number of CronJobs. If either is empty the rule is silent, not broken, which
+> is the exact failure mode it was written to fix.
+>
+> Still **unproven** as the explanation for §1.12's 15-day lldap gap, and deliberately
+> not claimed as one: the metric history that would settle it was evicted by §3.14.
 `gitops/workloads/monitoring/lab-alerts.yaml:262-269` — `LabCronJobStale` keys off
 `kube_cronjob_status_last_successful_time`, which does not exist until the first success.
 
