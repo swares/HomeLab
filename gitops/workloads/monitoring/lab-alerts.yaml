@@ -917,24 +917,57 @@ spec:
         # The answer to the original question, and the reason the watchdog exists.
         # A board reconnecting repeatedly is working *and* broken at the same time,
         # which is exactly the state that leaves no trace without this counter.
+        # THRESHOLD LOWERED 5 -> 2 ON 2026-09-04 BECAUSE THE METRIC CHANGED MEANING.
+        # The script no longer touches the radio when the interface is associated and
+        # addressed, so reconnect_total now counts only GENUINE ASSOCIATION LOSS
+        # rather than every failed ping. That is a much rarer and more serious event;
+        # leaving the threshold at 5 against the stricter counter would have left an
+        # alert that essentially cannot trip. A metric whose definition changes needs
+        # its thresholds revisited in the same commit, or the rule silently weakens.
         - alert: LabWifiFlapping
           expr: |
-            increase(lab_wifi_watchdog_reconnect_total[6h]) > 5
+            increase(lab_wifi_watchdog_reconnect_total[6h]) > 2
           for: 10m
           labels:
             severity: warning
           annotations:
-            summary: "{{ $labels.instance }} reconnected WiFi {{ $value | printf \"%.0f\" }} times in 6h"
+            summary: "{{ $labels.instance }} lost WiFi association {{ $value | printf \"%.0f\" }} times in 6h"
             description: >
-              The watchdog is repairing this link repeatedly. It is succeeding — which
-              is the problem: a board that self-heals looks healthy from every other
-              signal in the lab. Do NOT respond by making the watchdog more aggressive.
-              Check `lab_wifi_watchdog_associated` to tell a radio that keeps dropping
-              association from one that associates fine but cannot pass traffic, then
-              look at antenna, AP channel, or 2.4GHz congestion. All four boards use
-              the out-of-tree unisoc_wifi driver, which logs NOTHING to the kernel —
-              `journalctl -k` is not a diagnostic here, wpa_supplicant and
-              NetworkManager userspace logs are.
+              The radio is genuinely dropping its association and the watchdog is
+              re-establishing it. It is succeeding, which is the problem: a board that
+              self-heals looks healthy from every other signal in the lab. Do NOT
+              respond by making the watchdog more aggressive. Check signal strength
+              first — `iw dev wlan0 link` — because a marginal link presents this way
+              and no software change fixes 25 dB. Note the out-of-tree unisoc_wifi
+              driver logs NOTHING to the kernel, so `journalctl -k` is not a diagnostic
+              here; wpa_supplicant and NetworkManager userspace logs are.
+
+        # ADDED 2026-09-04, and this is the rule that would have found the real fault.
+        # A degraded check is one where the gateway answered only after a retry: the
+        # radio is associated and addressed, packets are simply being lost. That is a
+        # LINK QUALITY problem, not a connectivity problem, and it is invisible to
+        # every other signal — the board stays up, stays scrapable, and answers.
+        #
+        # opi-zero2w-2 measured -63 dBm with 15% loss while three identical boards on
+        # the same AP measured 0%. The first version of the watchdog reported that as
+        # six outages and reassociated a healthy radio in response.
+        - alert: LabWifiPacketLoss
+          expr: |
+            increase(lab_wifi_watchdog_degraded_total[6h]) > 5
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "{{ $labels.instance }} needed ping retries {{ $value | printf \"%.0f\" }} times in 6h"
+            description: >
+              The link is up and lossy. The board is associated, addressed and
+              reachable — only some packets are not arriving, so nothing else in the
+              lab will report a problem. This is an RF issue: measure it with
+              `iw dev wlan0 link` (signal, and whether the tx bitrate has collapsed to
+              a low MCS) and `ping -c 20 -q -I wlan0 192.168.1.1` for a loss figure.
+              Fixes are physical — distance, obstruction, antenna orientation, a loose
+              u.FL connector — or moving the board to 2.4GHz, which penetrates better
+              than 5GHz at the same distance. Do not treat this by tuning the watchdog.
 
         # An automated reboot must never be silent. Capped at 2 per 24h by the
         # script, so this firing twice means the cap is holding and the board is

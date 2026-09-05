@@ -2749,11 +2749,97 @@ Grep patterns run under `sudo` land in the journal they are searching.
       - `LabWifiWatchdogMetricsMissing` — the `absent()` companion. Note it does **not**
         cover a stopped watchdog; the file outlives the writer, which is what
         `LabWifiWatchdogStale` is for.
-- [ ] **Re-ask the original question with data.** After a week, `increase(
-      lab_wifi_watchdog_reconnect_total[7d])` answers whether the boards actually drop
-      WiFi. If it is ~0, the reported symptom is something else — most likely the manual
-      power-cycles above, which are indistinguishable from a WiFi drop when observed from
-      the network.
+- [x] **ANSWERED 2026-09-04, within an hour of installing the watchdog, and not as
+      expected.** `LabWifiFlapping` went `pending` on its first evaluation. The raw
+      counter said one board and only one board:
+
+          192.168.1.188 (opi-zero2w-2)  reconnect_total = 6
+          192.168.1.184 / .217 / .99    reconnect_total = 0
+
+      **It is not a WiFi disconnect. It is a marginal RF link on one board.** Every
+      event logged identically — `associated=1 has_ip=1`, recovered on the very next
+      check. The radio never dropped; only the gateway ping failed, once, six times.
+      Measured across the pool:
+
+          board          band     signal    tx rate       loss   rtt avg / max
+          opi-zero2w-1   5 GHz    -40 dBm   390 Mbit/s     0%    6.1 /   8.0 ms
+          opi-zero2w-4   5 GHz    -38 dBm   390 Mbit/s     0%    6.9 /   8.8 ms
+          opi-zero2w-3   2.4 GHz  -38 dBm   86.7 Mbit/s    0%    7.5 /  11.7 ms
+          opi-zero2w-2   5 GHz    -63 dBm   87.8 Mbit/s   15%   38.1 / 167.8 ms
+
+      **25 dB below its two 5 GHz siblings** — about 300× less received power — with
+      15% loss and 43 ms of jitter, and the radio has fallen from MCS 9 to MCS 2, which
+      is the hardware itself reporting the link is at its limit. That is not
+      congestion; it is distance, obstruction, antenna orientation, or a loose u.FL
+      connector. And it is the MQTT primary carrying Home Assistant's message bus.
+
+      **So none of the original premises survived contact with measurement:** not power
+      save (already off on all four), not the driver (identical on all four), not
+      random disconnects (association never dropped), not the pool (three boards are
+      flawless). One board, one physical problem.
+
+- [x] **The watchdog's first version was wrong in two ways, and its own data proved
+      both.** Corrected 2026-09-04.
+
+      **It measured too tightly.** The check was a single `ping -c 2`. At 15% loss,
+      losing two consecutive packets is ordinary rather than exceptional — bursty loss
+      makes consecutive drops far likelier than an independent-probability estimate
+      suggests. Now: up to three rounds of three pings over ~20 s, which bursty loss
+      cannot defeat while still catching a real outage inside one 2-minute cycle.
+
+      **And its remedy was actively harmful.** On `associated=1 has_ip=1` it ran
+      `nmcli device disconnect/connect` — tearing down a healthy association because a
+      few packets went missing, converting a non-event into a real multi-second outage.
+      **The watchdog was the most disruptive thing happening to that board.** It now
+      refuses to touch the radio when the interface is associated and addressed, and
+      withholds the reboot escalation in that state too: a reboot fixes a wedged local
+      radio, which is exactly the `associated=0` case. It cannot fix a weak signal and
+      it cannot fix a router.
+
+      **New metric, and it is the one that should have existed first:**
+      `lab_wifi_watchdog_degraded_total` counts checks that succeeded only after a
+      retry — a link-quality signal rather than a connectivity one. That is the number
+      that identifies opi-zero2w-2 correctly, where `reconnect_total` identified it
+      wrongly. `LabWifiFlapping`'s threshold dropped 5 → 2 in the same change, because
+      `reconnect_total` now counts only genuine association loss: a metric whose
+      definition changes needs its thresholds revisited in the same commit, or the rule
+      silently weakens into one that cannot trip.
+
+**Still open:**
+
+- [ ] **Fix opi-zero2w-2's radio link — physical, and the only real cure.** Move the
+      board, reorient or reseat the antenna, check the u.FL connector. A software
+      interim exists if that is impractical: opi-zero2w-3 runs 2.4 GHz at -38 dBm with
+      0% loss, and 2.4 GHz penetrates far better than 5 GHz at the same distance — the
+      board is only achieving 87.8 Mbit/s on 5 GHz anyway. Band-lock the `Linksys`
+      profile on `wlan0` to `bg` and re-measure. **Measure before codifying:** prove
+      2.4 GHz actually helps on that board before putting it in Ansible, or the repo
+      acquires a fix nobody verified.
+- [ ] **`gitlab-1` is in neither node_exporter group** while the playbook header claims
+      it and Prometheus scrapes it (`up` = 1, so no outage). Add it to the group or say
+      plainly why not — §4.14 territory.
+
+**Found while diagnosing the above, unrelated to WiFi:**
+
+- [x] **mosquitto had no persistence directory on opi-zero2w-2 — fixed in
+      `playbooks/mqtt.yml` 2026-09-04.** It had been logging every 30 minutes for as
+      long as the journal reaches:
+
+          Error saving in-memory database, unable to open
+          /var/lib/mosquitto//mosquitto.db.new for writing, error No such file or directory
+
+      `/var/lib/mosquitto` did not exist. Not full (18% used, 9% inodes), not read-only
+      (`rw,relatime`) — absent, because the **Arch package does not ship it and the
+      Debian one does**, and `mqtt.yml` never created it. So `persistence true` was
+      writing nowhere on the Arch hosts and **every retained message and subscription
+      was lost on each restart**; that board restarted twice in five days.
+
+      Nothing surfaced it. mosquitto keeps serving with persistence broken — the error
+      is informational and the broker does not fail — so the only symptom is state
+      quietly vanishing across a reboot, which reads as "Home Assistant lost its
+      retained topics again" rather than as a broker fault. The play now creates the
+      directory and **asserts on `recent_errors=0` from the journal**, because
+      `state: directory` reporting `changed` says only that Ansible made a directory.
 
 **Two findings from this work that belong elsewhere:**
 
