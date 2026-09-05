@@ -1299,11 +1299,55 @@ fresh-host seed. Do not "fix" the divergence by templating the file.
 
 Original finding retained below.
 
-### 2.2 GitLab runner mounts the host Docker socket read-write
+### 2.2 ~~GitLab runner mounts the host Docker socket read-write~~ — **FIXED 2026-09-05, and the second half turned out to be a repair**
 `gitops/workloads/gitlab-runner/values.yaml:40-45` (C5)
 
 CI job pods get `/var/run/docker.sock` with `read_only: false` — that is node root for
 anything that can open a merge request. Also no CPU/memory limits on build pods.
+
+> **The socket was real, not dormant.** Checked on n150-1 2026-09-05: socket present
+> (`srw-rw---- root docker`), `docker.service` **active**, `/usr/bin/docker` installed.
+> Job containers run as root by default and n150-1 is a control-plane node and etcd
+> voter, so this was root on that host for anyone able to open a merge request.
+>
+> **And nothing used it.** Both pipelines — `.gitlab-ci.yml` and
+> `ansible/.gitlab-ci.yml` — run only `yq`, `kubectl`, `argocd`, `curl` and `git`. No
+> job builds an image; the m5stack-adapter image is built by hand on a workstation per
+> its own README. **So there was no replacement to design** — no dind, no kaniko, no
+> buildkit. The block was deleted outright.
+>
+> That also corrects an estimate I gave the same day: §2.2 was sized at "2–4 hours,
+> medium risk, the risk is breaking CI". That assumed CI built images, which nobody had
+> checked. Reading the two pipeline files first would have cost two minutes.
+>
+> **THE SECOND HALF WAS NOT HARDENING — CI HAS BEEN DEAD.** "No CPU/memory limits on
+> build pods" reads as a nice-to-have. But `gitlab-runner` is **not** in
+> `require-resource-limits`' exclude list and that policy is **Enforce**, so a job pod
+> without limits is rejected at admission. Proved with a server-side dry-run of exactly
+> the shape the runner creates:
+>
+>     kubectl -n gitlab-runner run citest --image=ubuntu:22.04 --restart=Never --dry-run=server
+>     -> denied: rule require-limits failed at path /spec/containers/0/resources/limits/
+>
+> No GitLab job could start — since Kyverno went to Enforce, reconfirmed 2026-07-26, so
+> roughly six weeks. **That takes `auto-rollback` with it**: the safety net for a bad
+> merge to main lives in the same pipeline as the checks it protects.
+>
+> `cpu_*`, `memory_*` and the separate `helper_*` keys are now set. The helper is
+> another container in the same pod and the policy validates every one, so omitting it
+> would have left the job rejected for a different container.
+>
+> **One thing NOT established, and not claimed:** this repo's `origin` is GitHub, so
+> whether GitLab runs pipelines for it at all is a separate question. If it does not,
+> these pipelines have been inert for another reason entirely and Kyverno was the second
+> lock on a door already shut. Check the last pipeline date on the GitLab project before
+> concluding the six weeks means what it appears to.
+>
+> **To verify after applying:** re-run the `citest` dry-run — it must still be
+> **rejected**, because that pod has no limits and the policy is unchanged. Then trigger
+> a real pipeline and confirm a job pod is *created*, and that
+> `kubectl -n gitlab-runner get pod <job-pod> -o jsonpath='{.spec.volumes}'` contains no
+> `hostPath`.
 
 ### 2.3 ~~Plaintext credential in git~~ — **FIXED 2026-08-27; live exposure checked and absent**
 
