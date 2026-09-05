@@ -368,7 +368,24 @@ Three deliberate choices:
   receiving copies three weeks ago still passes. `nas`-tagged snapshot age is compared
   against the same threshold the local repos use.
 
-### 1.8 ~~lldap's restic mount is a **hard** NFS mount~~ — **FIXED 2026-09-05, not yet applied**
+### 1.8 ~~lldap's restic mount is a **hard** NFS mount~~ — **FIXED AND APPLIED 2026-09-05**
+
+> Applied via #561 and verified. **The check that mattered was the binding, not the
+> mount:**
+>
+>     NAME           STATUS   VOLUME         CAPACITY   ACCESS MODES   STORAGECLASS
+>     lldap-restic   Bound    lldap-restic   500Gi      RWX
+>
+> **`Bound` to `lldap-restic`, not to a `pvc-<uuid>`**, with `STORAGECLASS` blank. That
+> is the one line that distinguishes "the NFS PV bound" from "local-path quietly
+> provisioned a directory on the node and the backups now go to the wrong disk while
+> reporting success". And the options are live on the PV:
+>
+>     ["soft","timeo=600","retrans=5"]
+>
+> **Still unproven until tomorrow:** a bound PVC is plumbing, not a completed backup.
+> The proof is a new snapshot from the next scheduled run —
+> `restic snapshots --tag lldap`.
 
 > `gitops/workloads/lldap/restic-pv.yaml` adds a PV/PVC pair mounting the same path
 > `soft,timeo=600,retrans=5`, and the CronJob's volume switches from inline `nfs:` to
@@ -1679,7 +1696,7 @@ config change plus a rolling restart of three etcd voters, then the monitoring s
       "not installed" rather than "stopped". The boundary was respected; the
       documentation describing it was wrong.
 
-#### Half two — WRITTEN 2026-09-04, NOT YET VERIFIED
+#### Half two — APPLIED AND VERIFIED 2026-09-04
 
 Half one left the lab with **an open metrics port and no consumer** — a deliberate
 intermediate state, recorded so it could not later be mistaken for an abandoned one.
@@ -1849,7 +1866,29 @@ the timer.
 `docs/REVIEW-2026-07-24.md:306` (H27) — *possibly fixed; verify the timer cadence
 against the 25h threshold.*
 
-### 3.5 ~~A CronJob that has never succeeded is invisible~~ — **FIXED 2026-09-05, not yet applied**
+### 3.5 ~~A CronJob that has never succeeded is invisible~~ — **FIXED AND APPLIED 2026-09-05**
+
+> Applied via #561. The two kube-state-metrics series this rule depends on were taken
+> from documentation rather than measured, so they were checked first:
+>
+>     count(kube_cronjob_created)  = 2
+>     count(kube_cronjob_info)     = 2
+>
+> Both equal the CronJob count (immich-db-backup, lldap-backup — the same two seen on
+> 2026-08-02), so the rule has inputs to read. Had either been empty the rule would have
+> been **silent rather than broken**, which is the exact failure it exists to fix.
+>
+> Then the rule itself:
+>
+>     LabCronJobStale            inactive
+>     LabCronJobNeverSucceeded   inactive
+>     count(kube_cronjob_info unless on(namespace, cronjob)
+>           kube_cronjob_status_last_successful_time) = 0
+>
+> **That 0 is meaningful rather than vacuous** precisely because `count(kube_cronjob_info)`
+> was already known to be 2: it means "two CronJobs, both with a recorded success", not
+> "no data". Read alone it would have been indistinguishable from a rule seeing nothing
+> at all — the distinction this entry is about.
 
 > `LabCronJobNeverSucceeded` in `lab-alerts.yaml`. The sketch had been sitting in
 > `LabCronJobStale`'s own comment, unused, with the reason recorded: it also fires for a
@@ -2644,7 +2683,7 @@ by accident. The drift check found this one on its first run, which is encouragi
 a weekly Ansible dry run is a poor substitute for a metric that would have fired the same
 afternoon.
 
-### 3.17 Nothing can see a WiFi drop on the Zero 2W pool — **watchdog written 2026-09-04, not yet applied**
+### 3.17 Nothing can see a WiFi drop on the Zero 2W pool — **APPLIED AND VERIFIED 2026-09-04; one physical fix outstanding**
 
 **Reported symptom:** the Orange Pi Zero 2Ws disconnect from WiFi at random. **Measured
 finding: nothing in the lab records a WiFi disconnect on those boards, so the symptom
@@ -3676,9 +3715,13 @@ apply it** — the apply step is `netplan try`, by hand, deliberately.
       three unique resolvers trip a three-server limit. Nothing here is stale or wrong;
       **our own drop-in collides with what the router advertises on the bridge.**
 
-      THE FIX, not yet applied: `dhcp4-overrides: {use-dns: false}` on the br0 definition
-      in netplan, leaving the Ansible-managed three as the only source. Takes both hosts
-      to exactly 3.
+      THE FIX — **APPLIED 2026-09-01** via `playbooks/kvm-netplan-fix.yml`:
+      `dhcp4-overrides: {use-dns: false}` on the br0 definition in netplan, leaving the
+      Ansible-managed three as the only source. Took both hosts to exactly 3. (This read
+      "not yet applied" until 2026-09-05, four days after it was applied — found by
+      grepping the file for that phrase while correcting two other stale markers. The
+      caution below was written before the change and is preserved because it is still
+      the right posture for the next netplan change on these hosts.)
 
       WHY IT WAS NOT DONE THE SAME NIGHT: it is a netplan change on both KVM
       hypervisors, and `br0` on n150-1 was carrying the kube-vip VIPs **.200 and .201**
