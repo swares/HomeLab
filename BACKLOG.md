@@ -2856,6 +2856,40 @@ Grep patterns run under `sudo` land in the journal they are searching.
       problem as the eleven permanently-failing units in §3.16. The other two are cited
       in its annotation as confirming evidence.
 
+- [x] **First full reading confirmed the design choice, for a better reason than the one
+      given — and found a flaw in the alert's own annotation. 2026-09-04.**
+
+          board                signal    tx bitrate    rtt
+          .184  opi-zero2w-1   -41 dBm   390           0.0036 s
+          .188  opi-zero2w-2   -63 dBm    87.8         0.0098 s
+          .217  opi-zero2w-3   -30 dBm    86.7         0.0080 s
+          .99   opi-zero2w-4   -38 dBm   390           0.0073 s
+
+      All four boards reported all three gauges, so the parsers matched every host's
+      `iw` output rather than only the one they were written against.
+
+      **THE ANNOTATION WAS WRONG ABOUT BITRATE.** It read "a collapse to ~87 Mbit/s at
+      MCS 2 is the radio saying the signal cannot sustain a higher modulation".
+      `opi-zero2w-3` runs **86.7 Mbit/s at -30 dBm — the best signal in the pool** —
+      because it is the only board on **2.4 GHz**, where the ceiling is far below
+      5 GHz/80 MHz. Anyone following that annotation at 3am would have diagnosed the
+      healthiest link in the lab as broken. Corrected to qualify the comparison as
+      within-band, citing `.217` as the counterexample.
+
+      **And of the four candidate signals, exactly one was stable all day:**
+
+          loss      15% -> 0%                 varies
+          rtt       38ms -> 61ms -> 9.8ms     varies 6x, same board, same signal
+          bitrate   87.8 both times           but band-dependent, not comparable
+          signal    -63 -> -66 -> -63         stable, 22 dB clear of the pool
+
+      The original argument for one alert was "do not page three times for one cause".
+      The stronger argument, visible only after a full reading, is that **the other
+      three are not reliable discriminators at all** — two of them swing while the fault
+      is unchanged, and the third cannot be compared across bands. Alerting on the cause
+      rather than its symptoms was right; the reasoning written down for it was weaker
+      than the reasoning the data supports.
+
 **Still open:**
 
 - [ ] **Fix opi-zero2w-2's radio link — physical, and the only real cure.** Move the

@@ -973,17 +973,23 @@ spec:
           annotations:
             summary: "{{ $labels.instance }} WiFi signal is {{ $value }} dBm"
             description: >
-              The link is marginal. Confirm with
-              `lab_wifi_watchdog_tx_bitrate_mbps` (healthy boards negotiate 390 Mbit/s
-              at MCS 9; a collapse to ~87 Mbit/s at MCS 2 is the radio saying the
-              signal cannot sustain a higher modulation) and
-              `lab_wifi_watchdog_rtt_seconds` (healthy ~0.007s; this board measured
-              0.038–0.061s with peaks over 0.2s). Expect loss and latency to trade off
-              against each other over time rather than both being present — that is
-              retransmission working, then failing. **The fix is physical**: distance,
-              obstruction, antenna orientation, a loose u.FL connector, or moving the
-              board to 2.4GHz, which penetrates better than 5GHz at the same distance.
-              No watchdog setting improves 25 dB.
+              The link is marginal. **Signal is the only quantity here worth trusting
+              on its own** — measured across the pool on 2026-09-04, loss swung 15% to
+              0%, rtt swung 6x, and tx bitrate is not comparable between bands, while
+              signal held steady and 22 dB clear of every healthy board.
+              CONFIRM WITH BITRATE ONLY WITHIN THE SAME BAND. On 5GHz/80MHz a healthy
+              board negotiates 390 Mbit/s (MCS 9), so ~87 Mbit/s there means the signal
+              cannot sustain a higher modulation. On 2.4GHz that figure is normal:
+              opi-zero2w-3 runs 86.7 Mbit/s at an excellent -30 dBm. Comparing bitrate
+              across bands will diagnose a healthy board as broken.
+              `lab_wifi_watchdog_rtt_seconds` is corroborating at best — healthy ~0.007s,
+              and this board measured 0.038-0.061s when degraded but 0.0098s an hour
+              later at the same signal level. Expect loss and latency to trade off
+              against each other rather than both being present: that is retransmission
+              working, then failing.
+              **The fix is physical**: distance, obstruction, antenna orientation, a
+              loose u.FL connector, or moving the board to 2.4GHz, which penetrates
+              better than 5GHz at the same distance. No watchdog setting improves 25 dB.
 
         # ADDED 2026-09-04, and this is the rule that would have found the real fault.
         # A degraded check is one where the gateway answered only after a retry: the
