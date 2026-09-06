@@ -695,13 +695,48 @@ and three days of seeding).
 > creates a new series with no history and freezes the old one with permanent history.
 > Nothing in this lab announces either half.
 
-- [ ] **Reclaiming the VHDX is now a deliberate deletion, not a wait.** Since those
-      groups never age out, the only way to remove 224.7 GiB from three repositories is
-      an explicit `restic forget` targeting them by path. That is irreversible removal
-      of the only remaining copies of that image, against this entry's own advice to
-      "restore it by hand from a snapshot older than this change if it is ever wanted."
-      Decide which of those two you mean — both are defensible, but they are not
-      compatible and the current state quietly chose the expensive one.
+- [x] **DISSOLVED 2026-09-06 — the choice was an artefact of a default nobody had
+      looked at.** `--group-by host,tags` added to all six `forget` invocations
+      (`backup-nas.service.j2`, `backup-nas-copy.sh.j2`, `backup-offsite.sh.j2`).
+
+      **restic's default is `--group-by host,paths`, and that default IS this entry's
+      bug.** Group by tags instead and every `nas`-tagged snapshot forms one retention
+      series, so the policy applies across path changes and frozen groups age out on
+      their own. Nothing is deleted today — `--keep-monthly 6` holds one snapshot per
+      month, so the VMs-era ones persist until six newer months exist (~Feb–Mar 2027)
+      and then go by themselves.
+
+      **So the "decide which of two incompatible things you mean" framing goes away.**
+      Ageing out is neither deliberate deletion nor keeping it forever, and no
+      irreversible decision is required.
+
+      **It also reconciles this entry with itself.** The original text said the VHDX
+      *"will linger until roughly 2027-02"*; the 2026-08-29 correction overturned that
+      with *"it will linger forever."* **Both were right.** The correction describes the
+      default grouping; the original describes what a sane grouping gives. The
+      disagreement was never arithmetic — it was a flag neither version had checked.
+
+      **THE REPO ALREADY KNEW.** `backup-cloud.yml` has used `--group-by host,tags`
+      since the same class of bug hit it, commented *"if a source path ever varies
+      again, retention still works."* One of four forget sites had the fix; the other
+      three never got it. This is that propagation.
+
+      **And it explains why the downstream fixes below could not have worked.** The
+      offsite `copy` is unfiltered — `restic copy` transfers every source snapshot not
+      already in the destination — so forgetting the 13 on R2, or emptying the bucket
+      and re-seeding, would simply re-upload 203 GiB on the next nightly run. The cause
+      is upstream, so all three repos change together.
+
+      Re-measured 2026-09-06 before making the change: **203.666 GiB, 61 snapshots, 13
+      still carrying the VHDX** — up from 203.579/47 on 08-29 as ongoing snapshots
+      accumulate, with the frozen 13 untouched exactly as predicted.
+
+      **This is a real change to nas retention, not only to the frozen groups.** The
+      live path set no longer keeps 7 daily of its own; it shares them with all `nas`
+      snapshots. Given this entry measured the live group at *two* snapshots deep while
+      everyone believed in a seven-day guarantee, that is an improvement — but it is a
+      change, and `forget --dry-run` under both groupings is how to see it rather than
+      argue about it.
 
 - [ ] **Reset the offsite repo while it is cheap.** Existing snapshots still contain
       the VHDX, so it is billed indefinitely (see the correction above). With the VHDX

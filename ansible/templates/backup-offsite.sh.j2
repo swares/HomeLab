@@ -122,13 +122,27 @@ fi
 #
 # Two scoped forgets, then one prune. On R2 the prune also matters for cost, not
 # just time: unreferenced packs are billed until they are removed.
-restic -r "$DST" --password-file "$DSTPW" forget \
+# --group-by host,tags — BACKLOG §1.10, added 2026-09-06. See backup-nas.service.j2
+# for the full reasoning. THIS REPO IS WHERE IT COSTS MONEY: measured 2026-09-06,
+# 203.666 GiB across 61 snapshots, of which 13 still carry a 224.7 GiB VHDX that was
+# removed from the backup on 2026-08-13. Under the default host,paths grouping those
+# 13 are in frozen path groups that never age out, so the ~$3.06/month is permanent.
+# Grouping by tags lets them expire naturally once six newer months exist.
+#
+# AND NOTE WHY DELETING THEM DOWNSTREAM DOES NOT WORK. The copy above is unfiltered:
+# `restic copy` transfers every source snapshot not already in the destination. Forget
+# these 13 here and the next nightly run finds them present in the primary, absent on
+# R2, and re-uploads 203 GiB. The same is true of emptying the bucket and re-seeding,
+# which §1.10 proposed before this was understood. The cause is upstream, so the fix
+# has to be upstream — which is why the primary and the cold-sec mirror get the same
+# flag in the same change.
+restic -r "$DST" --password-file "$DSTPW" forget --group-by host,tags \
   --tag {{ nas_snapshot_tag }} --host {{ inventory_hostname }} \
   --keep-daily "$KEEP_DAILY" \
   --keep-weekly "$KEEP_WEEKLY" \
   --keep-monthly "$KEEP_MONTHLY"
 
-restic -r "$DST" --password-file "$DSTPW" forget \
+restic -r "$DST" --password-file "$DSTPW" forget --group-by host,tags \
   --tag {{ lldap_snapshot_tag }} --host {{ lldap_snapshot_host }} \
   --keep-daily {{ lldap_keep_daily }} \
   --keep-weekly {{ lldap_keep_weekly }} \

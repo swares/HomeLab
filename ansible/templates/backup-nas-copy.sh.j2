@@ -107,13 +107,19 @@ fi
 # there and reasoned about the wrong property" is the more instructive mistake.
 #
 # Two scoped forgets, then one prune, matching backup-nas.service.
-restic -r "$DST" --password-file "$PW" forget \
+# --group-by host,tags — BACKLOG §1.10, added 2026-09-06. See the long note in
+# backup-nas.service.j2 for the reasoning. Short version: restic's default is
+# host,PATHS, so editing a backup's path list freezes the old snapshots into a
+# series that never ages out. Grouping by tags instead makes the policy apply
+# across path changes. Must match the primary's grouping — a mirror that retains
+# differently from its source is a second, undocumented policy.
+restic -r "$DST" --password-file "$PW" forget --group-by host,tags \
   --tag {{ nas_snapshot_tag }} --host {{ inventory_hostname }} \
   --keep-daily "$KEEP_DAILY" \
   --keep-weekly "$KEEP_WEEKLY" \
   --keep-monthly "$KEEP_MONTHLY"
 
-restic -r "$DST" --password-file "$PW" forget \
+restic -r "$DST" --password-file "$PW" forget --group-by host,tags \
   --tag {{ lldap_snapshot_tag }} --host {{ lldap_snapshot_host }} \
   --keep-daily {{ lldap_keep_daily }} \
   --keep-weekly {{ lldap_keep_weekly }} \
