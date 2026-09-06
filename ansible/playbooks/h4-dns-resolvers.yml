@@ -99,7 +99,35 @@
     # its applied line. Right servers, wrong count.
     #
     # enp2s0 is the primary: it carries 192.168.1.160 and the kube-vip VIPs .200/.201.
+    #
+    # THIS VARIABLE NOW GOVERNS ROUTING AS WELL AS DNS, deliberately. The resolver link
+    # and the preferred-route link must be the same link; two independent knobs would
+    # eventually disagree, and the disagreement would be invisible.
     h4_dns_link: enp2s0
+
+    # ---- route metric — BACKLOG §2.9, added 2026-09-06 -----------------------
+    # Both interfaces are on the SAME /24 and both take DHCP, so both installed a
+    # default route at metric 100:
+    #
+    #     default via 192.168.1.1 dev enp1s0 proto dhcp src 192.168.1.156 metric 100
+    #     default via 192.168.1.1 dev enp2s0 proto dhcp src 192.168.1.160 metric 100
+    #
+    # Equal metric means the kernel picks one and nothing pins the choice. It had
+    # picked enp1s0, so the H4 was sourcing LAN traffic from **192.168.1.156** — an
+    # address referenced nowhere in this repo. Found in Vault audit logs (§2.6), where
+    # the H4's own requests arrived from an address no document knew about.
+    #
+    # WHY THIS MATTERS BEYOND TIDINESS. §2.9's firewall allowlist would have been built
+    # from the repo, which says the H4 is .160. It would have worked — until a reboot
+    # flipped the source address and locked out the machine that runs every playbook,
+    # including the one needed to undo the rule. A failure arriving hours or weeks
+    # after the change, looking unrelated to it.
+    #
+    # A higher metric loses. 200 on the secondary leaves enp2s0's 100 winning, and does
+    # NOT remove .156 or take the link down — it only decides which route is preferred.
+    # Nothing is bound to .156 any more in any case: the unconfigured dnsmasq that held
+    # it was disabled in §2.14, found during this same investigation.
+    h4_secondary_route_metric: 200
 
   tasks:
     - name: Confirm the expected links exist before touching anything
@@ -265,6 +293,14 @@
                 dhcp4: true
                 dhcp4-overrides:
                   use-dns: false
+          {% if link != h4_dns_link %}
+                  # Both links are on the same /24 and both take DHCP, so both
+                  # installed a default route at metric 100 and the kernel picked
+                  # whichever it liked — which made the H4's source address for LAN
+                  # traffic non-deterministic. A higher metric loses. This does not
+                  # remove the address or down the link. BACKLOG §2.9.
+                  route-metric: {{ h4_secondary_route_metric }}
+          {% endif %}
           {% if link == h4_dns_link %}
                 # Resolver list lives on this link only. Repeating it on the other
                 # link doubles the entries in resolv.conf — resolved does not dedupe
