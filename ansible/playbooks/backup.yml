@@ -28,7 +28,26 @@
     # --- Retention for the cold-sec copy (M-new-1) ---
     # Deliberately DEEPER than the primary's 7/4/6: cold-sec is the long-history
     # archive, not a mirror. Until 2026-07-25 it was never pruned at all.
-    copy_keep_daily: 14
+    #
+    # 14 -> 21 DAILY on 2026-09-06, together with --group-by host,tags (BACKLOG
+    # §1.10). Measured with `forget --dry-run` under the new grouping before
+    # changing it, which is the only reason the number is 21 and not a guess:
+    #
+    #   at 14 daily  cold-sec would drop Aug 14, 15, 17, 18, 19, 20
+    #   the primary (7/4/6) drops those too, so they would have gone from BOTH
+    #   local repos — six days that exist today
+    #   at 21 daily  the window reaches Aug 14 and everything held stays held
+    #
+    # The primary was deliberately NOT raised instead. It is the shallow working
+    # repo, twelve snapshots is exactly what 7/4/6 means, and deepening it past
+    # cold-sec would invert the hierarchy this comment describes. Offsite stays at
+    # 7/4/6 as well: R2 is the one repo where depth is billed, and a disaster copy
+    # needs recency plus coarse history, not every day of a near-static tree.
+    #
+    # NOTE keep-daily counts SNAPSHOT DAYS, not calendar days, so 21 reaches back
+    # 21 days only while the job runs roughly daily. If the cadence changes, re-run
+    # the dry-run rather than assuming this number still covers the same window.
+    copy_keep_daily: 21
     copy_keep_weekly: 8
     copy_keep_monthly: 12
 

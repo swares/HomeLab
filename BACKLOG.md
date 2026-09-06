@@ -702,13 +702,40 @@ and three days of seeding).
       **restic's default is `--group-by host,paths`, and that default IS this entry's
       bug.** Group by tags instead and every `nas`-tagged snapshot forms one retention
       series, so the policy applies across path changes and frozen groups age out on
-      their own. Nothing is deleted today — `--keep-monthly 6` holds one snapshot per
-      month, so the VMs-era ones persist until six newer months exist (~Feb–Mar 2027)
-      and then go by themselves.
+      their own.
 
-      **So the "decide which of two incompatible things you mean" framing goes away.**
-      Ageing out is neither deliberate deletion nor keeping it forever, and no
-      irreversible decision is required.
+      **The space is not reclaimed immediately, but snapshots ARE removed immediately —
+      and I claimed otherwise before running the dry-run.** The first version of this
+      note said "nothing is deleted today". That was wrong, and the dry-run caught it:
+
+          primary  7/4/6   keep 12, REMOVE 17
+          cold-sec 14/8/12 keep 21, REMOVE 22
+          offsite  7/4/6   keep 12, REMOVE 17
+
+      The error was reasoning about the policy in the abstract instead of against these
+      snapshots. Under one merged series the union of daily-7 + weekly-4 + monthly-6
+      collapses to about twelve; under the old split grouping the primary held 29, but
+      only because each frozen path-set had its own private daily slots. **Twenty-nine
+      was the bug, not the baseline.**
+
+      **What survives is what matters, and two VHDX-bearing snapshots do** — the June 29
+      and July 31 monthlies. restic dedupes, so either one pins the full 224 GiB. **So
+      the original estimate was right after all: no space is freed until those age out,
+      around Jan–Feb 2027.** The 08-29 correction was right about the default grouping;
+      the original was right about a sane one; and this entry disagreed with itself for
+      a week over a flag neither version had checked.
+
+      **`copy_keep_daily` 14 → 21 as a direct result.** At 14, cold-sec would have
+      dropped Aug 14, 15, 17, 18, 19 and 20 — and the primary drops them too, so six
+      days that exist today would have vanished from **both** local repos. 21 reaches
+      Aug 14 and holds everything. The primary was deliberately not raised instead:
+      deepening it past cold-sec would invert the documented hierarchy eleven lines
+      above the value being changed.
+
+      **So the "decide which of two incompatible things you mean" framing still goes
+      away** — ageing out is neither deliberate deletion nor keeping it forever — but
+      the price is 17 old snapshots at the primary and offsite, of near-static content
+      (`/srv/nas` empty, Immich library markers only), covered by weeklies either side.
 
       **It also reconciles this entry with itself.** The original text said the VHDX
       *"will linger until roughly 2027-02"*; the 2026-08-29 correction overturned that
