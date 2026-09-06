@@ -383,9 +383,34 @@ Three deliberate choices:
 >
 >     ["soft","timeo=600","retrans=5"]
 >
-> **Still unproven until tomorrow:** a bound PVC is plumbing, not a completed backup.
-> The proof is a new snapshot from the next scheduled run —
-> `restic snapshots --tag lldap`.
+> **PROVEN 2026-09-06 by the first scheduled run over the new mount.** A bound PVC was
+> plumbing; this is the backup.
+>
+>     lldap-backup-29811030   Complete 1/1   14s   (ran 02:30, ~11h before checking)
+>
+>     /mnt/cold-8t/restic/snapshots/
+>       683  2026-09-06T02:30   <- through the soft-mounted PVC
+>       342  2026-09-06T01:30
+>       683  2026-09-05T02:30   <- previous days, inline nfs: mount
+>       342  2026-09-05T01:30
+>       683  2026-09-04T02:30
+>
+> **Read the size, not just the timestamp.** A file appearing proves something wrote; a
+> file appearing at the same hour and the *same 683 bytes* as the two preceding days
+> proves it wrote the same shape of thing. A truncated or empty snapshot would have
+> passed the first test and failed the second. (The 342-byte 01:30 entries are a
+> different job on its own schedule, consistent across all three days.)
+>
+> 14 seconds, against 13s and 14s on the two runs before the change — no regression from
+> `soft`, which was the residual worry: an over-eager timeout failing backups that would
+> otherwise complete.
+>
+> **Verified without the restic password.** The job's own log would have printed the
+> snapshot list, but its pod had been garbage-collected, so `kubectl logs job/…` timed
+> out waiting for a pod that no longer exists — not a fault, just nothing left to read.
+> Reading the repository's `snapshots/` directory answers the same question and keeps
+> `/etc/restic/password` out of it entirely. Reading that directory is nowhere near
+> `forget` or `prune`.
 
 > `gitops/workloads/lldap/restic-pv.yaml` adds a PV/PVC pair mounting the same path
 > `soft,timeo=600,retrans=5`, and the CronJob's volume switches from inline `nfs:` to
