@@ -118,13 +118,46 @@
       # device paths and options only. Deliberately NOT no_log: censoring this would
       # hide the one thing the play exists to report.
 
+    # THIS TASK USED TO PRINT "NONE" WHENEVER rc != 0, AND THAT WAS WRONG.
+    # On 2026-09-05 `vault audit list` returned rc=2 — permission denied, because
+    # sys/audit is root-protected and `admin` did not carry sudo on it — and the report
+    # rendered that as "audit devices = NONE". An ERROR displayed as a healthy-looking
+    # VALUE. It also made this play's own premise look confirmed: the claim "Vault has
+    # no audit device" had been inferred from a repo grep, and this line appeared to
+    # corroborate it while actually saying nothing.
+    #
+    # "There are no devices" and "I could not look" are different facts and must read
+    # differently.
     - name: Report the current state
       ansible.builtin.debug:
         msg: >-
-          {{ inventory_hostname }}: audit devices =
-          {{ (audit_list.stdout | from_json).keys() | list
-             if (audit_list.rc == 0 and audit_list.stdout | length > 0)
-             else 'NONE (vault audit list returned rc=' ~ audit_list.rc ~ ')' }}
+          {{ inventory_hostname }}: {{
+            'audit devices = ' ~ ((audit_list.stdout | from_json).keys() | list)
+              if (audit_list.rc == 0 and (audit_list.stdout | length) > 0)
+            else 'audit devices = NONE (list read successfully, no devices configured)'
+              if audit_list.rc == 0
+            else 'COULD NOT READ the audit device list (rc=' ~ audit_list.rc ~ '). This
+                  is NOT evidence that none exist. stderr: '
+                  ~ (audit_list.stderr | default('') | trim)
+          }}
+
+    # Refuse rather than guess. The previous version's enable gate treated rc != 0 as
+    # "absent" and would happily try to enable a device it could not confirm was
+    # missing — turning an unreadable state into a blind write.
+    - name: Refuse to continue if the audit device list could not be read
+      ansible.builtin.assert:
+        that:
+          - audit_list.rc == 0
+        fail_msg: >-
+          {{ inventory_hostname }}: cannot read sys/audit (rc={{ audit_list.rc }}).
+          sys/audit is a ROOT-PROTECTED path — a policy needs `sudo` on it in addition
+          to read/list, and `admin` lacked that until 2026-09-05. Apply the updated
+          policy first:
+            VAULT_TOKEN=<admin token> ansible-playbook -i inventory/hosts.yml
+              playbooks/vault-policies.yml
+          then re-run this play. Do NOT read a failure here as "no audit devices
+          exist" — it means the token cannot look.
+          stderr: {{ audit_list.stderr | default('') | trim }}
 
     - name: Enable the syslog audit device
       ansible.builtin.command: >-
@@ -137,10 +170,12 @@
       changed_when: audit_enable.rc == 0
       when:
         - not ansible_check_mode
-        # Gated on absence rather than relying on the command being idempotent:
-        # `vault audit enable` on an existing path returns "path already in use"
-        # and a non-zero rc, which would fail the play on every re-run.
-        - audit_list.rc != 0 or (vault_audit_path ~ '/') not in (audit_list.stdout | default('{}') | from_json)
+        # Gated on PROVEN absence. `vault audit enable` on an existing path returns
+        # "path already in use" with a non-zero rc, which would fail every re-run —
+        # but the gate must key off a list we actually read. The assert above
+        # guarantees rc == 0 by this point, so this condition means "the list was
+        # readable and this path is not in it", not "we could not tell".
+        - (vault_audit_path ~ '/') not in (audit_list.stdout | from_json)
 
     # ---- PROVE VAULT STILL SERVES -------------------------------------------
     # The whole hazard of this change is that a broken audit device stops Vault

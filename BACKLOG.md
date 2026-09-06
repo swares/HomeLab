@@ -1461,8 +1461,35 @@ See **§6b.1** for the larger idea this scoping produced: Vault as an intermedia
 issuing certificates for the whole lab. That is a different, bigger project; this entry
 should be closed on its own first.
 
-**STEP 0 — 2026-09-05: Vault had no audit device at all.** Found while trying to build
-§2.9's firewall allowlist. `playbooks/vault-audit.yml` enables a syslog device.
+**STEP 0 — 2026-09-05: Vault audit logging.** `playbooks/vault-audit.yml` enables a
+syslog device. Found while trying to build §2.9's firewall allowlist.
+
+> **CORRECTION, same day.** This entry originally opened *"Vault had no audit device at
+> all."* **That was never measured.** It was inferred from a repo grep — nothing in
+> Ansible enables one — and written as though it were fact. The first real attempt to
+> check produced:
+>
+>     vault audit list   -> rc=2, permission denied
+>     vault audit enable -> 403, permission denied
+>
+> **`sys/audit` is a root-protected path**, and `admin.hcl` carried no `sudo` on it. So
+> the token cannot read the audit configuration, and whether a device exists is
+> **still unknown**. What the 403 does establish is narrower and worth keeping: nothing
+> using the admin token could have configured one, or could have seen one if it had.
+>
+> Two fixes, both in the follow-up PR. `admin.hcl` gains `sys/audit` and `sys/audit/*`
+> with `sudo` — which per §2.8 makes an existing capability explicit rather than adding
+> a new one, since `admin` already holds create+sudo on `sys/policies/acl/*` and could
+> always have written itself this.
+>
+> And the play's own report task **rendered `rc=2` as `"audit devices = NONE"`** — an
+> error displayed as a healthy-looking value, which then appeared to corroborate the
+> unverified premise above. It now distinguishes "no devices" from "could not look",
+> and the play refuses to enable anything from a list it could not read rather than
+> turning an unreadable state into a blind write.
+>
+> Recorded at length because it is the same failure this file keeps documenting, this
+> time committed by the tooling written to detect it.
 
 **Why this had to come first.** The allowlist was going to be built from a grep for
 `192.168.1.128:8200`, which finds 19 files. That list is **provably incomplete**: it sees
