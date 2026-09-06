@@ -119,9 +119,42 @@ ExecStart=/usr/bin/restic backup {{ nas_mount }} \
 # — verified 2026-08-28: 23 h4-core/nas, 25 lldap-k8s/lldap, nothing else. A group
 # matching neither rule would never be forgotten again. backup-verify checks for
 # that condition weekly rather than trusting this comment to stay true.
-ExecStartPost=/usr/bin/restic forget --tag {{ nas_snapshot_tag }} --host {{ inventory_hostname }} \
+# ---- --group-by host,tags — BACKLOG §1.10, added 2026-09-06 ------------------
+# restic's DEFAULT is --group-by host,paths, and that default is why §1.10 exists.
+# Each distinct PATH SET gets its own independent 7/4/6, so editing the path list
+# does not shorten the old snapshots' retention — it starts a new series and
+# FREEZES the old one with permanent history. `--keep-daily 7` keeps the seven most
+# recent days THAT HAVE SNAPSHOTS, not the last seven calendar days, so a group
+# receiving no new writes never ages out at all.
+#
+# Measured 2026-08-29: four path groups in the nas repo, three of them frozen, and
+# 13 snapshots still carrying a 224.7 GiB VHDX removed from the backup on 08-13.
+# Confirmed still true 2026-09-06 — 203.666 GiB and 13 snapshots on R2, unchanged.
+#
+# Grouping by host,tags puts every nas-tagged snapshot in ONE series, so the policy
+# applies across path changes and frozen groups age out on their own. Nothing is
+# deleted today: --keep-monthly 6 retains one snapshot per month, so the VMs-era
+# ones persist until six newer months exist (~Feb-Mar 2027) and then go by
+# themselves. No irreversible decision is required, which is why this is preferred
+# over an explicit forget of those 13.
+#
+# THIS REPO ALREADY KNEW. backup-cloud.yml has used --group-by host,tags since the
+# same class of bug hit it, with the comment "if a source path ever varies again,
+# retention still works." The lesson was learned once and never propagated to the
+# other three forget sites. This is that propagation.
+#
+# NOTE this is a real change to nas retention, not only to the frozen groups: the
+# live path set no longer keeps 7 daily of its own but shares them with all nas
+# snapshots. Given §1.10 measured the live group at two snapshots deep — while
+# everyone believed in a seven-day guarantee — that is an improvement, but it is a
+# change and a `forget --dry-run` under both groupings is the way to see it.
+#
+# The lldap rule below gets the same flag. It should be a NO-OP: that job has one
+# stable path, so host,paths and host,tags group identically. If the dry-run shows
+# it dropping anything, that is a finding, not an expected result.
+ExecStartPost=/usr/bin/restic forget --group-by host,tags --tag {{ nas_snapshot_tag }} --host {{ inventory_hostname }} \
   --keep-daily 7 --keep-weekly 4 --keep-monthly 6
-ExecStartPost=/usr/bin/restic forget --tag {{ lldap_snapshot_tag }} --host {{ lldap_snapshot_host }} \
+ExecStartPost=/usr/bin/restic forget --group-by host,tags --tag {{ lldap_snapshot_tag }} --host {{ lldap_snapshot_host }} \
   --keep-daily {{ lldap_keep_daily }} --keep-weekly {{ lldap_keep_weekly }} --keep-monthly {{ lldap_keep_monthly }}
 ExecStartPost=/usr/bin/restic prune
 # Redundancy: replicate the primary repo to the 6TB disk (two-disk safety, no RAID
