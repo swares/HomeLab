@@ -54,9 +54,23 @@
 #     playbooks/vault-audit.yml
 #
 # Reading the client list afterwards, on rpi5 — this is the whole point:
-#   journalctl -t vault --since -1d -o cat \
-#     | jq -r 'select(.request.remote_address) | .request.remote_address' \
+#
+#   journalctl -t vault --since -3d -o cat \
+#     | jq -Rr 'fromjson? | select(.request.remote_address) | .request.remote_address' \
 #     | sort | uniq -c | sort -rn
+#
+# `jq -Rr 'fromjson?'` IS NOT OPTIONAL, and the first version of this comment had
+# plain `jq -r`, which fails. journald tags the vault UNIT's stdout with the same
+# identifier as the syslog audit device, so `-t vault` returns a MIXED stream:
+# plain-text server log lines interleaved with audit JSON. Plain `jq` dies on the
+# first non-JSON line with "parse error: Invalid numeric literal", and the natural
+# reading of that — or of the empty output it produces — is "nothing is talking to
+# Vault". Exactly the wrong conclusion at exactly the wrong moment.
+# `-R` reads raw lines, `fromjson?` silently drops the ones that are not JSON.
+#
+# Sanity-check the stream itself before trusting a low count:
+#   journalctl -t vault --since -15min -o cat | wc -l          # total lines
+#   journalctl -t vault --since -15min -o cat | grep -c '^{'   # audit entries
 #
 # Give it a few days before building a firewall allowlist from it. A consumer that runs
 # weekly — backup-offsite, the drift check — will not appear in an hour.
@@ -229,13 +243,16 @@
         msg: >-
           {{ inventory_hostname }}: devices now =
           {{ (audit_after.stdout | from_json).keys() | list }}.
-          Leave it running for a few days, then read the measured client list ON THE
-          VAULT HOST — a consumer that runs weekly will not appear in an hour:
+          Leave it running for a few days — a consumer that runs weekly will not appear
+          in an hour — then read the measured client list ON THE VAULT HOST:
           journalctl -t vault --since -3d -o cat |
-          jq -r 'select(.request.remote_address) | .request.remote_address' |
+          jq -Rr 'fromjson? | select(.request.remote_address) | .request.remote_address' |
           sort | uniq -c | sort -rn
-          — that list, not a grep of this repo, is what the §2.9 firewall allowlist
-          should be built from.
+          NOTE the -R and fromjson? — `-t vault` returns the server log AND the audit
+          JSON interleaved, and plain `jq -r` dies on the first plain-text line.
+          That list, not a grep of this repo, is what the §2.9 firewall allowlist
+          should be built from — within 20 minutes it showed the H4 arriving as
+          192.168.1.156, an address that appears nowhere in this repo.
       when:
         - not ansible_check_mode
         - audit_after.stdout is defined

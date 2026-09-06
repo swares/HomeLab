@@ -1518,15 +1518,39 @@ Adding a single point of failure without watching it is the shape of most of thi
 `vault audit disable` will not help — that is an API call and the API is what is blocked.
 The recovery is to fix journald.
 
-**Next, in order:** let it run a few days (a weekly consumer such as `backup-offsite` or
-the drift check will not appear in an hour), then read the measured client list on rpi5 —
+**APPLIED 2026-09-05.** `audit devices = []` beforehand — so the retracted claim was
+right after all, but only became *measured* at that moment. Device enabled, and
+`vault token lookup` succeeded immediately afterwards, which is the check that matters:
+it is an audited call, so it proves the write path works end to end. `vault status`
+would not — it is unauthenticated and would report healthy while every real request was
+refused.
+
+**The reading command was wrong, and it is worth knowing why.** This entry and the
+play both carried:
+
+    jq -r 'select(.request.remote_address) | .request.remote_address'
+
+which **fails on real output**: journald tags the vault *unit's* stdout with the same
+identifier as the syslog audit device, so `-t vault` returns a mixed stream — plain-text
+server log interleaved with audit JSON. Plain `jq` dies on the first non-JSON line with
+`parse error: Invalid numeric literal`. In three days that reads as "nothing is talking
+to Vault". Corrected form:
 
     journalctl -t vault --since -3d -o cat \
-      | jq -r 'select(.request.remote_address) | .request.remote_address' \
+      | jq -Rr 'fromjson? | select(.request.remote_address) | .request.remote_address' \
       | sort | uniq -c | sort -rn
 
-— and build §2.9's rpi5 firewall from **that**, with a systemd revert timer per the
-`netplan try` lesson in §6b.2. Only then the four TLS steps above.
+Tested against live output rather than assumed — which is the only reason it was caught
+before three days of data went unread.
+
+**Next:** let it run a few days (a weekly consumer such as `backup-offsite` or the drift
+check will not appear in an hour), then build §2.9's rpi5 firewall from that list, with a
+systemd revert timer per the `netplan try` lesson in §6b.2. Only then the four TLS steps
+above.
+
+**And within twenty minutes it had already changed the plan — see §2.9.** The first
+client it recorded was the H4, arriving as **192.168.1.156**, an address that appears
+nowhere in this repo.
 
 **A correction to advice given the same day:** §2.9 was recommended as "host firewall on
 rpi5, ~1 hour, low risk" before §6b.2 was read. §6b.2 argues explicitly against starting
@@ -1564,6 +1588,37 @@ This is what makes §2.6 sharp rather than theoretical: Vault listens on `0.0.0.
 in clear, and nothing stands between it and any device on the LAN.
 
 See **§6b.2** for the design and the reason not to start by writing rules.
+
+**2026-09-05 — THE ALLOWLIST MUST CONTAIN BOTH `.156` AND `.160`, AND THAT WAS NOT
+KNOWABLE FROM THIS REPO.**
+
+Twenty minutes of Vault audit data (§2.6, step 0) recorded its first client as
+`192.168.1.156`. That is the H4 — but the H4 is documented everywhere as
+`192.168.1.160`. The mechanism, confirmed rather than inferred:
+
+    enp1s0   192.168.1.156/24   metric 100
+    enp2s0   192.168.1.160/24   metric 100
+    ip route get 192.168.1.128  ->  dev enp1s0 src 192.168.1.156
+
+**Two interfaces on the same /24 at equal metric.** The kernel picks one; nothing pins
+the choice, so the H4's source address for LAN traffic is **non-deterministic across
+reboots and link events**. Same-subnet multi-homing also invites ARP flux, where the
+neighbour table learns whichever NIC answered last.
+
+**A firewall built from the repo would have locked out the H4** — the machine that runs
+every Ansible playbook against Vault, including the one that would be needed to undo the
+rule. And it would not have failed at apply time: it would have worked until the next
+reboot flipped the source address, then failed looking entirely unrelated to the change.
+
+This is the concrete vindication of §6b.2's "discover the flows before writing any
+rules", and of doing that discovery with an audit device rather than a grep. The grep
+found 19 files and could not have found this, because **the fact is not in the files** —
+it is a property of the running host.
+
+**Pin the address before writing rules.** An allowlist naming both is correct but papers
+over the cause; the real fix is deciding what `enp1s0` is for and either giving it a
+losing route metric or taking it off that subnet. See §4.12 — same configuration, and
+this is its second distinct symptom.
 
 ### 2.10 `.claude/settings.json` is a MicroShift-era artifact
 `docs/REVIEW-2026-07-24.md:310` (H30)
