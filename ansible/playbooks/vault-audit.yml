@@ -1,0 +1,207 @@
+---
+# vault-audit.yml — enable a Vault audit device.
+#
+# BACKLOG §2.6 / §2.9, and the prerequisite for §6b.2.
+#
+# ---- FOUND 2026-09-05: VAULT HAS NO AUDIT DEVICE AT ALL ----
+# Nothing in this repo enables one, and `vault audit list` confirms it. So there is
+# **no record of who has ever talked to Vault** — not for incident response, and not
+# for the question immediately in front of us.
+#
+# That question is §2.9's: Vault listens on 0.0.0.0:8200 in clear with no host firewall
+# anywhere, so every device on the LAN can reach it, and one compromised LAN device
+# converts directly into total lab compromise. The obvious response is a firewall on
+# rpi5 — and §6b.2 says, correctly, discover the flows before writing rules.
+#
+# The discovery source was going to be a grep for `192.168.1.128:8200`, which finds 19
+# files. **That list is provably incomplete**: it can see playbooks, scripts and the ESO
+# ClusterSecretStore, and it cannot see a `vault` CLI on a workstation or anything else
+# on the LAN that is not checked into this repo. An allowlist built from it would be an
+# allowlist built from an assumption. An audit device measures it instead.
+#
+# ---- THE HAZARD, STATED PLAINLY: THIS IS NOT PURELY ADDITIVE ----
+# **If every audit device fails to write, Vault stops serving requests.** That is
+# deliberate — Vault will not process a request it cannot log. Today, with no device,
+# Vault always serves and keeps no record. After this, Vault serves only while the
+# logger works, and every ExternalSecret in the lab depends on Vault.
+#
+# `syslog` RATHER THAN `file` removes the likelier failure: a file device on the rpi5's
+# SD card filling up and taking Vault down at 03:00. journald has its own rotation and
+# cannot fill the disk the same way. It does NOT remove the dependency — a dead
+# systemd-journald on rpi5 now means Vault blocks.
+#
+# WHICH IS WHY THIS CHANGE HAS A SECOND HALF. `systemd-journald` is added to
+# LabSystemdUnitFailed's name filter in the same PR. rpi5 runs the Debian
+# node_exporter package with ARGS="", whose systemd collector defaults to
+# unit-include=".+", so the series already exists for that host and only the alert's
+# regex needed widening. Adding a single point of failure without watching it is the
+# shape of most of what this backlog records.
+#
+# RECOVERY, honestly: if Vault blocks because the audit device cannot write, you cannot
+# call `vault audit disable` to fix it — that is an API call, and the API is what is
+# blocked. **The recovery is to fix journald**, not to disable auditing. Know that
+# before enabling this.
+#
+# ---- WHY hosts: microshift ----
+# Same as vault-policies.yml: the `vault` CLI runs on the H4 against VAULT_ADDR over
+# the network, not on rpi5 itself. Vault is administered remotely; this play does not
+# touch the Vault host.
+#
+# Usage:
+#   VAULT_TOKEN=<admin token> ansible-playbook -i inventory/hosts.yml \
+#     playbooks/vault-audit.yml --check
+#   VAULT_TOKEN=<admin token> ansible-playbook -i inventory/hosts.yml \
+#     playbooks/vault-audit.yml
+#
+# Reading the client list afterwards, on rpi5 — this is the whole point:
+#   journalctl -t vault --since -1d -o cat \
+#     | jq -r 'select(.request.remote_address) | .request.remote_address' \
+#     | sort | uniq -c | sort -rn
+#
+# Give it a few days before building a firewall allowlist from it. A consumer that runs
+# weekly — backup-offsite, the drift check — will not appear in an hour.
+
+- name: Enable a Vault audit device
+  hosts: microshift
+  gather_facts: false
+  become: false
+
+  vars:
+    # Declared here, NOT inherited. group_vars/vault/vault.yml sets vault_addr to
+    # http://127.0.0.1:8200 — correct for rpi5 itself, and undefined on this host,
+    # which is in `microshift`. vault-policies.yml declares it as a play var for the
+    # same reason; the two must agree.
+    vault_addr: "http://192.168.1.128:8200"
+    vault_audit_path: syslog
+    vault_audit_tag: vault
+
+  tasks:
+    - name: Preflight — Vault must be reachable and unsealed before we change it
+      ansible.builtin.uri:
+        url: "{{ vault_addr }}/v1/sys/health"
+        status_code: [200, 429, 472, 473]
+      register: vault_health
+      changed_when: false
+      check_mode: false
+
+    - name: Refuse to continue if Vault is sealed
+      ansible.builtin.assert:
+        that:
+          - not (vault_health.json.sealed | default(true))
+        fail_msg: >-
+          Vault at {{ vault_addr }} is sealed or unreachable. Enabling an audit device
+          on a sealed Vault is not possible, and this play would otherwise fail at a
+          less obvious point.
+
+    - name: Preflight — VAULT_TOKEN must be set
+      ansible.builtin.assert:
+        that:
+          - lookup('env', 'VAULT_TOKEN') | length > 0
+        fail_msg: >-
+          VAULT_TOKEN is empty. Pass a current token:
+          VAULT_TOKEN=<token> ansible-playbook -i inventory/hosts.yml
+          playbooks/vault-audit.yml
+
+    # check_mode: false so a --check run reports the REAL current state. Without it
+    # this task is skipped under --check, the register has no stdout, and the report
+    # below would describe nothing while looking like it described something.
+    - name: Read the current audit devices
+      ansible.builtin.command: vault audit list -format=json
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      register: audit_list
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      # The token is in the environment, not the output — `vault audit list` returns
+      # device paths and options only. Deliberately NOT no_log: censoring this would
+      # hide the one thing the play exists to report.
+
+    - name: Report the current state
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: audit devices =
+          {{ (audit_list.stdout | from_json).keys() | list
+             if (audit_list.rc == 0 and audit_list.stdout | length > 0)
+             else 'NONE (vault audit list returned rc=' ~ audit_list.rc ~ ')' }}
+
+    - name: Enable the syslog audit device
+      ansible.builtin.command: >-
+        vault audit enable -path={{ vault_audit_path }} syslog
+        tag={{ vault_audit_tag }} facility=AUTH
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      register: audit_enable
+      changed_when: audit_enable.rc == 0
+      when:
+        - not ansible_check_mode
+        # Gated on absence rather than relying on the command being idempotent:
+        # `vault audit enable` on an existing path returns "path already in use"
+        # and a non-zero rc, which would fail the play on every re-run.
+        - audit_list.rc != 0 or (vault_audit_path ~ '/') not in (audit_list.stdout | default('{}') | from_json)
+
+    # ---- PROVE VAULT STILL SERVES -------------------------------------------
+    # The whole hazard of this change is that a broken audit device stops Vault
+    # answering. `vault token lookup` is an AUDITED call, so it exercises the write
+    # path end to end: if the device cannot log, this fails. `vault status` would not
+    # — it is unauthenticated and would report healthy while every real request was
+    # being refused.
+    - name: Confirm Vault still answers an audited request
+      ansible.builtin.command: vault token lookup -format=json
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      register: post_check
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      no_log: true      # the output contains token accessor and metadata
+      when: not ansible_check_mode
+
+    - name: Fail loudly if Vault has stopped serving
+      ansible.builtin.assert:
+        that:
+          - post_check.rc == 0
+        fail_msg: >-
+          {{ inventory_hostname }}: VAULT IS NO LONGER ANSWERING AUTHENTICATED REQUESTS
+          after enabling the audit device (rc={{ post_check.rc }}). This is the failure
+          mode described in this play's header: Vault refuses any request it cannot log.
+          Check systemd-journald on the Vault host — `systemctl status systemd-journald`
+          and `journalctl -t vault -n 5`. Do NOT try to disable the audit device: that
+          is an API call and the API is what is blocked. Fix the logger.
+        success_msg: >-
+          {{ inventory_hostname }}: audit device active and Vault still serving
+          authenticated requests.
+      when:
+        - not ansible_check_mode
+        - post_check.rc is defined
+
+    - name: Read back the audit devices
+      ansible.builtin.command: vault audit list -format=json
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      register: audit_after
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: not ansible_check_mode
+
+    - name: Report what to do next
+      ansible.builtin.debug:
+        msg: >-
+          {{ inventory_hostname }}: devices now =
+          {{ (audit_after.stdout | from_json).keys() | list }}.
+          Leave it running for a few days, then read the measured client list ON THE
+          VAULT HOST — a consumer that runs weekly will not appear in an hour:
+          journalctl -t vault --since -3d -o cat |
+          jq -r 'select(.request.remote_address) | .request.remote_address' |
+          sort | uniq -c | sort -rn
+          — that list, not a grep of this repo, is what the §2.9 firewall allowlist
+          should be built from.
+      when:
+        - not ansible_check_mode
+        - audit_after.stdout is defined
+        - audit_after.rc == 0

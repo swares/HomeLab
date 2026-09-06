@@ -697,7 +697,19 @@ spec:
           # severity: critical, and two rules on one series is two pages.
           expr: |
             node_systemd_unit_state{
-              name=~"(ansible-drift-check|nfs-server|k3s|k3s-agent|containerd|docker|libvirtd|mosquitto|pihole-FTL|vault)\\.service",
+              # systemd-journald added 2026-09-05 — BACKLOG §2.6. It is here for a
+              # reason that did not exist until that day: Vault now has a syslog audit
+              # device, and **Vault refuses any request it cannot log**. So a dead
+              # journald on rpi5 is not a logging inconvenience, it is a Vault outage,
+              # and Vault backs every ExternalSecret in the lab.
+              #
+              # No collector change was needed. rpi5 runs the Debian
+              # prometheus-node-exporter package with ARGS="", whose systemd collector
+              # defaults to unit-include=".+" — every unit on that host is already
+              # exposed. The DaemonSet's narrower regex in monitoring.yaml applies only
+              # to cluster nodes, where this series simply will not exist and the rule
+              # cannot fire. That asymmetry is deliberate and documented there.
+              name=~"(ansible-drift-check|nfs-server|k3s|k3s-agent|containerd|docker|libvirtd|mosquitto|pihole-FTL|vault|systemd-journald)\\.service",
               state="failed"
             } == 1
           for: 15m

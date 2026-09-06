@@ -1461,6 +1461,52 @@ See **§6b.1** for the larger idea this scoping produced: Vault as an intermedia
 issuing certificates for the whole lab. That is a different, bigger project; this entry
 should be closed on its own first.
 
+**STEP 0 — 2026-09-05: Vault had no audit device at all.** Found while trying to build
+§2.9's firewall allowlist. `playbooks/vault-audit.yml` enables a syslog device.
+
+**Why this had to come first.** The allowlist was going to be built from a grep for
+`192.168.1.128:8200`, which finds 19 files. That list is **provably incomplete**: it sees
+playbooks, scripts and the ESO `ClusterSecretStore`, and it cannot see a `vault` CLI on a
+workstation or anything else on the LAN not checked into this repo. A firewall built from
+it would be an allowlist built from an assumption — and the failure mode is locking out a
+consumer nobody remembered, on the host every ExternalSecret depends on. An audit device
+**measures** the client list instead.
+
+It is also the answer to a separate question nobody had asked: with no audit device,
+**a Vault compromise would have left no record whatsoever.**
+
+**This change is not purely additive, and that must be understood before running it.**
+Vault refuses any request it cannot log, so with a device enabled Vault serves only while
+the logger works. `syslog` rather than `file` removes the likelier failure — an SD card
+filling and taking Vault down at 03:00 — because journald rotates. It does **not** remove
+the dependency: a dead `systemd-journald` on rpi5 is now a Vault outage.
+
+**Hence the second half of the same PR:** `systemd-journald` added to
+`LabSystemdUnitFailed`'s name filter. No collector change was needed — rpi5 runs the
+Debian node_exporter with `ARGS=""`, whose systemd collector defaults to
+`unit-include=".+"`, so the series already existed and only the alert's regex was narrow.
+Adding a single point of failure without watching it is the shape of most of this file.
+
+**Recovery, stated honestly:** if Vault blocks because the audit device cannot write,
+`vault audit disable` will not help — that is an API call and the API is what is blocked.
+The recovery is to fix journald.
+
+**Next, in order:** let it run a few days (a weekly consumer such as `backup-offsite` or
+the drift check will not appear in an hour), then read the measured client list on rpi5 —
+
+    journalctl -t vault --since -3d -o cat \
+      | jq -r 'select(.request.remote_address) | .request.remote_address' \
+      | sort | uniq -c | sort -rn
+
+— and build §2.9's rpi5 firewall from **that**, with a systemd revert timer per the
+`netplan try` lesson in §6b.2. Only then the four TLS steps above.
+
+**A correction to advice given the same day:** §2.9 was recommended as "host firewall on
+rpi5, ~1 hour, low risk" before §6b.2 was read. §6b.2 argues explicitly against starting
+with rules, and it is right; its step 3 does separate "the standalone Pis" as their own
+class, so rpi5 remains the correct place to start *enforcing* — but discover-then-enforce
+applies to one host as much as to twelve.
+
 ### 2.7 Committed argon2id hashes for five OIDC client secrets
 `gitops/workloads/authelia/configmap.yaml:72,86,98,111,125`
 
