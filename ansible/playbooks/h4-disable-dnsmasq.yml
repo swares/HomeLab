@@ -1,0 +1,176 @@
+---
+# h4-disable-dnsmasq.yml — stop the H4 serving DNS it was never configured to serve.
+#
+# BACKLOG §2.9 / §6.4. Found 2026-09-06 while establishing which interface the H4 should
+# source LAN traffic from — a question that had nothing to do with DNS.
+#
+# ---- WHAT WAS FOUND ----
+# `ss -ltnpu` on h4-core showed dnsmasq listening on BOTH LAN addresses:
+#
+#     192.168.1.156:53   dnsmasq   (udp + tcp)
+#     192.168.1.160:53   dnsmasq   (udp + tcp)
+#     127.0.0.1:53, ::1:53, and both link-local v6 addresses
+#
+# The H4 is not in the `dns` inventory group, is not in `lab_dns_servers`, and CLAUDE.md
+# does not mention it serving DNS. Nothing in the repo references it. This is the third
+# time in two days that "nothing in the repo references it" turned out to be false about
+# the running system — after the writable Docker socket (§2.2) and the H4's own .156
+# address (§2.9).
+#
+# ---- IT IS NOT A LAB RESOLVER ----
+# The entire dnsmasq configuration is one directive, `bind-interfaces`, and that comes
+# from /etc/dnsmasq.d/ubuntu-fan — an Ubuntu default file, not something anyone wrote.
+# No `host-record`, no `address=`, no `local=/lab.home.arpa/`, no `server=`. With no
+# `server=` and no `no-resolv` it reads /etc/resolv.conf, which here is the
+# systemd-resolved stub, so it forwards to resolved which forwards to the real
+# resolvers. A redundant caching hop, not a fifth authority.
+#
+# ---- AND NOTHING HAS EVER USED IT ----
+# Measured rather than assumed, via SIGUSR1 (dnsmasq dumps counters to the journal;
+# it disrupts nothing):
+#
+#     uptime 5-14:09:19
+#     cache size 150, 0/0 cache insertions re-used unexpired cache entries.
+#     queries forwarded 0, queries answered locally 0
+#     queries for authoritative zones 0
+#     server 127.0.0.53#53: queries sent 0, retried 0, failed 0
+#
+# Zero queries in five and a half days. Not "low" — zero. A weekly consumer would have
+# appeared. This is the same discipline §2.9 is waiting on for Vault: do not remove a
+# listener because the repo is silent about it; remove it because the service itself
+# says nobody is talking to it.
+#
+# ---- DISABLE THE UNIT, DO NOT PURGE THE PACKAGE ----
+# `dpkg -S /usr/sbin/dnsmasq` -> dnsmasq-base, which is a dependency of other things.
+# **libvirt spawns its own dnsmasq instances per virtual network and does not use this
+# systemd unit**, so disabling the unit does not touch VM networking. Purging the
+# package would be a different and riskier change; this is not that.
+#
+# Reversible in one command if something turns out to need it:
+#   systemctl enable --now dnsmasq
+#
+# Usage:
+#   ansible-playbook -i inventory/hosts.yml playbooks/h4-disable-dnsmasq.yml --check
+#   ansible-playbook -i inventory/hosts.yml playbooks/h4-disable-dnsmasq.yml
+
+- name: Disable the unused dnsmasq on the H4
+  hosts: microshift
+  become: true
+  gather_facts: false
+
+  tasks:
+    # ---- measure before changing, and refuse if the measurement disagrees --------
+    - name: Read dnsmasq's own query counters
+      ansible.builtin.shell: |
+        set -o pipefail
+        pid=$(pgrep -x dnsmasq || true)
+        if [ -z "$pid" ]; then echo "state=absent"; exit 0; fi
+        echo "state=running pid=$pid uptime=$(ps -o etime= -p "$pid" | tr -d ' ')"
+        kill -USR1 "$pid" 2>/dev/null || true
+        sleep 1
+        journalctl -u dnsmasq --since -1min --no-pager 2>/dev/null \
+          | grep -oE 'queries forwarded [0-9]+, queries answered locally [0-9]+' | tail -1
+      args:
+        executable: /bin/bash
+      register: dnsmasq_stats
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Show what dnsmasq reports about itself
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ dnsmasq_stats.stdout_lines | default(['no output']) | join(' | ') }}"
+
+    # THE GUARD. If dnsmasq has served anything, something on the LAN depends on it and
+    # this play must not silently take it away. The whole justification for disabling is
+    # that the counters are zero; if they are not, the justification is gone and the
+    # right response is to find the client first — exactly the §2.9 problem.
+    - name: Refuse to disable a dnsmasq that is actually serving queries
+      ansible.builtin.assert:
+        that:
+          - >-
+            dnsmasq_stats.stdout is search('state=absent')
+            or dnsmasq_stats.stdout is search('queries forwarded 0, queries answered locally 0')
+        fail_msg: >-
+          {{ inventory_hostname }}: dnsmasq has served queries —
+          {{ dnsmasq_stats.stdout_lines | default([]) | join(' | ') }}.
+          Something on the LAN is resolving through the H4. Find it before disabling:
+          enable `log-queries` in /etc/dnsmasq.d/, watch `journalctl -u dnsmasq`, and
+          identify the client. Do NOT read this play's premise as still valid — it was
+          written against counters that were zero.
+        success_msg: >-
+          {{ inventory_hostname }}: dnsmasq has served nothing —
+          {{ dnsmasq_stats.stdout_lines | default([]) | join(' | ') }}
+
+    # ---- disable ----------------------------------------------------------------
+    - name: Stop and disable dnsmasq
+      ansible.builtin.systemd:
+        name: dnsmasq
+        state: stopped
+        enabled: false
+      when:
+        - not ansible_check_mode
+        - dnsmasq_stats.stdout is not search('state=absent')
+
+    # ---- prove the port is actually closed ---------------------------------------
+    # `systemctl is-active` returning `inactive` says the unit stopped. It does not say
+    # nothing is listening on :53 — another process could hold it, and on this host
+    # systemd-resolved legitimately holds 127.0.0.53:53. The number that matters is
+    # whether anything is bound to the LAN addresses.
+    - name: Check what still listens on :53
+      ansible.builtin.shell: |
+        set -o pipefail
+        echo "unit=$(systemctl is-active dnsmasq 2>&1) enabled=$(systemctl is-enabled dnsmasq 2>&1)"
+        echo "lan_listeners=$(ss -ltnu 2>/dev/null | grep -cE '192\.168\.1\.(156|160):53')"
+        echo "stub=$(ss -ltnu 2>/dev/null | grep -c '127\.0\.0\.53:53')"
+      args:
+        executable: /bin/bash
+      register: post_listen
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: not ansible_check_mode
+
+    - name: Confirm nothing serves DNS on the LAN addresses any more
+      ansible.builtin.assert:
+        that:
+          - post_listen.stdout is search('lan_listeners=0')
+        fail_msg: >-
+          {{ inventory_hostname }}: something is STILL listening for DNS on a LAN
+          address — {{ post_listen.stdout_lines | default([]) | join(' | ') }}.
+          `systemctl is-active` alone would not have caught this.
+        success_msg: >-
+          {{ inventory_hostname }}: {{ post_listen.stdout_lines | default([]) | join(' | ') }}
+          — LAN :53 closed; the 127.0.0.53 stub is systemd-resolved and is expected.
+      when:
+        - not ansible_check_mode
+        - post_listen.stdout is defined
+
+    # Resolution must still work afterwards. dnsmasq was not in the path — resolved
+    # forwards straight to .148/.116/.184 — but "it was not in the path" is exactly the
+    # kind of thing worth confirming rather than asserting, on the host that runs
+    # everything.
+    - name: Confirm name resolution still works on the H4
+      ansible.builtin.command: getent hosts api.lab.home.arpa
+      register: resolve_check
+      changed_when: false
+      failed_when: false
+      check_mode: false
+      when: not ansible_check_mode
+
+    - name: Fail if the H4 can no longer resolve
+      ansible.builtin.assert:
+        that:
+          - resolve_check.rc == 0
+          - resolve_check.stdout is search('192.168.1.200')
+        fail_msg: >-
+          {{ inventory_hostname }}: api.lab.home.arpa no longer resolves to
+          192.168.1.200 after stopping dnsmasq (rc={{ resolve_check.rc }},
+          out={{ resolve_check.stdout | default('') | trim }}). Re-enable immediately:
+          systemctl enable --now dnsmasq
+        success_msg: >-
+          {{ inventory_hostname }}: resolution intact —
+          {{ resolve_check.stdout | default('') | trim }}
+      when:
+        - not ansible_check_mode
+        - resolve_check.rc is defined
