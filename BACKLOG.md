@@ -1640,9 +1640,29 @@ rules", and of doing that discovery with an audit device rather than a grep. The
 found 19 files and could not have found this, because **the fact is not in the files** —
 it is a property of the running host.
 
-**PINNED 2026-09-06, not yet applied.** `h4-dns-resolvers.yml` now emits
-`route-metric: 200` on the non-primary link, so `enp2s0` (.160) wins deterministically
-and the H4's source address stops depending on what the kernel felt like.
+**PINNED AND APPLIED 2026-09-06.** `h4-dns-resolvers.yml` now emits `route-metric: 200`
+on the non-primary link, so `enp2s0` (.160) wins deterministically and the H4's source
+address stops depending on what the kernel felt like. Applied via `netplan try`, which
+offered the 120-second prompt and was accepted.
+
+**The before/after is the same query that found the problem:**
+
+    yesterday   192.168.1.128 dev enp1s0 src 192.168.1.156
+    now         192.168.1.128 dev enp2s0 src 192.168.1.160
+
+    default via 192.168.1.1 dev enp2s0 proto dhcp src 192.168.1.160 metric 100
+    default via 192.168.1.1 dev enp1s0 proto dhcp src 192.168.1.156 metric 200
+
+**And the check that mattered more than the routes:** `grep -c nameserver
+/run/systemd/resolve/resolv.conf` still returns **3**. `netplan try` re-applies *both*
+links, which is precisely the operation that produced §4.12's count of six — so a clean
+route change that silently reopened the resolver bug next door was the realistic way
+this could have gone wrong. `use-dns: false` on both links held. All five nodes Ready
+throughout, on a host that is an etcd voter.
+
+**Remaining for §2.9 proper:** the Vault audit client list, in a few days. The H4 should
+now appear as `.160` and `.156` should stop appearing at all — which is simultaneously
+the confirmation this worked and the allowlist the firewall gets built from.
 
 **Hung off the variable that already decides which link is primary.** `h4_dns_link:
 enp2s0` governed the resolver list; it now governs the route metric too. The resolver

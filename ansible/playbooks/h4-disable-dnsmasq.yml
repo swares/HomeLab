@@ -122,7 +122,12 @@
         set -o pipefail
         echo "unit=$(systemctl is-active dnsmasq 2>&1) enabled=$(systemctl is-enabled dnsmasq 2>&1)"
         echo "lan_listeners=$(ss -ltnu 2>/dev/null | grep -cE '192\.168\.1\.(156|160):53')"
-        echo "stub=$(ss -ltnu 2>/dev/null | grep -c '127\.0\.0\.53:53')"
+        # `127\.0\.0\.53:53` DOES NOT MATCH. ss renders the stub with its interface
+        # suffix — `127.0.0.53%lo:53` — so the first version of this printed stub=0
+        # next to a success message saying the stub was present and expected. A check
+        # whose pattern misses reality, reported beside prose implying it did not.
+        # Corrected 2026-09-06; the `%lo` is why.
+        echo "stub=$(ss -ltnu 2>/dev/null | grep -cE '127\.0\.0\.53(%[a-z0-9]+)?:53')"
       args:
         executable: /bin/bash
       register: post_listen
