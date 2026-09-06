@@ -1780,6 +1780,62 @@ and nothing says so.
 
 ---
 
+### 2.14 ~~The H4 ran an unconfigured DNS server on both LAN addresses~~ — **FIXED 2026-09-06, not yet applied**
+
+**Found while establishing which interface the H4 should source LAN traffic from** — a
+question with nothing to do with DNS. `ss -ltnpu` showed dnsmasq bound to **both** LAN
+addresses:
+
+    192.168.1.156:53   dnsmasq   (udp + tcp)
+    192.168.1.160:53   dnsmasq   (udp + tcp)
+    127.0.0.1:53, ::1:53, and both link-local v6 addresses
+
+The H4 is not in the `dns` inventory group, is not in `lab_dns_servers`, and CLAUDE.md
+does not mention it serving DNS. **This is the third time in two days that "nothing in
+the repo references it" was false about the running system** — after §2.2's writable
+Docker socket and §2.9's `.156` address. The repo is not a description of the hosts.
+
+**It was not a fifth lab resolver.** The entire configuration is one directive,
+`bind-interfaces`, and that comes from `/etc/dnsmasq.d/ubuntu-fan` — an Ubuntu default
+file nobody wrote. No `host-record`, no `address=`, no `local=/lab.home.arpa/`, no
+`server=`. With no `server=` and no `no-resolv` it reads `/etc/resolv.conf`, which here
+is the systemd-resolved stub, so it forwarded to resolved which forwards to the real
+resolvers — a redundant caching hop in front of `.148`/`.116`/`.184`.
+
+**And nothing had ever used it.** Measured with `SIGUSR1`, which makes dnsmasq dump its
+counters to the journal and disrupts nothing:
+
+    uptime 5-14:09:19
+    cache size 150, 0/0 cache insertions re-used unexpired cache entries.
+    queries forwarded 0, queries answered locally 0
+    queries for authoritative zones 0
+    server 127.0.0.53#53: queries sent 0, retried 0, failed 0
+
+**Zero, not low.** A weekly consumer would have appeared in five and a half days. Same
+discipline §2.9 is waiting on for Vault: do not remove a listener because the repo is
+silent about it — remove it because the service says nobody is talking to it.
+
+`playbooks/h4-disable-dnsmasq.yml` disables the unit. **It does not purge the package**:
+`dpkg -S` attributes the binary to `dnsmasq-base`, a dependency of other things, and
+libvirt spawns its own dnsmasq instances per virtual network rather than using this
+systemd unit — so disabling the unit does not touch VM networking. Reversible with
+`systemctl enable --now dnsmasq`.
+
+The play refuses to disable a dnsmasq whose counters are non-zero, because that is the
+premise the whole change rests on; and it verifies by checking **what is still bound to
+:53**, not by trusting `systemctl is-active`. A stopped unit does not prove a closed
+port — something else could hold it, and on this host systemd-resolved legitimately
+holds `127.0.0.53:53`. It then confirms the H4 can still resolve `api.lab.home.arpa`,
+because "dnsmasq was not in the resolution path" was an inference worth testing on the
+box that runs everything.
+
+**Related:** §2.9 (one fewer service on the LAN, and one fewer thing bound to `.156`
+before its route metric changes), and §6.4 — *"DNS needs a permanent host"* is still
+open, and this was most likely a false start toward it, left enabled and never
+configured.
+
+---
+
 ## 3. Monitoring that cannot fire
 
 *The theme of the 08-07 session. These are the remaining instances.*
