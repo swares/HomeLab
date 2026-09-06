@@ -1640,10 +1640,27 @@ rules", and of doing that discovery with an audit device rather than a grep. The
 found 19 files and could not have found this, because **the fact is not in the files** —
 it is a property of the running host.
 
-**Pin the address before writing rules.** An allowlist naming both is correct but papers
-over the cause; the real fix is deciding what `enp1s0` is for and either giving it a
-losing route metric or taking it off that subnet. See §4.12 — same configuration, and
-this is its second distinct symptom.
+**PINNED 2026-09-06, not yet applied.** `h4-dns-resolvers.yml` now emits
+`route-metric: 200` on the non-primary link, so `enp2s0` (.160) wins deterministically
+and the H4's source address stops depending on what the kernel felt like.
+
+**Hung off the variable that already decides which link is primary.** `h4_dns_link:
+enp2s0` governed the resolver list; it now governs the route metric too. The resolver
+link and the preferred-route link must be the *same* link, and two independent knobs
+would eventually disagree in a way nothing would notice.
+
+**It does not remove `.156` or down the link** — only which route is preferred. And
+nothing is bound to `.156` any more in any case: the unconfigured dnsmasq holding it was
+disabled in §2.14, found during this same investigation.
+
+**Applying is still manual**, as this playbook has always been: it writes the override
+and stops. `netplan try` gives a 120-second auto-revert, and unlike the N150s it should
+work here — that refusal was specific to a bridge carrying `parameters:`, and the H4 has
+plain ethernets. Confirm it actually offers the prompt rather than assuming; the
+`systemd-run` revert timer from `kvm-netplan-fix.yml` is the fallback if it refuses.
+
+An allowlist naming both addresses would still have been *correct*; this makes it
+unnecessary. See §4.12 — same configuration, and this was its second distinct symptom.
 
 ### 2.10 `.claude/settings.json` is a MicroShift-era artifact
 `docs/REVIEW-2026-07-24.md:310` (H30)
