@@ -1583,10 +1583,64 @@ with rules, and it is right; its step 3 does separate "the standalone Pis" as th
 class, so rpi5 remains the correct place to start *enforcing* — but discover-then-enforce
 applies to one host as much as to twelve.
 
-### 2.7 Committed argon2id hashes for five OIDC client secrets
+### 2.7 ~~Committed argon2id hashes for five OIDC client secrets~~ — **DOWNGRADED 2026-09-06 on measurement; one real defect found instead**
 `gitops/workloads/authelia/configmap.yaml:72,86,98,111,125`
 
-Offline-crackable, and the only credential for those clients.
+Original text, preserved: *"Offline-crackable, and the only credential for those
+clients."* **Both halves are wrong**, and the entry was ranked Tier 1 on that basis
+earlier the same day.
+
+**"Offline-crackable" — no.** The committed values are argon2id hashes at
+`m=65536,t=3,p=4`, and the plaintexts behind them are 256-bit random strings. Measured
+without reading any value, by length alone:
+
+    immich      secret/lab/immich     oidc-client-secret   len=64   hex
+    minio       secret/lab/minio      oidc-client-secret   len=64   hex
+    semaphore   secret/lab/semaphore  oidc-client-secret   len=64   hex
+    argocd      secret/lab/argocd     oidc-client-secret   len=64   hex
+    grafana     secret/lab/grafana    oidc-client-secret   len=44   base64
+
+64 hex chars is `openssl rand -hex 32`; 44 base64 chars is `openssl rand -base64 32`.
+Both are 256 bits — `minio/externalsecret.yaml` even documents the command. Cracking a
+64 MiB-cost argon2id hash of a 256-bit random string is not hard, it is arithmetically
+out of reach.
+
+**"The only credential" — no.** The plaintexts are in Vault under access control; the
+committed value is the digest. **Storing the hash in config is Authelia's documented
+design** — that is what hashing it is for. What the hashes actually leak is which
+clients exist and the KDF parameters.
+
+**Not migrating them, deliberately.** Moving the hashes into Vault would need Authelia's
+config-templating filter, adding a dependency and a failure mode where a templating
+mistake breaks SSO — including access to Grafana and ArgoCD, the tools you would use to
+diagnose it. Real cost, no meaningful gain.
+
+---
+
+**THE ONE REAL DEFECT, found while checking the above.** `authelia/external-secret.yaml`
+said:
+
+> *"The plaintext lives only in Vault at `secret/lab/authelia/immich_client_secret`"*
+
+**It has never been there.** `secret/lab/authelia` holds seven keys and that is not one
+of them. The immich plaintext is at `secret/lab/immich` → `oidc-client-secret`, following
+the same convention as the other four.
+
+That comment is a **recovery instruction**, which is what makes it worth fixing: anyone
+needing to re-enter that secret would have checked the documented path, found nothing,
+and reasonably concluded the credential was lost. Corrected, with all five paths and
+their measured lengths recorded in one place.
+
+Immich is the only client with no ExternalSecret for its OIDC secret, and that is correct
+rather than an omission — Immich keeps OIDC settings in its own Postgres, entered through
+its admin UI, so there is no k8s Secret for ESO to populate. The plaintext exists in Vault
+*and* in the Immich database, which is backed up nightly.
+
+**Pattern worth noting.** This is the third entry in two days to overstate its own
+severity — §2.2 turned out to be a deletion rather than a redesign, §2.14's dnsmasq had
+served zero queries in five days, and this one is a hash doing exactly what hashes are
+for. All three were written from reading the repo. All three corrections came from
+measuring the running system.
 
 ### 2.8 Optional: tighten `admin` so it cannot self-escalate
 `ansible/files/vault-policies/admin.hcl`, `TODO-2026-08-03.md:310`
