@@ -132,11 +132,34 @@ ExecStart=/usr/bin/restic backup {{ nas_mount }} \
 # Confirmed still true 2026-09-06 — 203.666 GiB and 13 snapshots on R2, unchanged.
 #
 # Grouping by host,tags puts every nas-tagged snapshot in ONE series, so the policy
-# applies across path changes and frozen groups age out on their own. Nothing is
-# deleted today: --keep-monthly 6 retains one snapshot per month, so the VMs-era
-# ones persist until six newer months exist (~Feb-Mar 2027) and then go by
-# themselves. No irreversible decision is required, which is why this is preferred
-# over an explicit forget of those 13.
+# applies across path changes and frozen groups age out on their own.
+#
+# CORRECTED 2026-09-06, and the correction matters more than the change. This block
+# first read "Nothing is deleted today". THAT IS FALSE, and `forget --dry-run` said
+# so before anything ran:
+#
+#     primary  7/4/6    keep 12, REMOVE 17
+#     cold-sec 21/8/12  keep 27, REMOVE 16
+#     offsite  7/4/6    keep 12, REMOVE 17
+#
+# The mistake was reasoning about the policy in the abstract instead of against
+# these snapshots. Under one merged series the union of daily-7 + weekly-4 +
+# monthly-6 collapses to about twelve; the primary held 29 only because each frozen
+# path-set had its own private daily slots. TWENTY-NINE WAS THE BUG, NOT THE
+# BASELINE — so most of what this removes is an artefact of the defect being fixed.
+#
+# WHAT SURVIVES IS THE PART THAT WAS RIGHT. The June 29 and July 31 monthlies still
+# carry /mnt/cold-8t/VMs, and restic dedupes, so either one pins the full 224.7 GiB.
+# No space is reclaimed now; it frees itself around Jan-Feb 2027 when six newer
+# months exist. Still no irreversible decision, which is why this remains preferred
+# over an explicit forget of those 13 — but "nothing is deleted" and "no space is
+# freed yet" are different statements and this comment used to conflate them.
+#
+# cold-sec went 14 -> 21 daily in the same change BECAUSE of that dry-run: at 14 it
+# would have dropped Aug 14, 15, 17, 18, 19 and 20, and the primary drops those too,
+# so six days that exist today would have vanished from both local repos. See
+# backup.yml. The primary was deliberately NOT raised instead — deepening it past
+# cold-sec would invert the archive-is-deeper hierarchy documented there.
 #
 # THIS REPO ALREADY KNEW. backup-cloud.yml has used --group-by host,tags since the
 # same class of bug hit it, with the comment "if a source path ever varies again,
