@@ -126,7 +126,13 @@ Read this before acting. Full context is in `docs/` (start with `ARCHITECTURE.md
 
 ## The fleet
 
-The H4 is the core (k3s server + NAS, Ubuntu 22.04, `192.168.1.160`). The two
+The H4 is the core (k3s server + NAS, Ubuntu 22.04, `192.168.1.160`) — **but it also
+holds `192.168.1.156` on a second interface, and that is the address it often speaks
+from.** `enp1s0` (.156) and `enp2s0` (.160) are both on the same /24 at metric 100, so
+which one sources outbound LAN traffic is not pinned: `ip route get 192.168.1.128`
+returns `dev enp1s0 src 192.168.1.156`. Found 2026-09-05 in Vault audit logs, where the
+H4 appeared as an address documented nowhere. **Never allowlist, firewall or match the
+H4 by a single IP** — use both, and see BACKLOG §2.9 and §4.12, which share this cause. The two
 **Orange Pi 5 Pro** boards (8C/16GB/NPU) are k3s agents / AI inference hosts; RPi 5
 runs Vault; RPi 4B runs Pi-hole (192.168.1.116) as the DNS **secondary**; opi-zero2w-1 (192.168.1.184) is the **tertiary** dnsmasq fallback, NOT the secondary — corrected 2026-09-02, see BACKLOG §4.12; opi-zero2w-3 (192.168.1.217) is a **fourth, fully working dnsmasq resolver that nothing currently queries** — it is configured by `dns.yml` but is absent from `lab_dns_servers`, and 2026-09-02's probes confirmed it answers every lab name correctly and authoritatively (`local=/lab.home.arpa/`, so it is a real spare, not a forwarder). Do not describe the lab as having three resolvers; Home Assistant runs as a k3s Deployment in the `home-assistant` namespace; lldap runs as a k3s Deployment in the `lldap` namespace (ldap-1 VM decommissioned
 2026-07-04); the XU3 is a build agent. DNS needs a permanent host.
