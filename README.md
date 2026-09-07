@@ -6,6 +6,36 @@ A GitOps-managed home lab built around an **Odroid-H4 Ultra** NAS core and a
 **Argo CD** runs everything inside the cluster from this git repo, and a two-tier storage
 model (hot NVMe + two cold SATA RAID 1 mirrors) keeps data safe.
 
+```mermaid
+flowchart TB
+    PR["Change starts as a pull request"] --> GIT[("git · main<br/>single source of truth")]
+    GIT --> ARGO["Argo CD<br/>app-of-apps · selfHeal · prune"]
+    ARGO -->|reconciles| K3S
+
+    subgraph K3S["k3s — 3-node HA control plane + 2× ARM64 agents"]
+      direction TB
+      PLAT["Platform<br/>Vault + External Secrets · cert-manager private CA<br/>Authelia + lldap OIDC · Kyverno policy (enforce)"]
+      OBS["Observability<br/>Prometheus · Grafana · Alertmanager · Loki · Alloy"]
+      AI["AI inference tier<br/>LiteLLM gateway → Ollama · RKLLama (NPU) · Whisper"]
+      APPS["Apps<br/>Immich · Home Assistant · MinIO · Semaphore · GitLab runner"]
+    end
+
+    IAC["Ansible + OpenTofu<br/>hosts, storage, k3s — as code"] --> FLEET
+    FLEET["14-host fleet · x86 + ARM64<br/>Vault (rpi5) · redundant DNS · MQTT pair · NAS"]
+    FLEET --- K3S
+    K3S -.->|drift detected| ARGO
+    FLEET --> BK[("restic → 2× RAID 1<br/>+ offsite Cloudflare R2")]
+
+    classDef g fill:#15111f,stroke:#a78bfa,color:#e6edf3;
+    classDef k fill:#1a1113,stroke:#ff4d4d,color:#e6edf3;
+    classDef a fill:#161b22,stroke:#2b3440,color:#e6edf3;
+    classDef c fill:#0c1a2e,stroke:#3b82f6,color:#e6edf3;
+    class PR,GIT,ARGO g;
+    class PLAT,OBS,AI,APPS k;
+    class IAC,FLEET a;
+    class BK c;
+```
+
 ## Why it's shaped this way
 
 - **k3s, not full Kubernetes** — the H4 is also the NAS. k3s runs as a single systemd
