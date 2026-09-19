@@ -64,6 +64,47 @@
       when: pihole_in_run | bool
       run_once: true
 
+    # A non-empty token is not a working token. This probes the exact path the read
+    # below needs, so an expired token, a policy without read on secret/lab/pihole,
+    # an unreachable or sealed Vault, and a missing secret each surface HERE with a
+    # cause, instead of as "censored due to no_log" from the no_log read.
+    #
+    # Same delegation and gating as that read: the resolvers have no vault CLI, and
+    # neither check should run when the play touches no Pi-hole host.
+    #
+    # Pattern from backup-cloud.yml:93-116 (since 2026-07-25). It was the only
+    # playbook of eight carrying it; this is the propagation.
+    - name: Preflight — token must be able to read the Pi-hole secret
+      ansible.builtin.shell:
+        cmd: vault kv get -field=web-pwhash secret/lab/pihole >/dev/null
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      register: vault_pihole_probe
+      delegate_to: h4-core
+      run_once: true
+      changed_when: false
+      failed_when: false
+      check_mode: false   # read-only; must run under --check or the assert is vacuous
+      when: pihole_in_run | bool
+      # stdout goes to /dev/null, so the hash never reaches the log — only stderr,
+      # which carries the diagnosis and no secret.
+
+    - name: Preflight — report token or permission problems clearly
+      ansible.builtin.assert:
+        that:
+          - vault_pihole_probe.rc is defined
+          - vault_pihole_probe.rc == 0
+        fail_msg: >-
+          Could not read secret/lab/pihole (rc={{ vault_pihole_probe.rc }}).
+          Likely an expired or revoked VAULT_TOKEN, a policy without read on that
+          path, Vault unreachable or sealed, or the secret not existing. Check with:
+          vault token lookup && vault kv list secret/lab
+          {{ vault_pihole_probe.stderr | default('') }}
+        quiet: true
+      run_once: true
+      when: pihole_in_run | bool
+
     # The resolvers have no vault CLI; h4-core does. Read-only, so check_mode:
     # false — otherwise --check skips it and every assertion below is vacuous.
     - name: Read Pi-hole admin password hash from Vault

@@ -156,6 +156,42 @@
           there is nothing to replicate offsite.
         quiet: true
 
+    # A valid token is not the same as a token that can read THIS secret, which is
+    # why this probes the exact path rather than running `vault token lookup`. A
+    # token that is live but carries the wrong policy passes a lookup and fails here
+    # — and failing here produces a one-line cause instead of "censored due to
+    # no_log" from the read below.
+    #
+    # Copied from backup-cloud.yml:93-116, which has had this since 2026-07-25 and
+    # was the only playbook of eight that did. Same secret, same failure, same fix;
+    # it simply never propagated. The §1.10 grouping bug had this exact shape —
+    # backup-cloud.yml knew, nothing else was updated.
+    - name: Preflight — token must be able to read the R2 secret
+      ansible.builtin.shell:
+        cmd: vault kv get -field=account-id secret/lab/cloudflare-r2 >/dev/null
+      environment:
+        VAULT_ADDR: "{{ vault_addr }}"
+        VAULT_TOKEN: "{{ lookup('env', 'VAULT_TOKEN') }}"
+      register: vault_read_probe
+      changed_when: false
+      failed_when: false
+      check_mode: false   # read-only; must run under --check or the assert is vacuous
+      # stdout goes to /dev/null, so only error text can be captured here — the
+      # account id never reaches the log.
+
+    - name: Preflight — report token or permission problems clearly
+      ansible.builtin.assert:
+        that:
+          - vault_read_probe.rc is defined
+          - vault_read_probe.rc == 0
+        fail_msg: >-
+          Could not read secret/lab/cloudflare-r2 (rc={{ vault_read_probe.rc }}).
+          Likely an expired or revoked VAULT_TOKEN, a policy without read on that
+          path, or the secret not existing. Check with:
+          vault token lookup && vault kv list secret/lab
+          {{ vault_read_probe.stderr | default('') }}
+        quiet: true
+
     # ---- Credentials ---------------------------------------------------------
     - name: Read R2 credentials from Vault
       ansible.builtin.shell:
