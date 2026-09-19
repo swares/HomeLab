@@ -319,7 +319,19 @@
                       if offsite_chain_present | bool
                       else 'backup-offsite.timer (02:30)' }}
         quiet: true
-      when: not ansible_check_mode
+      # DELIBERATELY NOT gated on `not ansible_check_mode`. It was, for one commit,
+      # copied from backup.yml's restic-hold assert — where the gate is right, because
+      # that play APPLIES the hold and under --check it has not happened yet.
+      #
+      # Nothing here is like that. `OnSuccess=` and the R2 repository are pre-existing
+      # state this play only reads, via two tasks already carrying `check_mode: false`.
+      # Gating the assert made `--check` — the mode CLAUDE.md says to run first — silent
+      # on the single check this play exists to perform. That is the "a dry run that
+      # prints no verification has verified nothing" rule, violated in the commit that
+      # added the verification, hours after quoting the rule.
+      #
+      # The `offsite_timer_enabled` half of the condition reads the VARIABLE, not the
+      # host, so it stays true under --check on a run that would enable the timer.
 
     # ---- Report what was measured, not what was configured --------------------
     - name: Report — offsite repository unreachable
