@@ -75,9 +75,25 @@
     # uplink; the nightly incremental is small, but the initial seed is not.
     offsite_limit_upload_kib: 2500
 
-    # Left false until the first copy has been seeded by hand. A timer that fires
-    # into a multi-day initial upload is not harmful (systemd will not start a
-    # second instance of a running oneshot) but it is confusing to reason about.
+    # FALSE IS THE INTENDED STEADY STATE, not a not-yet-seeded placeholder.
+    # Corrected 2026-09-19 — the old comment here said "left false until the first
+    # copy has been seeded by hand", which stopped being the reason on 2026-08-21.
+    #
+    # The offsite copy is triggered by `OnSuccess=backup-offsite.service` in
+    # backup-nas.service, inside one systemd transaction, at 01:30. The 02:30 timer
+    # is a fallback from before that chain existed, and BACKLOG §1.9's follow-up is
+    # to remove it. backup.yml:232 already stopped enabling it for that reason.
+    #
+    # The chain is strictly better: it waits for the primary repo lock however long
+    # the nightly takes. The timer cannot — it fires at 02:30 regardless, and a
+    # backup-nas run still holding the lock (a large Immich import, per
+    # backup-nas.service.j2) fails it with `repository is already locked`. That
+    # alerts for a copy which already succeeded an hour earlier.
+    #
+    # Measured 2026-09-19: the journal shows backup-offsite.service at 01:30:34,
+    # 01:30:36 and 01:30:36 on Sep 17, 18 and 19, and NOTHING at 02:30 in 30 days.
+    # The chain has been the mechanism for weeks. Set this true only to seed, or
+    # while deliberately testing the fallback.
     offsite_timer_enabled: false
 
   tasks:
@@ -211,18 +227,118 @@
         enabled: "{{ offsite_timer_enabled }}"
         state: "{{ 'started' if offsite_timer_enabled else 'stopped' }}"
 
-    # Two messages, chosen by state. Until 2026-08-11 this printed seeding
-    # instructions unconditionally — including "the first copy has NOT run" and
-    # "the unit sets TimeoutStartSec=infinity" — long after both were false. A
-    # playbook that prints stale instructions on every run teaches you to skip
-    # reading its output, which is how the rest of this lab's failures survived.
-    - name: Report next steps — not yet seeded
+    # ---- Measure the two things the report used to assume ---------------------
+    #
+    # ADDED 2026-09-19, and the reason is worth keeping. The report below used to
+    # be chosen by `offsite_timer_enabled` — a play default — while its task names
+    # and text spoke about SEEDING and about whether any copy was scheduled. Those
+    # are three different questions, and the variable answers none of them.
+    #
+    # So a run with the default printed, verbatim:
+    #
+    #     "Offsite configured. The timer is DISABLED, so no copy is scheduled."
+    #     "The first copy uploads the whole repository ... took ~3 days"
+    #
+    # against an R2 repository holding 61 snapshots and 203.666 GiB, which had been
+    # copied to nineteen hours earlier by the OnSuccess chain. The message was read
+    # as evidence the offsite leg was frozen, and an hour went into a nonexistent
+    # outage — after which the timer was enabled "to fix it", reintroducing the
+    # 02:30 lock race that BACKLOG §1.9 exists to remove.
+    #
+    # The comment that used to sit here said this exact failure had been FIXED on
+    # 2026-08-11 ("two messages, chosen by state"). It had been made conditional on
+    # the wrong thing. That is the more instructive version of the bug: a correct
+    # diagnosis, a plausible fix, and a predicate nobody re-derived from the system.
+    #
+    # CLAUDE.md: check the artifact the consumer reads. The consumer of "is the
+    # offsite backup working" is the R2 repository and the trigger that writes to
+    # it. Both are now read, not inferred.
+    - name: Count snapshots in the offsite repository
+      ansible.builtin.shell:
+        cmd: |
+          set -eu
+          set -a; . {{ offsite_env_file | quote }}; set +a
+          json=$(restic -r "$RESTIC_REPOSITORY_OFFSITE" \
+                   --password-file {{ offsite_password_file | quote }} \
+                   snapshots --json 2>/dev/null)
+          set +e
+          printf '%s' "$json" | grep -o '"short_id"' | wc -l
+          exit 0
+        executable: /bin/bash
+      environment:
+        RESTIC_CACHE_DIR: /var/cache/restic
+      register: offsite_snapshot_probe
+      changed_when: false
+      failed_when: false
+      check_mode: false   # read-only; must run under --check or the report is vacuous
+
+    # `grep -o | wc -l`, never `grep -c`: `snapshots --json` emits the whole array
+    # on ONE line, so grep -c answers "1" for any non-empty repo. That exact bug
+    # made the first real offsite run report "1 snapshots" when 32 had been kept
+    # (backup-offsite.sh.j2:156).
+    #
+    # stderr is discarded deliberately — it carries the R2 account id in the
+    # repository URL. rc alone distinguishes "could not reach the repo" from "the
+    # repo is empty", which is the distinction the report needs.
+
+    - name: Read what triggers the offsite copy
+      ansible.builtin.command:
+        cmd: systemctl show backup-nas.service --property=OnSuccess --value
+      register: backup_nas_onsuccess
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: Establish offsite facts from the measurements
+      ansible.builtin.set_fact:
+        offsite_reachable: "{{ offsite_snapshot_probe.rc == 0 }}"
+        offsite_snapshot_count: "{{ offsite_snapshot_probe.stdout | default('0') | trim | int }}"
+        offsite_chain_present: >-
+          {{ 'backup-offsite.service' in (backup_nas_onsuccess.stdout | default('')) }}
+
+    # The chain is load-bearing and silent when absent: backup-nas.service would
+    # still succeed nightly, hc-ping would still fire, and the offsite copy would
+    # simply stop happening. backup-nas.service.j2:29 says to verify OnSuccess
+    # before trusting the chain; nothing did until now.
+    #
+    # Not fatal when the timer is enabled — then the timer is the trigger and the
+    # chain is redundant. Fatal when NEITHER exists, because that is an offsite
+    # backup with nothing to start it.
+    - name: Something must actually trigger the offsite copy
+      ansible.builtin.assert:
+        that:
+          - offsite_chain_present | bool or offsite_timer_enabled | bool
+        fail_msg: >-
+          NOTHING TRIGGERS THE OFFSITE COPY. backup-nas.service carries
+          OnSuccess='{{ backup_nas_onsuccess.stdout | default("") | trim }}'
+          and backup-offsite.timer is disabled. Re-run backup.yml to restore the
+          chain, or pass -e offsite_timer_enabled=true to fall back to the 02:30
+          timer. See BACKLOG §1.9.
+        success_msg: >-
+          trigger: {{ 'OnSuccess chain from backup-nas.service (01:30)'
+                      if offsite_chain_present | bool
+                      else 'backup-offsite.timer (02:30)' }}
+        quiet: true
+      when: not ansible_check_mode
+
+    # ---- Report what was measured, not what was configured --------------------
+    - name: Report — offsite repository unreachable
       ansible.builtin.debug:
         msg:
-          - "Offsite configured. The timer is DISABLED, so no copy is scheduled."
-          - "Seed via the unit, not the script — the script reads"
-          - "RESTIC_REPOSITORY_OFFSITE and the R2 keys from the unit's"
-          - "EnvironmentFile."
+          - "WARNING: could not list snapshots in the offsite repository."
+          - "Configuration was applied, but this run could NOT confirm the copy exists."
+          - "Check credentials and reachability:"
+          - "  sudo systemctl start backup-offsite.service"
+          - "  journalctl -u backup-offsite.service -n 40"
+      when: not offsite_reachable | bool
+
+    - name: Report — offsite repository reachable but empty
+      ansible.builtin.debug:
+        msg:
+          - "Offsite configured. The repository is reachable and holds NO snapshots."
+          - "It has never been seeded. Seed via the unit, not the script — the"
+          - "script reads RESTIC_REPOSITORY_OFFSITE and the R2 keys from the"
+          - "unit's EnvironmentFile."
           - "  sudo systemctl start --no-block backup-offsite.service"
           - "  journalctl -u backup-offsite.service -f"
           - "The first copy uploads the whole repository. The 2026-08 seed was"
@@ -232,20 +348,30 @@
           - "TimeoutStartSec. restic copy locks the SOURCE repo, so a multi-day"
           - "copy starves the nightly backup — it failed four nights running in"
           - "August 2026 for exactly this reason."
-          - ""
-          - "When it completes: re-run with -e offsite_timer_enabled=true,"
-          - "restore TimeoutStartSec, and re-enable backup-nas.timer."
-      when: not offsite_timer_enabled
+      when:
+        - offsite_reachable | bool
+        - offsite_snapshot_count | int == 0
 
-    - name: Report next steps — seeded and scheduled
+    - name: Report — offsite copy is seeded and running
       ansible.builtin.debug:
         msg:
-          - "Offsite replication is configured and the timer is ENABLED."
-          - "Nightly copy at 02:30 UTC; incrementals take ~10s."
+          - >-
+            Offsite replication is live: {{ offsite_snapshot_count }} snapshots
+            in the R2 repository.
+          - >-
+            Triggered by {{ 'OnSuccess=backup-offsite.service from
+            backup-nas.service, ~01:30 nightly, in one systemd transaction'
+            if offsite_chain_present | bool else 'backup-offsite.timer at 02:30' }}.
+          - >-
+            backup-offsite.timer is
+            {{ 'ENABLED — a duplicate 02:30 run, and it races the primary repo
+            lock (BACKLOG §1.9)' if offsite_timer_enabled | bool
+            else 'disabled, which is the intended steady state' }}.
           - "TimeoutStartSec is bounded (4h) so a runaway copy fails and alerts"
           - "rather than silently starving backup-nas at 01:30."
           - ""
-          - "Verify:  systemctl list-timers backup-offsite.timer"
-          - "         journalctl -u backup-offsite.service -n 20"
+          - "Verify:  journalctl -u backup-offsite.service -n 20"
           - "Weekly integrity + recency check runs via backup-verify.service."
-      when: offsite_timer_enabled
+      when:
+        - offsite_reachable | bool
+        - offsite_snapshot_count | int > 0

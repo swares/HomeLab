@@ -112,7 +112,12 @@ Planning decisions recorded so the drill is repeatable:
   `virsh net-list --all` first.
 - **Scope: envelope items 2 and 3 only.** Items 1, 4, 5 and 6 are Drill 2. A Drill 1 pass
   must not be recorded as "envelope verified".
-- **Window: avoid 02:25–02:40 UTC**, when `backup-offsite.timer` fires. §1.9 is the lesson.
+- **Window: avoid 01:25–01:45 UTC**, when `backup-nas` runs and chains straight into the
+  offsite copy. §1.9 is the lesson. *Corrected 2026-09-19 — this said 02:25–02:40 "when
+  `backup-offsite.timer` fires", which stopped being true when that timer was removed on
+  2026-08-29 in this very entry's checklist. The offsite copy moved to 01:30 with it, so
+  the old window pointed the drill at a quiet twenty minutes and left the busy ones
+  unguarded.*
 - **Forbidden from the drill host:** `forget`, `prune`, `init`, `migrate`, `copy`,
   `unlock`. The envelope's R2 credentials are read-write and reach the only offsite copy.
 - **§1.2 first.** Three currency rows are unticked and the restic password rotated 08-07.
@@ -571,6 +576,63 @@ there looking correct and meant nothing (§3.11).
       This is the check `systemctl show -p OnSuccess` could not perform. That command
       proves systemd *parsed* the directive; only the timestamps prove it *fired*, and
       the entry was right to insist on the difference.
+
+- [x] **The timer was re-enabled and disabled again on 2026-09-19, for no reason.**
+      Recorded because the *cause* is a defect that is now fixed, and because this entry
+      already held the evidence that would have prevented it.
+
+      `backup-offsite.yml` was run with its defaults. It printed:
+
+          "Offsite configured. The timer is DISABLED, so no copy is scheduled."
+          "The first copy uploads the whole repository ... took ~3 days"
+
+      Both sentences are false and the playbook had no way to know: the two report
+      branches were selected by `offsite_timer_enabled`, a play default, while their text
+      spoke about *seeding* and about whether *any* copy was scheduled. Three different
+      questions, one variable, no measurement. R2 held 61 snapshots and had been copied
+      to 19 hours earlier by the chain this entry documents.
+
+      That message was read as an outage. The "fix" was `-e offsite_timer_enabled=true`,
+      which **restored the 02:30 duplicate this entry removed** and with it the lock race
+      §1.9 exists to close. Reverted the same hour.
+
+      **The journal ended it in one command**, and it is the same command that closed the
+      entry above:
+
+          Sep 17  01:30:36     Sep 18  01:30:36     Sep 19  01:30:34
+          nothing at 02:30 in 30 days
+
+      01:30 is `backup-nas`. The chain was the mechanism the whole time.
+
+      **What actually failed is a fix that was applied to the wrong predicate.** The
+      comment above these report tasks described this exact bug — *"until 2026-08-11 this
+      printed seeding instructions unconditionally ... a playbook that prints stale
+      instructions on every run teaches you to skip reading its output"* — and declared it
+      fixed by making the messages "chosen by state". They were made conditional on a
+      variable. The diagnosis was right, the repair was plausible, and nobody re-derived
+      the predicate from the system. It then did precisely what the comment warned it
+      would, to the person who had just read the comment.
+
+      Fixed 2026-09-19: the playbook now counts snapshots in the R2 repository and reads
+      `systemctl show backup-nas.service -p OnSuccess`, reports from those, and **asserts
+      that something triggers the copy at all** — chain or timer. That assert is new
+      coverage, not just better prose: with the timer correctly disabled, a silent loss of
+      the `OnSuccess=` line would stop offsite replication while `backup-nas` kept
+      succeeding and `hc-ping` kept firing. `backup-nas.service.j2:29` has said to verify
+      that directive since August; nothing did.
+
+- [ ] **Loose end — the first of the three runs reported `changed` when disabling.**
+      If the timer had been disabled since 2026-08-29 that task should have been `ok`.
+      The journal shows no 02:30 firings, so it was not *active*; `changed` says the
+      on-host state was not `disabled`. The consistent reading is a leftover
+      `timers.target.wants` symlink from a pre-08-29 `backup.yml` run — enabled but never
+      started, which never fires. Worth confirming rather than assuming, because the other
+      reading is that something re-enables it:
+
+          systemctl is-enabled backup-offsite.timer
+          ls -l /etc/systemd/system/timers.target.wants/ | grep offsite
+
+      Not urgent: the chain is what runs the copy either way.
 
       **How it actually happened is worth recording, because it was not a decision.**
       `backup-offsite.yml` manages the timer through `offsite_timer_enabled`, which
