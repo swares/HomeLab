@@ -2347,10 +2347,91 @@ both.
 So the hardening is not blocking. The question is whether an EOL build agent should
 exist at all.
 
-- [ ] **Decide: rebuild, retire, or accept with a documented reason.** "The XU3 is a
-      build agent" (CLAUDE.md) explains what it does, not why it is nine years behind.
-- [ ] If accepted, it needs an explicit boundary — at minimum it should not hold
-      credentials that reach anything else.
+**IT IS NOT A BUILD AGENT. Measured on the box 2026-09-20:**
+
+```
+up 87 days, 0 users, load average: 0.00, 0.01, 0.05
+runners installed          none  (no GitHub Actions, no GitLab)
+logins in `last`           only 00:00-duration connections from .160 and .156
+                           — the H4's two addresses, i.e. Ansible itself
+/home/swares               Python-3.11.9/  Python-3.11.9.tar.xz
+/home/odroid               the stock image skeleton (Desktop, Documents, …)
+running beyond baseline    lightdm, cups, cups-browsed, ModemManager, avahi,
+                           whoopsie, containerd, ntp, node_exporter
+```
+
+`host_vars/xu3-1.yml` explains that home directory: system Python on 16.04 armhf is 3.5
+and deadsnakes has no armhf builds, so 3.11 was compiled from source to give Ansible an
+interpreter. **The only thing on the machine is the Python that exists so Ansible can
+manage the machine.** It is a host whose sole workload is being manageable.
+
+Everything else is stock: a graphical login manager, a print server, a modem manager,
+and Ubuntu's crash reporter still phoning Canonical about an OS that stopped receiving
+fixes in 2021. `containerd` is running with no k3s membership (`kubectl get nodes` does
+not list it) — an abandoned container experiment.
+
+Every document calls it a build agent — `ARCHITECTURE.md:187`, `README.md:131`,
+`HARDWARE.md:24`, `CAPABILITY.md:69`. None says what it builds. `HOSTMON-BUILD.md:42`
+describes making it a GitHub Actions runner as **"Option 1 — recommended path"** with
+setup instructions, i.e. as a proposal that was never carried out.
+`LAB-DESIGN.md:61` had it right all along: *"CI build agent / light pods (flaky —
+verify)."* Nobody verified for years; one command did it.
+
+**WHAT IT COSTS, and this is the real argument.** Not power — special cases. Eight
+playbooks carry an exception for it:
+
+```
+chrony.yml                 excluded (runs old `ntp` instead)
+update-hosts.yml           excluded from auto-updates (Python < 3.8)
+scheduled-updates.yml ×2   same exclusion
+node-exporter.yml          special-cased
+mask-inapplicable-units.yml, network-online-wait.yml,
+fstab-root-fstype.yml, k3s-registry.yml
+```
+
+plus `monitoring.yaml`, `lab-check.sh`, `ledger-collect-hosts.sh`, and a
+`host_vars` file whose entire content is a non-standard interpreter path. Two of this
+week's changes tripped over it: chrony had to skip it, and §2.15's SSH hardening needed
+an **entire second code path** because its sshd predates `Include`. Every fleet-wide
+change has to think about a machine that does nothing.
+
+**Nothing depends on it.** Not a k3s node. The only references to `192.168.1.64` outside
+prose are four lines in `inventory/hosts.yml` and a comment in its own `host_vars`.
+
+**THE CHOICE IS RETIRE OR REBUILD — not keep.** Keeping it as-is is the only option that
+definitely costs something, because the special cases exist because of the 2016 OS, not
+because the hardware exists. A current Armbian (XU3/XU4 is supported) would give modern
+OpenSSH, packaged Python 3.11, and delete every exclusion above.
+
+**The case FOR rebuilding, which the repo has never made because nobody connected two
+entries.** `xu3-1` is **wired gigabit** (`HARDWARE.md:168`). Three of the four DNS
+resolvers are Orange Pi Zero 2Ws on WiFi, and §3.17 now records `opi-zero2w-2`'s weak
+radio making a host miss a security rollout outright. CLAUDE.md has carried *"DNS needs
+a permanent host"* as an open item for months (§6.4). A wired, always-on, 8-core box is
+a better answer to that than any WiFi board — *if* it runs something from this decade.
+
+Against: 2 GB RAM, a 2014 SoC, eMMC of unknown wear, and `LAB-DESIGN.md` calls the board
+flaky. The Zero 2W spares are 4 GB, 64-bit and on current Debian — but they are WiFi,
+which is the whole problem.
+
+- [ ] **Decide: retire, or rebuild onto current Armbian with a real job.** Deferred
+      deliberately 2026-09-20 — worth considering a use before powering it off, and the
+      DNS-host question above is the one that might justify it.
+- [ ] **If retiring, power off BEFORE touching the repo** and watch what alerts. It still
+      runs `node_exporter` and sits in `monitoring.yaml`, so a host going dark should
+      fire something. That is a free test of the node-down path on a host whose loss does
+      not matter — and **if nothing fires, that is a finding** considerably more
+      interesting than the XU3. Only then merge the removal, which silences it forever.
+- [ ] **If retiring, the removal PR** covers the eight exclusions above, the four
+      inventory lines, `host_vars/xu3-1.yml`, and prose in `CLAUDE.md`, `README.md`,
+      `ARCHITECTURE.md`, `HARDWARE.md`, `LAB-DESIGN.md`, `CAPABILITY.md`, `services.md`
+      and `OPS.md`. Leave `docs/diagrams/*.svg`, `host-map.html` and `service-map.html`
+      to a separate pass — hand-edited SVG in the same diff as a fleet change makes the
+      review useless.
+- [ ] **If keeping it as-is** — the option this entry argues against — it needs an
+      explicit boundary written down, at minimum that it should not hold credentials
+      reaching anything else. It currently holds the lab user's password like every
+      other host.
 
 ---
 
