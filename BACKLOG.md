@@ -2051,6 +2051,86 @@ configured.
 
 ---
 
+### 2.15 The k3s control plane accepted SSH passwords, and the playbook said it didn't — **FIXED 2026-09-19, not yet applied**
+`ansible/playbooks/rotate-passwords.yml:198-212` (as it was)
+
+`sshd -T` across the fleet, 2026-09-19:
+
+```
+h4-core       permitrootlogin without-password   passwordauthentication YES
+n150-1        permitrootlogin without-password   passwordauthentication YES
+n150-2        permitrootlogin without-password   passwordauthentication YES
+opi-zero2w-4  permitrootlogin YES                passwordauthentication YES
+opi5pro-1/2, opi-zero2w-3, xu3-1   permitrootlogin YES
+```
+
+The first three are the entire k3s control plane. `rotate-passwords.yml` has carried
+*"Ensure SSH password authentication is disabled"* for months and reported `ok` on all
+of them in a dry run taken an hour before this measurement.
+
+**The mechanism, and it is arithmetic rather than a bug:**
+
+```
+sshd_config:12          Include /etc/ssh/sshd_config.d/*.conf
+sshd_config:57 (or 66)  PasswordAuthentication no      <- what the task wrote
+50-cloud-init.conf:1    PasswordAuthentication yes     <- what sshd uses
+```
+
+sshd takes the **first** occurrence of a keyword. The Include sits forty-five lines
+above the task's line, so cloud-init wins, always, and no amount of editing
+`sshd_config` can change that. `opi-zero2w-4` is the same shape with a `10-local.conf`.
+
+**The task was not merely ineffective — it was about to be actively misleading.**
+`opi-zero2w-4` has no `PasswordAuthentication` in the main file at all, so the dry run
+reported `changed` for it. A real run would have appended the line, notified the
+handler, restarted sshd, and left password authentication enabled: a task reporting
+success, bouncing a daemon, and achieving nothing.
+
+**Fix:** `/etc/ssh/sshd_config.d/00-lab-hardening.conf`, carrying
+`PasswordAuthentication no`, `PubkeyAuthentication yes`, `PermitRootLogin
+prohibit-password`. The `00-` prefix is load-bearing — glob order, first match wins, so
+it must sort ahead of `10-local.conf` and `50-cloud-init.conf`. The usual `99-`
+convention would lose to both. The cloud-init file is left in place: it is recreated by
+cloud-init anyway and first-wins makes removing it unnecessary.
+
+Three safety properties, because this restarts sshd on fourteen hosts and the failure
+mode is losing the way back in:
+
+- `sshd -t` after writing the drop-in, and the drop-in is **removed** and the play fails
+  if it does not parse — before handlers flush, so a host that cannot parse the config
+  never restarts and keeps serving the old one. `validate:` on the `copy` module cannot
+  do this; it tests the fragment in isolation, and a fragment is not a valid config.
+- `serial: 1` with `any_errors_fatal: true` — one host at a time, stop at the first
+  failure.
+- A `post_tasks` assert on `sshd -T` after the restart.
+
+**That last one is the entry.** Every other signal in this lab said the setting was
+correct: the file said `no`, Ansible said `ok`, the task had existed for months. Only
+the daemon's own resolved view disagreed, and nothing was asking it. Same family as
+§4.12 (`resolvectl` showing three resolvers while the kubelet's file held six) and §3.9
+(Argo Synced and Healthy on a mount that never existed) — *check the artifact the
+consumer reads*, third instance, and the first where the wrong answer was a security
+control.
+
+**`PermitRootLogin` was never managed at all.** `yes` on five hosts is not drift; the
+playbook has tasks for the password, the root lock, `PasswordAuthentication` and
+`PubkeyAuthentication`, and none for this. Now set to `prohibit-password` in the same
+drop-in.
+
+- [ ] **Apply it.** `--check` first: the new `post_tasks` debug makes a dry run print
+      each host's effective settings, so it doubles as the fleet audit that found this.
+- [ ] **`opi-zero2w-4` appears nowhere in `CLAUDE.md`'s fleet list**, which names `-1`,
+      `-2` and `-3` only. A host nobody wrote down is a plausible reason no playbook
+      had ever reached it — it was the only host needing all four changes.
+- [ ] **`opi-zero2w-2` returned rc=1 from `sshd -T`** and looked like a broken config.
+      It was `/usr/sbin` missing from the non-login `PATH`; with the full path it
+      returns rc=0 and is correctly hardened already. Recorded because the control cost
+      one command and prevented a second false finding in the same hour. It also runs a
+      much newer OpenSSH than the rest of the fleet (`mlkem768x25519`,
+      `PerSourcePenalties`), which is worth knowing before any fleet-wide SSH change.
+
+---
+
 ## 3. Monitoring that cannot fire
 
 *The theme of the 08-07 session. These are the remaining instances.*

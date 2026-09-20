@@ -107,6 +107,16 @@ Read this before acting. Full context is in `docs/` (start with `ARCHITECTURE.md
   `grep -c nameserver /run/systemd/resolve/resolv.conf`, and `loki_relabel_cache_size`
   returning 1 for 6800 entries. Prefer a number that can only be produced by the work
   actually happening.
+- **`sshd -T`, never `grep sshd_config`.** Third instance of the rule above and the
+  first where the wrong answer was a security control (§2.15). `rotate-passwords.yml`
+  reported `ok` on "Ensure SSH password authentication is disabled" for months while
+  `sshd -T` showed `passwordauthentication yes` on h4-core, n150-1 and n150-2 — the
+  whole k3s control plane. `Include /etc/ssh/sshd_config.d/*.conf` is at **line 12** of
+  Ubuntu's `sshd_config` and sshd takes the **first** occurrence of a keyword, so
+  `50-cloud-init.conf` beats anything written further down the main file. Lab settings
+  live in `/etc/ssh/sshd_config.d/00-lab-hardening.conf`; the `00-` prefix is
+  load-bearing, and a `99-` file would lose. Any change here runs `sshd -t` before the
+  restart and asserts on `sshd -T` after it.
 - **Empty output is not a finding until you prove the check can speak.** A healthy
   Alertmanager receiver logs nothing on first-attempt success; a mistyped label selector
   prints the same `No resources found` as a deleted workload; `findmnt /a /b /c /d` returns
@@ -134,7 +144,14 @@ returns `dev enp1s0 src 192.168.1.156`. Found 2026-09-05 in Vault audit logs, wh
 H4 appeared as an address documented nowhere. **Never allowlist, firewall or match the
 H4 by a single IP** — use both, and see BACKLOG §2.9 and §4.12, which share this cause. The two
 **Orange Pi 5 Pro** boards (8C/16GB/NPU) are k3s agents / AI inference hosts; RPi 5
-runs Vault; RPi 4B runs Pi-hole (192.168.1.116) as the DNS **secondary**; opi-zero2w-1 (192.168.1.184) is the **tertiary** dnsmasq fallback, NOT the secondary — corrected 2026-09-02, see BACKLOG §4.12; opi-zero2w-3 (192.168.1.217) is a **fourth, fully working dnsmasq resolver that nothing currently queries** — it is configured by `dns.yml` but is absent from `lab_dns_servers`, and 2026-09-02's probes confirmed it answers every lab name correctly and authoritatively (`local=/lab.home.arpa/`, so it is a real spare, not a forwarder). Do not describe the lab as having three resolvers; Home Assistant runs as a k3s Deployment in the `home-assistant` namespace; lldap runs as a k3s Deployment in the `lldap` namespace (ldap-1 VM decommissioned
+runs Vault; RPi 4B runs Pi-hole (192.168.1.116) as the DNS **secondary**; opi-zero2w-1 (192.168.1.184) is the **tertiary** dnsmasq fallback, NOT the secondary — corrected 2026-09-02, see BACKLOG §4.12; **opi-zero2w-4 was missing from this list until 2026-09-19** and that omission had
+consequences: it was the only host in the fleet needing all four of
+`rotate-passwords.yml`'s changes — divergent password, root unlocked,
+`permitrootlogin yes`, `passwordauthentication yes` — which is what a host no playbook
+has ever reached looks like. A machine nobody writes down is a machine nobody
+configures. See BACKLOG §2.15. **opi-zero2w-2** runs a much newer OpenSSH than the rest
+of the fleet, so check it separately before any fleet-wide SSH change.
+opi-zero2w-3 (192.168.1.217) is a **fourth, fully working dnsmasq resolver that nothing currently queries** — it is configured by `dns.yml` but is absent from `lab_dns_servers`, and 2026-09-02's probes confirmed it answers every lab name correctly and authoritatively (`local=/lab.home.arpa/`, so it is a real spare, not a forwarder). Do not describe the lab as having three resolvers; Home Assistant runs as a k3s Deployment in the `home-assistant` namespace; lldap runs as a k3s Deployment in the `lldap` namespace (ldap-1 VM decommissioned
 2026-07-04); the XU3 is a build agent. DNS needs a permanent host.
 M5Stack + OPi NPUs are edge inference endpoints, not cluster nodes.
 The map's plaintext credentials must be rotated. See `docs/HARDWARE.md`.
