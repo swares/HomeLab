@@ -2223,16 +2223,40 @@ check each without echoing a secret.
 before anything touches Vault. Cheap, can only fail one way, and would have produced the
 right answer in one line.
 
-- [ ] **Install `hvac` on the control node** — `apt-get install -y python3-hvac`. Then
-      belongs in a playbook rather than by hand: a control node silently missing a
-      dependency is what this entry is about.
-- [ ] **THEN check whether the two stores agree, before any real run.** Enabling the
-      Vault path changes which value is applied. If `secret/lab/hosts:swares_password`
-      and `lab_user_password_hash` differ, the first real rotation after installing
-      `hvac` silently sets every Linux host to a value last touched in July. The
-      playbook's own `The break-glass cache must still match Vault` assert answers this
-      under `--check`, writing nothing — it has been skipping only because the fetch
-      returned nothing.
+- [x] **`hvac` installed on the control node 2026-09-19**, and the play now refuses to
+      start without it. Still belongs in a playbook rather than by hand: a control node
+      silently missing a dependency is what this entry is about.
+- [x] **The two stores agree — verified 2026-09-20.** `The break-glass cache must
+      correspond to Vault` passes, so `secret/lab/hosts:swares_password` and
+      `lab_user_password_hash` are the same password. Vault, the offline envelope and
+      the live fleet are consistent, which as far as anything here can establish is the
+      first time that has been true.
+
+      Getting there took a correction. The check reported divergence on 2026-09-19 and
+      that was believed; acting on it would have meant running
+      `sync-vault-to-ansible-vault.sh`, overwriting the only hash the fleet was actually
+      running. The check was broken (see below) — and separately, the Vault copy was
+      genuinely out of date, because nothing had written to it since 2026-07-03. It was
+      refreshed with `vault kv patch secret/lab/hosts swares_password=-`, reading from
+      stdin so the plaintext never reached shell history or `ps`.
+
+- [x] **Idempotence restored 2026-09-20.** Once the Vault path started working, "Set
+      password" reported `changed` on all fourteen hosts every run:
+      `password_hash('sha512')` generates a random salt per call, so the `user` module's
+      comparison never matches.
+
+      That destroyed a working drift detector. Those ok/changed results are what
+      identified `opi-zero2w-1` and `opi-zero2w-4` holding a different password from the
+      other twelve — visible only because the value applied that day was the stable
+      Ansible Vault hash. Fourteen `changed` every run says nothing about any of them.
+
+      Resolution branches are now three rather than two: with the break-glass check
+      passed, apply `lab_user_password_hash` — proven equivalent, and stable; with the
+      check overridden, hash Vault's plaintext (churns, correctly, because nothing has
+      established what the hosts hold); with Vault unreachable, the existing fallback.
+      Vault remains the source of truth, enforced by an assert that fails the run on
+      divergence. The cache is now used only when proven current, where before it was
+      used whenever anything went wrong and nothing checked.
 **The check that found this was itself broken — corrected 2026-09-19, second attempt.**
 `The break-glass cache must still match Vault` rebuilt the hash in Jinja and compared
 strings:
