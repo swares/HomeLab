@@ -2131,6 +2131,69 @@ drop-in.
 
 ---
 
+### 2.15b `rotate-passwords.yml` has never read from Vault — **found 2026-09-19**
+`ansible/playbooks/rotate-passwords.yml:38-49`
+
+```
+ansible-galaxy collection list | grep hashi_vault   ->  community.hashi_vault 7.1.0
+python3 -c "import hvac"                            ->  ModuleNotFoundError
+```
+
+`community.hashi_vault.vault_kv2_get` requires `hvac`. The collection is installed on
+the control node; the library is not. So the fetch has raised an import error on every
+invocation since the play was written — and `failed_when: false` turned that into `ok:`
+while `no_log: true` erased the message. The task reported success, produced no
+`.secret`, the hash task skipped on `secret is defined`, and the play fell back to
+`lab_user_password_hash`. Every run. Always.
+
+**The header of that file calls Vault the source of truth and the Ansible Vault hash a
+fallback. In practice the fallback is the only code path that has ever executed.**
+`secret/lab/hosts:swares_password` exists — created 2026-06-29, last patched
+2026-07-03, version 3 — and has never driven a rotation.
+
+**Why no signal existed.** `Password source: Ansible Vault (fallback)` is only
+information if it is sometimes something else. It never was, so it read as the normal
+state of the world. This is the §3.16 shape (`nfs-server` down 37 days unnoticed) in a
+playbook: not an alert that failed to fire, but a condition with no contrasting case.
+
+**Evidence that was present and misread earlier the same day.** The `--check` run showed
+`ok` on "Set password" for twelve hosts. The Vault path hashes with
+`password_hash('sha512')` and a random salt, so had it ever run, no host's stored hash
+could ever match and every host would report `changed` on every run. Twelve `ok`s were
+proof the fallback had been used consistently. They were read as "those hosts agree with
+each other" and moved past.
+
+**How it finally surfaced**, and the uncomfortable part: only because a newly-added
+assert refused to fall back silently. That assert's `fail_msg` then confidently named an
+expired token and a missing policy. The token was valid for 29 days carrying `admin`,
+and the path existed with the key present. **Both stated causes were wrong** — a
+confidently-worded error is worse than a vague one when it is confident about the wrong
+thing. The message now lists three candidates in order of likelihood and says how to
+check each without echoing a secret.
+
+**Fixed:** a preflight that `hvac` is importable by `ansible_playbook_python`, asserted
+before anything touches Vault. Cheap, can only fail one way, and would have produced the
+right answer in one line.
+
+- [ ] **Install `hvac` on the control node** — `apt-get install -y python3-hvac`. Then
+      belongs in a playbook rather than by hand: a control node silently missing a
+      dependency is what this entry is about.
+- [ ] **THEN check whether the two stores agree, before any real run.** Enabling the
+      Vault path changes which value is applied. If `secret/lab/hosts:swares_password`
+      and `lab_user_password_hash` differ, the first real rotation after installing
+      `hvac` silently sets every Linux host to a value last touched in July. The
+      playbook's own `The break-glass cache must still match Vault` assert answers this
+      under `--check`, writing nothing — it has been skipping only because the fetch
+      returned nothing.
+- [ ] **Audit the other Vault-consuming playbooks for the same pattern.** Any task with
+      `failed_when: false` + `no_log: true` and a `when:` guard downstream that treats
+      absence as "skip" can hide a total failure as a silent fallback. `backup-cloud.yml`
+      and `backup-offsite.yml` use the `vault` CLI rather than the module, so they are
+      not affected by *this* dependency — but the pattern is what to grep for, not the
+      library.
+
+---
+
 ## 3. Monitoring that cannot fire
 
 *The theme of the 08-07 session. These are the remaining instances.*
