@@ -5600,6 +5600,43 @@ SSH CAs and X.509 CAs are different trust roots and should not be conflated),
 - **Archive `TODO-2026-07-14.md`** (25/26 done) and collapse `README.md`'s TODO to a
   pointer at this file.
 
+### 7.x Eight of eleven scripts had no executable bit — **FIXED 2026-09-20**
+
+```
+100755  lab-check.sh, sync-vault-to-ansible-vault.sh, verify-lab.py
+100644  print-offline-envelope.sh, validate-rollout.sh, rollback-app.sh,
+        ledger-emit.sh, ledger-collect-restic.sh, ledger-collect-hosts.sh,
+        check-appset-collisions.py, install-run-only-hook.sh
+```
+
+`./scripts/<anything>.sh` returned **Permission denied** on the H4 for eight of them,
+including **`print-offline-envelope.sh`** — the break-glass envelope generator, the
+script you reach for when other things have already failed. It works via
+`bash scripts/...`, which is presumably how it has always been run, so nothing ever
+surfaced the difference.
+
+**Why it persisted, and this is the part worth keeping.** Windows has no executable
+bit, so anything committed from the authoritative checkout lands `100644`. The H4 — the
+only place anyone would notice — is kept pinned with `git fetch origin && git reset
+--hard origin/main`, and **`reset --hard` restores file modes from the index**. A
+`chmod +x` there survives exactly until the next pin. The problem is visible only on the
+box that cannot fix it, and fixable only on the box where it is invisible. That is the
+two-checkout split from CLAUDE.md in a form nobody had written down.
+
+Fixed with `git update-index --chmod=+x` from Windows, which sets the mode in the index
+without needing a filesystem that supports it. `enable-winrm.ps1` deliberately left
+`100644` — PowerShell is not invoked through the bit.
+
+**Found by the run-only hook failing to install**, and the way it failed is the entry's
+own joke: `./scripts/install-run-only-hook.sh` gave Permission denied, so the guard was
+never installed, so the `git commit --allow-empty -m "guard test"` meant to prove it
+refuses instead **succeeded — on the H4, on `main`.** The exact failure the hook exists
+to prevent, produced by testing the hook. Cleared with `git reset --hard origin/main`.
+
+The general lesson is the one already in CLAUDE.md under "empty output is not a
+finding": the test that proves a guard works is worth more than the guard, and running
+it is what found both of these.
+
 ---
 
 ## 8. Deferred by choice — no action wanted
