@@ -160,6 +160,13 @@ has ever reached looks like. A machine nobody writes down is a machine nobody
 configures. See BACKLOG §2.15. **opi-zero2w-2** runs a much newer OpenSSH than the rest
 of the fleet, so check it separately before any fleet-wide SSH change.
 opi-zero2w-3 (192.168.1.217) is a **fourth, fully working dnsmasq resolver that nothing currently queries** — it is configured by `dns.yml` but is absent from `lab_dns_servers`, and 2026-09-02's probes confirmed it answers every lab name correctly and authoritatively (`local=/lab.home.arpa/`, so it is a real spare, not a forwarder). Do not describe the lab as having three resolvers; Home Assistant runs as a k3s Deployment in the `home-assistant` namespace; lldap runs as a k3s Deployment in the `lldap` namespace (ldap-1 VM decommissioned
-2026-07-04); the XU3 is a build agent. DNS needs a permanent host.
+2026-07-04); **the XU3 is NOT a build agent, whatever the rest of the docs say** —
+measured 2026-09-20: up 87 days, zero users, no CI runner installed, and `/home/swares`
+contains only the Python 3.11 source tree compiled so Ansible could reach it. Its sole
+workload is being manageable. It is on Ubuntu 16.04 and carries exceptions in eight
+playbooks; do not write another one for it without reading BACKLOG §2.16, which argues
+the choice is retire or rebuild rather than keep. DNS needs a permanent host — and the
+XU3 is the only spare that is wired rather than WiFi, which is the one argument for
+rebuilding it.
 M5Stack + OPi NPUs are edge inference endpoints, not cluster nodes.
 The map's plaintext credentials must be rotated. See `docs/HARDWARE.md`.
