@@ -2167,6 +2167,20 @@ needs normalising and its synonyms accepting, and the dry run is what surfaced t
       **The control plane no longer accepts SSH password authentication.** `h4-core`,
       `n150-1` and `n150-2` were `passwordauthentication yes` for as long as anyone can
       establish, while the task claiming to disable it reported `ok`.
+
+      **One host silently missed the rollout, and that is the part to remember.**
+      `opi-zero2w-2` went UNREACHABLE mid-run — `Connection timed out during banner
+      exchange` — and the play carried on through the remaining three hosts and
+      finished. `any_errors_fatal: true` does not cover unreachable. The host was fine
+      (ping 0% loss, `ssh -v` exit 0 seconds later); it is 22 dB down on signal and the
+      first packet after idle costs ~52 ms, which can exceed SSH's banner timeout. See
+      §3.17, where this is now the entry's first operational cost.
+
+      Re-running for that host alone completed it. But the run had already reported
+      success, and the only evidence was one line in a recap fourteen plays long. Not
+      made fatal on purpose — a flaky radio must not be able to block hardening the
+      other thirteen — so the header of `rotate-passwords.yml` now says to read the
+      recap rather than the exit status.
 - [x] **`opi-zero2w-4` appears nowhere in `CLAUDE.md`'s fleet list**, which names `-1`,
       `-2` and `-3` only. A host nobody wrote down is a plausible reason no playbook
       had ever reached it — it was the only host needing all four changes.
@@ -3758,6 +3772,37 @@ Grep patterns run under `sudo` land in the journal they are searching.
       profile on `wlan0` to `bg` and re-measure. **Measure before codifying:** prove
       2.4 GHz actually helps on that board before putting it in Ansible, or the repo
       acquires a fix nobody verified.
+
+      **FIRST OPERATIONAL COST — 2026-09-20.** Until now this entry rested on signal
+      measurements: `-63 dBm`, `87.8 Mbit/s (MCS 2)`, `38/168 ms`. Today the link did
+      something.
+
+      During the §2.15 fleet-wide SSH hardening run, `opi-zero2w-2` dropped out:
+
+          fatal: [opi-zero2w-2]: UNREACHABLE!
+          Connection timed out during banner exchange
+          Connection to 192.168.1.188 port 22 timed out
+
+      Not the daemon. Immediately afterwards, ping was 0% loss and `ssh -v` completed in
+      0.3 s with exit status 0 — but the ping distribution names the cause:
+
+          icmp_seq=1  52.2 ms
+          icmp_seq=2   2.34 ms
+          icmp_seq=3   3.09 ms
+          icmp_seq=4   3.66 ms
+          icmp_seq=5   5.38 ms
+
+      52 ms on the first packet and 2-5 ms after is a power-save wake-up paying the
+      association cost, and it matches the 38/168 ms already recorded above. On a link
+      this marginal that first exchange can exceed SSH's banner timeout while everything
+      else looks healthy.
+
+      **So a host silently missed a security rollout.** Re-running for that host alone
+      completed it (`changed=0`, assert passed), but the failure mode is the point: the
+      play reported success overall, and the only evidence was one line in the recap.
+      See the note added to `rotate-passwords.yml`'s header — `any_errors_fatal` does
+      not cover unreachable hosts, deliberately, because making it fatal would let this
+      radio block hardening the other thirteen.
 - [x] **`gitlab-1` — ANSWERED 2026-09-05, and the answer was already written down.**
       Not an omission: the exclusion is deliberate, and `inventory/hosts.yml` has carried
       the reason all along, immediately below the group membership I read —

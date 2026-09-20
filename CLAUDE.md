@@ -26,6 +26,14 @@ Read this before acting. Full context is in `docs/` (start with `ARCHITECTURE.md
   `git status` ran on the H4, which reported `nothing added to commit` — accurately, and
   about a different set of files. A clean `git status` in one checkout says nothing about
   work in progress in the other.
+- **A guard exists for half of this: `scripts/install-run-only-hook.sh`.** Run it once in
+  the H4 checkout and `git commit` there is refused with a message saying why
+  (`--no-verify` overrides). Be clear about what it does not stop: `git reset --hard`
+  and `git checkout -- <file>` discard uncommitted work with no hook to intercept them,
+  and that is how edits were lost twice on 2026-09-19/20 — once by a reset in the
+  Windows checkout before a branch existed, once by running the branch commands on the
+  H4 by mistake and redoing them on Windows. Git has no pre-reset hook. The habit that
+  actually works is to create the branch FIRST and edit second.
 - The same split produced two envelope scripts differing only by hyphen versus underscore
   (`print-offline-envelope.sh` shipped; `print_offline_envelope.sh` sat unreferenced on
   the H4's local `main` for two days). Before concluding work is missing, check
