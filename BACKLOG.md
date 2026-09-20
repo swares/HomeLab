@@ -2185,6 +2185,44 @@ right answer in one line.
       playbook's own `The break-glass cache must still match Vault` assert answers this
       under `--check`, writing nothing — it has been skipping only because the fetch
       returned nothing.
+**The check that found this was itself broken — corrected 2026-09-19, second attempt.**
+`The break-glass cache must still match Vault` rebuilt the hash in Jinja and compared
+strings:
+
+```
+swares_password | password_hash('sha512', hash.split('$')[2]) == hash
+```
+
+Ansible's `password_hash` uses passlib, whose default for `sha512_crypt` is **656000**
+rounds, and which writes them into the output:
+
+```
+'testpw' | password_hash('sha512', 'abcdefghijklmnop')
+  -> $6$rounds=656000$abcdefghijklmnop$vTH03Fw9...
+```
+
+`sync-vault-to-ansible-vault.sh` uses `sha512_crypt.using(rounds=5000)`, which omits the
+field. The two strings differ in a section unrelated to the password, so the comparison
+was false for every possible input. **It reported a stale break-glass envelope on a lab
+where nothing was known to be wrong, and that false finding was acted on** — the
+conclusion "Vault is stale, the envelope is authoritative" was drawn from a check that
+could not pass. The `.split('$') | length == 4` guard made it worse by passing: it
+validated the *stored* hash, which is four-part, not the reconstructed one.
+
+Rewritten to never reconstruct the hash. Verifying a password against a crypt hash
+requires neither the salt nor the rounds — pass the whole stored hash as the salt and
+the C library parses its own format: `crypt.crypt(plaintext, stored) == stored`.
+Confirmed against both shapes this lab produces (correct → MATCH, wrong → DIFFER,
+trailing whitespace → DIFFER), with values passed over stdin so neither appears in `ps`,
+and a second assert that the probe *ran* — rc≠0 (e.g. `crypt` removed in Python 3.13+)
+must not read as a pass.
+
+**The lesson is the one already in CLAUDE.md, missed while quoting it.** The algorithm
+was verified with Python's `crypt` in a scratch environment; the implementation Ansible
+would actually call was never tested. One `ansible localhost -m debug -a "msg={{ 'x' |
+password_hash('sha512','abcdefghijklmnop') }}"` — a dummy password, no secret — would
+have shown `rounds=656000` before any of it was believed.
+
 - [ ] **Audit the other Vault-consuming playbooks for the same pattern.** Any task with
       `failed_when: false` + `no_log: true` and a `when:` guard downstream that treats
       absence as "skip" can hide a total failure as a silent fallback. `backup-cloud.yml`
