@@ -2117,6 +2117,32 @@ playbook has tasks for the password, the root lock, `PasswordAuthentication` and
 `PubkeyAuthentication`, and none for this. Now set to `prohibit-password` in the same
 drop-in.
 
+**`sshd -T` output is not stable across OpenSSH versions — TWO ways, both found by the
+dry run before the real one.** Neither is a bug in this lab; both would have aborted the
+rollout partway.
+
+1. **Keyword case.** Older OpenSSH lowercases every keyword; newer prints canonical
+   capitalisation. `opi-zero2w-2` matched nothing against lowercase literals and
+   reported an empty settings line.
+2. **`without-password` vs `prohibit-password`.** One enum value, two names; which one
+   is printed depends on the version. Measured with no drop-in installed anywhere:
+
+   ```
+   h4-core, n150-1/2, rpi4b, rpi5, gitlab-1, octopi-dns, opi-zero2w-1
+     -> permitrootlogin without-password
+   opi-zero2w-2 (newer)
+     -> permitrootlogin prohibit-password
+   ```
+
+   The drop-in writes `prohibit-password`, so an assert demanding that literal would
+   have failed on twelve hosts — starting with `h4-core`, which under
+   `any_errors_fatal` aborts the play after that host's password, drop-in and sshd
+   restart had already been applied. One-fourteenth done, and the rest untouched.
+
+Both were asserted from a single sample of a format that varies. `sshd -T` is still the
+right thing to read — it is the only source that caught §2.15 at all — but its *output*
+needs normalising and its synonyms accepting, and the dry run is what surfaced that.
+
 - [ ] **Apply it.** `--check` first: the new `post_tasks` debug makes a dry run print
       each host's effective settings, so it doubles as the fleet audit that found this.
 - [ ] **`opi-zero2w-4` appears nowhere in `CLAUDE.md`'s fleet list**, which names `-1`,
