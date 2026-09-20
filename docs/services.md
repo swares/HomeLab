@@ -17,8 +17,8 @@ Everything the design implies, so you can tick what's needed and spot gaps. Stat
 | Vault (secrets / PKI) | ✓ | RPi 5 (.128) | auto-unseal via `vault-unseal.service` on H4; `secret/lab/*` for cluster secrets |
 | External Secrets Operator | ✓ | k3s | Vault → k8s Secrets; all namespaces using ClusterSecretStore `vault-backend` |
 | cert-manager + lab CA | ✓ | k3s | `lab-ca` ClusterIssuer (self-signed root); signs `*.apps.lab.home.arpa` TLS certs |
-| NAS (NFS / SMB) | ✓ | H4 (.160) | `smbd` + `nfs-kernel-server`; **do not restart** |
-| restic backups | ✓ | H4 (md1 8TB → md0 ~5.45TB) | NAS + Immich library daily; etcd weekly; offsite via `backup-offsite.timer` |
+| NAS (NFS) | ✓ | H4 (.160) | `nfs-kernel-server` — the **only** export path; **there is no Samba on this box** (measured 2026-09-02: `LoadState=not-found`, nothing on 139/445 — BACKLOG §6.13). **Do not restart** |
+| restic backups | ✓ | H4 (md1 8TB → md0 ~5.45TB) | NAS + Immich library daily; etcd weekly; offsite fires from `OnSuccess=backup-offsite.service` on `backup-nas` at **01:30**, not from `backup-offsite.timer` — that timer is deliberately disabled (BACKLOG §1.9) |
 | Minio (object store) | ✓ | k3s · minio namespace (n150-1) | S3-compatible; `minio.apps.lab.home.arpa` (API) + `minio-console.apps.lab.home.arpa`; `tofu-state` bucket holds OpenTofu state; creds from Vault `secret/lab/minio` |
 | smartd / mdadm monitor | ✓ | H4 | SMART 199 + media attrs; email + mdadm alerts on degraded mirror |
 | Grafana | ✓ | k3s | `grafana.apps.lab.home.arpa` |
