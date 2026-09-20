@@ -2258,6 +2258,35 @@ have shown `rounds=656000` before any of it was believed.
 
 ---
 
+### 2.16 `xu3-1` runs Ubuntu 16.04 — **found 2026-09-20**
+
+```
+xu3-1   OpenSSH_7.2p2 Ubuntu-4ubuntu2.10, OpenSSL 1.0.2g  1 Mar 2016
+```
+
+Every other host in the fleet is OpenSSH 8.9 → 10.5. This one is from 2016, on xenial,
+out of standard support since April 2021 and receiving no security updates.
+
+It surfaced while fixing something else: `xu3-1` was the only host where the §2.15
+hardening drop-in failed, because `Include` arrived in OpenSSH **7.3** and this sshd
+cannot parse the directive at all. That is a symptom. The finding is the OS.
+
+It is also the host with `permitrootlogin yes` and an eight-year-old OpenSSL. It is a
+build agent, so the blast radius is smaller than a cluster node — but it is on the same
+/24 as Vault, the k3s control plane and the NAS, and it holds the lab user's password
+like every other host.
+
+The §2.15 fix handles it (a `blockinfile` at the top of `sshd_config`, which is
+authoritative precisely because nothing includes anything there), so this is not
+blocking. The question is whether an EOL build agent should exist at all.
+
+- [ ] **Decide: rebuild, retire, or accept with a documented reason.** "The XU3 is a
+      build agent" (CLAUDE.md) explains what it does, not why it is nine years behind.
+- [ ] If accepted, it needs an explicit boundary — at minimum it should not hold
+      credentials that reach anything else.
+
+---
+
 ## 3. Monitoring that cannot fire
 
 *The theme of the 08-07 session. These are the remaining instances.*
