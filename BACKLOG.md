@@ -5900,6 +5900,29 @@ The rule the tool now carries: *every marker must describe the entry's subject, 
 activity performed on it.* A missed orphan is cheaper than a false one, because a false
 one teaches people to ignore the report.
 
+**Kept from the hand-counted version, because it is the worked example that justifies the
+script.** Before `backlog-audit.py` existed, reconciling round 2 by hand produced a
+disagreement that had to be chased rather than rounded:
+
+```
+raw hand count                                          17
+  less §7.y's own follow-ups (new work, not orphans)    -2
+  less three MISATTRIBUTED items                        -3
+true orphans                                            12
+```
+
+Those three were not orphans and never were. **§5 and §9 hold their items as bullets
+directly under `## N.` with no `### N.M` entry**, so any parser tracking "the last `###`
+seen" assigns them to whichever entry came before — §5's two landed under §4.17, §9's one
+under §3.12. Anyone auditing by eye would have gone looking for items in entries that do
+not contain them.
+
+The script reports that class as `unowned` instead of misfiling it, which is why its
+count and this entry's now agree. The underlying structural problem is unchanged and is
+the first follow-up below: §5 and §9's contents are invisible to any per-entry view,
+which is the same defect as the 17 un-checkboxed bullets seen from the other side — those
+items have a box and no owner, these have an owner and no box.
+
 - [ ] **Give §5 and §9 proper `### N.M` entries**, so every checkbox has an owning entry
       and the `unowned` count goes to zero. Cheap, and it makes this file auditable —
       which, on the evidence that a five-line script found 25 stale items nobody had
