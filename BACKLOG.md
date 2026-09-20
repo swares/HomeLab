@@ -1163,8 +1163,8 @@ on the hot tier (`/dev/vg_microshift/lv_nas`) — a stable LVM path, deliberatel
 
       So the numbers cannot move at assembly. The caution below still stands for anyone
       editing that file — writing wrong `ARRAY` lines is its own way to lose an array —
-      but the work was done and never ticked. Found in the 2026-09-20 orphan sweep (§7.y).
-      Note the two entries carry different `name=` forms, `odroid-nas.wares.com:1` versus
+      but the work was done and never ticked. Found by the §7.y orphan sweep. Note the
+      two entries carry different `name=` forms, `odroid-nas.wares.com:1` versus
       `odroid-nas:0`; cosmetic, since assembly matches on UUID.
 
 ### 1.5 ~~Nothing ever trims the cold-sec copy repo~~ — **FIXED, confirmed 2026-08-21**
@@ -1485,9 +1485,27 @@ fresh-host seed. Do not "fix" the divergence by templating the file.
       touch it. Leaving it undecided is how it got here.
 - [ ] `secret/lab/pihole` version 1 (created 2026-07-17 by the `root` actor, before the
       root token was revoked) held a key named `password` — plaintext, presumably for
-      `tofu/dns`'s `TF_VAR_pihole_password`. It survives in kv2 history. Establish whether
-      anything reads it, then decide whether a plaintext Pi-hole password should still be
-      in a Vault that serves HTTP in the clear (§2.6).
+      `tofu/dns`'s `TF_VAR_pihole_password`. It survives in kv2 history.
+
+      **"Establish whether anything reads it" — answered 2026-09-20: nothing does.**
+
+      - Version 1 holds exactly one key: `['password']`. Read back by key NAME only,
+        never by value.
+      - The only live reader of `secret/lab/pihole` is `ansible/playbooks/dns.yml`, and
+        it reads **`web-pwhash`** (lines 79, 112) — a different key entirely.
+      - The presumed consumer, `tofu/dns`, does not read Vault at all. It takes
+        `TF_VAR_pihole_password` from the environment (`variables.tf:7`,
+        `terraform.tf:45`).
+      - And that module **cannot be applied**. `tofu/dns/main.tf:37` records why: the
+        `ryanwholey/pihole` provider is Pi-hole v5 only and the lab runs v6. The live
+        record is set by `ingress_vip` in Ansible instead.
+
+      So the plaintext is read by nothing, and its only plausible consumer has been
+      unusable since the v6 upgrade. **What remains is a decision, not an investigation:**
+      `vault kv destroy -versions=1 secret/lab/pihole` removes it from kv2 history and is
+      irreversible, which is why it is not done here. The §2.6 question — whether a
+      plaintext password belongs in a Vault that serves HTTP in the clear — is the same
+      decision viewed from the other end.
 - [x] **Done — merged as #485**, `fix(dns): match pihole config modes to the host; git was
       looser than reality`. The `--check` caught the playbook wanting to *widen* two
       permissions the hosts had tighter (`/etc/pihole` 0755→0775, `lab-clients.sql`
@@ -3012,16 +3030,16 @@ all**. The check had two ways to produce a zero and only one was accounted for.
 `k3s_server:k3s_agents`, then verifies by what is *listening* rather than by what the
 package manager said, and warns by name if a host process holds 9100 on a cluster node.
 
-- [x] **Verified 2026-09-20 at the source.** The H4's exporter is producing
-      **45** `node_systemd_unit_state` series matching `backup-*`, read from
+- [x] **Verified 2026-09-20 at the source.** The H4's exporter is producing **45**
+      `node_systemd_unit_state` series matching `backup-*`, read from
       `localhost:9100/metrics` on the box itself. Those feed `LabBackupUnitFailed` on the
       one host where backups run.
 
       Read at the exporter rather than in Prometheus deliberately: a Prometheus query
-      answers "is the target up *and* scraping *and* retaining", three questions at once,
+      answers "is the target up *and* scraping *and* retaining" — three questions at once,
       and §3.14 has already shown retention here is shorter than configured. The exporter
-      answers the one that was asked — are the series being produced at all — and a
-      non-zero count is a number only the work actually happening can produce.
+      answers the one that was asked, are the series produced at all, and a non-zero count
+      is a number only the work actually happening can produce.
 
 ### 3.6 `.github/workflows/sync-check.yml` performs no sync check
 `:17-30` — named `Post-merge notice`, does nothing but `echo`, because hosted runners
@@ -5203,12 +5221,21 @@ items in the sweep, and none of them was work anyone could do:
 
 **Open, and not about caching:**
 
-- [ ] **Does `immich-machine-learning:v2.7.5` have an arm64 manifest at all?** It is cached
-      only on h4-core (amd64) and has therefore never run on an opi5pro. Nothing constrains
-      it by architecture, so if it reschedules onto an arm64 node and no manifest exists it
-      fails regardless of what is cached. `home-assistant` and `immich-server` are proven
-      multi-arch by their presence on opi5pro-2. Answer it with `k3s ctr images pull` on an
-      arm64 node.
+- [x] **Yes — answered 2026-09-20 by asking the registry, not a node.**
+      `ghcr.io/immich-app/immich-machine-learning:v2.7.5` publishes:
+
+          linux/amd64
+          linux/arm64
+          unknown/unknown  ×2   (buildx attestations — provenance and SBOM, not platforms)
+
+      So it can schedule on an opi5pro. The architecture worry is closed; what remains is
+      the generic caching point this entry is about — the image is not *present* there, so
+      a reschedule needs a working pull.
+
+      Answered against the registry rather than `k3s ctr images pull` on an arm64 node, as
+      the entry suggested, because a pull would also have **cached it** — changing the
+      thing being measured. An anonymous ghcr token and a manifest-list `Accept` header
+      read the index without moving a byte of image data.
 - [ ] **`busybox:1.38` keeps turning up.** It is the Home Assistant init container, it is
       the workload exploiting §4.10's Kyverno resource-limits hole, and it is cached on one
       node. Three separate entries, one container.
@@ -5470,13 +5497,13 @@ and a reminder that a citation landing does not make the sentence around it true
           sda  199 UDMA_CRC_Error_Count  0x0032  200  200  000  Old_age  Always  -  0
           sdb  199 UDMA_CRC_Error_Count  0x003e  200  200  000  Old_age  Always  -  0
           sdc  199 UDMA_CRC_Error_Count  0x0032  200  200  000  Old_age  Always  -  0
-          sdd  199 UDMA_CRC_Error_Count  0x0032  …                                -  0
+          sdd  199 UDMA_CRC_Error_Count  0x003e  200  200  000  Old_age  Always  -  0
 
       The entry offered two possibilities — "either resolved and undocumented, or a lost
       thread." It was the first. Checked all four rather than the `sda sdb` the entry
       named, since the cold tier is two mirrors, not one.
 
-      The cost of leaving this open was not the disks; it was that "unresolved H4 CRC
+      The cost of leaving this open was never the disks. It was that "unresolved H4 CRC
       fault" sat in `docs/STANDUP.md` as an open hardware concern for weeks, and one
       command ends it.
 
@@ -5820,57 +5847,89 @@ rather than a count:
 Eight of sixteen are a single command away. They have been open for weeks because nobody
 had a list saying so.
 
-**Round 2, same day — five of those eight run, four closed:**
+**Round 2, same day — all eight run, seven closed:**
 
 ```
-§1.4  mdadm ARRAY UUIDs     already pinned, both arrays          -> done
-§6.12 UDMA_CRC              all four disks raw 0, 200/200        -> done
-§3.15 node_exporter series  45 backup-* series at :9100/metrics  -> done
-§2.13 token in history      grep -c = 0 in both histories        -> done
-§2.1  pihole app_pwhash     present on BOTH resolvers            -> confirmed, still open
+§1.4  mdadm ARRAY UUIDs     already pinned, both arrays              -> done
+§6.12 UDMA_CRC              all four disks raw 0, 200/200            -> done
+§3.15 node_exporter series  45 backup-* series at :9100/metrics      -> done
+§2.13 token in history      grep -c = 0 in both histories            -> done
+§4.17 immich arm64          linux/arm64 published; worry closed      -> done
+§4.17 busybox:1.38          one reference, home-assistant:53         -> done
+§2.1  kv v1 `password`      read by NOTHING; tofu/dns can't run      -> done
+§2.1  pihole app_pwhash     present on BOTH resolvers                -> confirmed, open
 ```
 
-Four of the five were **already true and never recorded**. Nobody had run the command,
+**Seven of the eight were already true and never recorded.** Nobody had run the command,
 so the entries aged as though the work were outstanding — `docs/STANDUP.md` carried
-"unresolved H4 CRC fault" as an open hardware concern for weeks, and the disks had zero
-errors the whole time.
+"unresolved H4 CRC fault" as an open hardware concern for weeks while all four disks sat
+at zero errors.
 
-The fifth is the instructive one. Measuring `app_pwhash` confirmed the problem rather
-than closing it: the checkbox was phrased as a *finding*, not an action, so no amount of
-checking could tick it. Rewritten as the decision it actually needs. **A backlog item
-phrased as an observation cannot be completed** — that is the §4.17 lesson again, in a
-subtler form, and worth watching for in the remaining twelve.
+Two answered better than the entry proposed. §4.17 suggested `k3s ctr images pull` on an
+arm64 node — which would have **cached the image**, changing the thing being measured; the
+registry index answers it without moving a byte. §2.13 said `grep -n`, which prints the
+token it is looking for; `grep -c` answers the same question without displaying it.
 
-Orphans: 16 → **12**. Of those, three still need one command (§3.9 chart audit,
-§4.17 immich arm64 manifest, §2.1 Vault kv v1), and `busybox:1.38` resolved to a single
-reference — `gitops/workloads/home-assistant/deployment.yaml:53`.
+The eighth is the instructive one. Measuring `app_pwhash` *confirmed* the problem rather
+than closing it, because the checkbox was phrased as a **finding, not an action** — no
+amount of checking could ever tick it. Rewritten as the decision it needs. **A backlog
+item phrased as an observation cannot be completed**, which is the §4.17 conditions
+lesson in a subtler form and worth watching for in what remains.
 
-**COUNT THE FILE CAREFULLY — a naive parser reports 17, and three of those are phantom.**
-Reconciling round 2's result against the file disagreed, so the difference was chased
-rather than rounded:
+**This is now checked by script, not by hand: `scripts/backlog-audit.py`.** The counting
+below was done with it, and the numbers in this entry are its output rather than
+arithmetic. It also resolves the miscount noted above — §5 and §9 keep their items as
+bullets directly under `## N.` with no `### N.M` entry, so a parser tracking the last
+heading misattributes them; the script reports those as `unowned` rather than filing them
+under whichever entry happened to precede.
 
 ```
-raw parser count                                        17
-  less §7.y's own two follow-ups (new work, not orphans) -2
-  less three MISATTRIBUTED items                         -3
-true orphans remaining                                  12
+orphans   11     open boxes inside entries titled as complete
+unowned    3     checkboxes with no owning entry (the §5/§9 shape)
+unboxed   17     section-level prose bullets that can never be ticked
 ```
 
-The misattribution is a real defect in how this file is structured, not in the counting.
-**§5 and §9 hold their items as bullets directly under `## N.` with no `### N.M` entry.**
-Any parser tracking "the last `###` seen" therefore assigns them to whichever entry
-happened to come before — here §5's two landed under §4.17, and §9's one under §3.12.
-They are not orphans and never were.
+**That 11 was 15 until the script was corrected, and the correction is worth recording.**
+`SWEPT` was in the tool's closed-marker list, so this entry — titled SWEPT because a
+sweep happened — counted as complete, and its four legitimate follow-ups were reported
+as orphans. The prose here said 13 while the script said 15, which is how it was caught:
+**an entry that disagrees with its own auditing tool is the defect this entry is about,
+committed inside it.**
 
-Two consequences. Anyone auditing this file by script will chase three items that do not
-exist, in entries that do not contain them. And §5 and §9's contents are invisible to any
-per-entry view — which is the same problem as the 17 un-checkboxed prose bullets already
-noted below, from the other direction: the items exist but have nowhere to belong.
+The rule the tool now carries: *every marker must describe the entry's subject, not an
+activity performed on it.* A missed orphan is cheaper than a false one, because a false
+one teaches people to ignore the report.
 
-- [ ] **Give §5 and §9 proper `### N.M` entries**, so every checkbox has an owning entry.
-      Cheaper than it sounds and it makes the file scriptable, which — on the evidence of
-      this sweep, where a five-line script found 25 stale items no one had noticed — is
-      worth more than the tidiness.
+**Kept from the hand-counted version, because it is the worked example that justifies the
+script.** Before `backlog-audit.py` existed, reconciling round 2 by hand produced a
+disagreement that had to be chased rather than rounded:
+
+```
+raw hand count                                          17
+  less §7.y's own follow-ups (new work, not orphans)    -2
+  less three MISATTRIBUTED items                        -3
+true orphans                                            12
+```
+
+Those three were not orphans and never were. **§5 and §9 hold their items as bullets
+directly under `## N.` with no `### N.M` entry**, so any parser tracking "the last `###`
+seen" assigns them to whichever entry came before — §5's two landed under §4.17, §9's one
+under §3.12. Anyone auditing by eye would have gone looking for items in entries that do
+not contain them.
+
+The script reports that class as `unowned` instead of misfiling it, which is why its
+count and this entry's now agree. The underlying structural problem is unchanged and is
+the first follow-up below: §5 and §9's contents are invisible to any per-entry view,
+which is the same defect as the 17 un-checkboxed bullets seen from the other side — those
+items have a box and no owner, these have an owner and no box.
+
+- [ ] **Give §5 and §9 proper `### N.M` entries**, so every checkbox has an owning entry
+      and the `unowned` count goes to zero. Cheap, and it makes this file auditable —
+      which, on the evidence that a five-line script found 25 stale items nobody had
+      noticed, is worth more than the tidiness.
+- [ ] **Wire `backlog-audit.py --strict` into CI** once `unowned` is zero. It already
+      exits 1 on orphans or unowned items; the only reason not to gate on it today is
+      that the file would fail.
 
 - [ ] **Give §7 and §9's prose bullets checkboxes** — 17 items with no box at all,
       invisible to any count and impossible to mark done. §9 is titled "Small, live,
