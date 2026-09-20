@@ -2051,7 +2051,7 @@ configured.
 
 ---
 
-### 2.15 The k3s control plane accepted SSH passwords, and the playbook said it didn't — **FIXED 2026-09-19, not yet applied**
+### 2.15 The k3s control plane accepted SSH passwords, and the playbook said it didn't — **APPLIED 2026-09-20**
 `ansible/playbooks/rotate-passwords.yml:198-212` (as it was)
 
 `sshd -T` across the fleet, 2026-09-19:
@@ -2143,12 +2143,34 @@ Both were asserted from a single sample of a format that varies. `sshd -T` is st
 right thing to read — it is the only source that caught §2.15 at all — but its *output*
 needs normalising and its synonyms accepting, and the dry run is what surfaced that.
 
-- [ ] **Apply it.** `--check` first: the new `post_tasks` debug makes a dry run print
-      each host's effective settings, so it doubles as the fleet audit that found this.
-- [ ] **`opi-zero2w-4` appears nowhere in `CLAUDE.md`'s fleet list**, which names `-1`,
+- [x] **Applied 2026-09-20. Fourteen hosts, zero failures, and `The daemon must agree
+      with the drop-in` passed on every one.** That assert had never executed before
+      this run — it is gated on `not ansible_check_mode`, so every dry run skipped it.
+      Its first execution was the rollout.
+
+      Rolled out in two steps rather than one, and the first step earned its keep:
+
+      - `--limit 'localhost,xu3-1'` — a build agent, the cheapest host to break, and the
+        only one on the `blockinfile` path. It failed immediately on **"Destination
+        directory /etc/ssh/sshd_config.d does not exist"**, which is §2.16. Three
+        `--check` runs had reported that task `changed` on that host, because `copy` in
+        check mode does not verify the destination directory exists. Only a real run on
+        one host could have found it, and finding it on `h4-core` under
+        `any_errors_fatal` would have stopped the play after the control node's sshd had
+        already been restarted.
+      - Then the full fleet, once `xu3-1` passed.
+
+      `xu3-1`'s second real run also demonstrated idempotence: `Harden sshd directly:
+      ok`, no sshd restart, `changed=1` — the password task alone, which changes every
+      run because `password_hash('sha512')` salts randomly. See the open item in §2.15b.
+
+      **The control plane no longer accepts SSH password authentication.** `h4-core`,
+      `n150-1` and `n150-2` were `passwordauthentication yes` for as long as anyone can
+      establish, while the task claiming to disable it reported `ok`.
+- [x] **`opi-zero2w-4` appears nowhere in `CLAUDE.md`'s fleet list**, which names `-1`,
       `-2` and `-3` only. A host nobody wrote down is a plausible reason no playbook
       had ever reached it — it was the only host needing all four changes.
-- [ ] **`opi-zero2w-2` returned rc=1 from `sshd -T`** and looked like a broken config.
+- [x] **`opi-zero2w-2` returned rc=1 from `sshd -T`** and looked like a broken config.
       It was `/usr/sbin` missing from the non-login `PATH`; with the full path it
       returns rc=0 and is correctly hardened already. Recorded because the control cost
       one command and prevented a second false finding in the same hour. It also runs a
@@ -2276,9 +2298,16 @@ build agent, so the blast radius is smaller than a cluster node — but it is on
 /24 as Vault, the k3s control plane and the NAS, and it holds the lab user's password
 like every other host.
 
-The §2.15 fix handles it (a `blockinfile` at the top of `sshd_config`, which is
-authoritative precisely because nothing includes anything there), so this is not
-blocking. The question is whether an EOL build agent should exist at all.
+The §2.15 fix handles it — a `blockinfile` at the top of `sshd_config`, authoritative
+precisely because nothing includes anything there. **Applied and verified 2026-09-20**:
+`sshd -T` on that host now reports `permitrootlogin without-password;
+pubkeyauthentication yes; passwordauthentication no`, and a second run left sshd
+untouched, so the path is idempotent. Note it prints `without-password` where every
+newer sshd prints `prohibit-password` — same setting, and the reason the assert accepts
+both.
+
+So the hardening is not blocking. The question is whether an EOL build agent should
+exist at all.
 
 - [ ] **Decide: rebuild, retire, or accept with a documented reason.** "The XU3 is a
       build agent" (CLAUDE.md) explains what it does, not why it is nine years behind.
