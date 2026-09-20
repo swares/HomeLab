@@ -1066,8 +1066,42 @@ listing."
 
 **To do:**
 
-- [ ] `git log -- gitops/workloads/lldap/backup-cronjob.yaml` across 08-04 → 08-19 and
-      identify what changed. The answer is in git even though it is nowhere else.
+- [x] **Run 2026-09-20. Three commits touched that file in the window, all on 08-02/08-04,
+      and nothing else until the repair:**
+
+          06be6c3  08-02  Fix/lldap (#328)          + activeDeadlineSeconds: 1800
+                                                    + backoffLimit: 2
+          ddd9b0c  08-04  stop installing restic at runtime (#348)   67 ins / 18 del
+          a38d01c  08-04  stop installing restic at runtime (#349)    7 ins /  1 del
+          ----- 15-day gap, no commits -----
+          816800f  08-19+ soft-mount the lldap restic repo (§1.8) + alert on CronJobs
+                          that never succeed (§3.5)  (#561)
+
+      `ddd9b0c` is the substantive one. Before it, the job ran `apk add --no-cache restic`
+      at container start; its own new comment records why that was removed:
+
+          WARNING: fetching .../aarch64/APKINDEX.tar.gz: TLS: unspecified error
+            restic (no such package): required by: world[restic]
+
+      — restic was not missing, the package index fetch failed, so apk had nothing to
+      install from. It was replaced by two stock images with a `pg-dump` initContainer.
+
+      **`a38d01c`, the same day, found the job's own verification step was lying.** It
+      ran `restic snapshots --tag lldap --last 5`; restic had deprecated `--last`, which
+      no longer takes a count, so the `5` was parsed as a **snapshot ID**, prefix-matched
+      `59a16050`, printed one unrelated snapshot, and **silently ignored `--tag`**:
+
+          Flag --last has been deprecated, use --latest 1
+          Ignoring "filters": explicit snapshot ids are given
+
+      So during the period in question the job's self-check could not have reported a
+      missing lldap backup even had it looked. Same family as every §2.15 finding: the
+      thing doing the checking was reporting on something else.
+
+      **What this does NOT establish** is causation. The window contains exactly one
+      substantive change and the next change is the §1.8 soft-mount repair, which is
+      suggestive — but the pod history that would prove it is gone, and [the item below]
+      exists precisely to stop that inference being recorded as fact.
 - [ ] Whatever broke it, add the failure mode to the CronJob's comments — this is the
       second lldap backup outage in a month (§1.8 was the first) and both were found by
       accident.
@@ -1442,9 +1476,11 @@ fresh-host seed. Do not "fix" the divergence by templating the file.
       `tofu/dns`'s `TF_VAR_pihole_password`. It survives in kv2 history. Establish whether
       anything reads it, then decide whether a plaintext Pi-hole password should still be
       in a Vault that serves HTTP in the clear (§2.6).
-- [ ] The `--check` also caught the playbook wanting to *widen* two permissions the hosts
-      had tighter (`/etc/pihole` 0755→0775, `lab-clients.sql` 0640→0644). Git was wrong,
-      the hosts were right; corrected in `fix/pihole-config-modes`.
+- [x] **Done — merged as #485**, `fix(dns): match pihole config modes to the host; git was
+      looser than reality`. The `--check` caught the playbook wanting to *widen* two
+      permissions the hosts had tighter (`/etc/pihole` 0755→0775, `lab-clients.sql`
+      0640→0644). Git was wrong, the hosts were right. Ticked in the 2026-09-20 orphan
+      sweep — it had been done for weeks and never marked.
 
 Original finding retained below.
 
@@ -3124,7 +3160,9 @@ Journal streams now carry both labels on every node, e.g.
 
 - [x] **Remove the stray promtail from n150-1/n150-2** — done 2026-08-21 via `ansible/playbooks/promtail-remove-cluster.yml`. Verified afterwards by content: `{job="node-journal", hostname="n150-1"}` still returns fresh entries with promtail gone, so Alloy genuinely covers all five nodes. That was the real test — until then those two nodes' journal data came entirely from the stray shipper, masking whether the Alloy fix worked there at all.
 - [ ] Consider whether other Helm `valuesObject` blocks in `gitops/apps/` contain invented keys. Sixteen Applications use inline values; nothing in CI would catch it, since yaml-lint, kubeconform and conftest all pass on syntactically valid nonsense. `helm template --validate` against the real chart would.
-- [ ] §4.15 covers Alloy's ephemeral `storagePath`, found during this work.
+**See also §4.15** — Alloy's ephemeral `storagePath`, found during this work. A
+cross-reference, not a task; it carried a checkbox until the 2026-09-20 sweep, where it
+counted as one of forty-nine "open items" while being nobody's job by construction.
 
 **The lesson worth keeping.** Four independent failures in one config, none of which
 produced an error, a warning, or an unhealthy component — and each masked the next, so
@@ -5129,15 +5167,18 @@ control that established it was `count(kube_pod_info)` -> **93**. Then a deliber
 — a pod pulling `ghcr.io/swares/does-not-exist:v0` in a scratch namespace — reached
 `ImagePullBackOff` and produced the series with the labels the annotations use.
 
-**Revisit if any of these become true:**
+**Revisit if any of these become true.** These are *conditions*, not tasks — deliberately
+written without checkboxes since 2026-09-20, because a checkbox that can never be ticked
+inflates the open count forever. These four accounted for four of the forty-nine open
+items in the sweep, and none of them was work anyone could do:
 
-- [ ] A pull failure actually causes an outage (the alerts exist to tell you).
-- [ ] Any mobile workload stops being `replicas: 1` — coverage gaps matter more when
-      several pods must schedule at once.
-- [ ] docker.io rate limiting starts biting. Anonymous pulls are the current posture and
-      nothing tracks how close the lab runs to the limit.
-- [ ] A node is rebuilt or added. It starts with an empty image store, and every mobile
-      workload that lands on it needs the internet.
+- A pull failure actually causes an outage (the alerts exist to tell you).
+- Any mobile workload stops being `replicas: 1` — coverage gaps matter more when
+  several pods must schedule at once.
+- docker.io rate limiting starts biting. Anonymous pulls are the current posture and
+  nothing tracks how close the lab runs to the limit.
+- A node is rebuilt or added. It starts with an empty image store, and every mobile
+  workload that lands on it needs the internet.
 
 **Open, and not about caching:**
 
@@ -5334,11 +5375,25 @@ All three corrected: `README.md:184-187` now states it plainly and carries its o
 `docs/services.md:122-126` likewise; `docs/STANDUP.md:180-185` splits Track 1 (done) from
 Track 2 (deferred). None of the cited lines still contains a DONE claim.
 
-- [ ] **One uncorrected instance the entry never cited:** `docs/services.md:21` still says
-      "offsite via `backup-offsite.timer`".
+- [x] **Corrected 2026-09-20 — and the line had gone wrong a second time.**
+      `docs/services.md:21` said "offsite via `backup-offsite.timer`". That was false when
+      written (nothing had copied a byte), briefly true after the seed, and false again
+      from 2026-08-29, when §1.9 removed that timer in favour of
+      `OnSuccess=backup-offsite.service` firing from `backup-nas` at **01:30**. So the
+      sentence spent most of its life wrong, in two different ways, and the closing note
+      below — "will be true when the timer is enabled" — describes an outcome the lab
+      deliberately chose against. Anyone debugging offsite at 02:30 on the strength of
+      that line would find nothing, which is close to what happened on 2026-09-19.
+
+      **The adjacent line was wrong too, and nobody was looking for it.** `services.md:20`
+      claimed the NAS exports via "`smbd` + `nfs-kernel-server`". CLAUDE.md has recorded
+      since 2026-09-02 that there is no Samba on that box — `LoadState=not-found`, nothing
+      listening on 139 or 445 (§6.13). Both lines fixed together. A documentation-drift
+      entry that names specific line numbers will not find the false statement sitting
+      next to them.
+
 `README.md:186`, `docs/services.md:119`, `docs/STANDUP.md:183-185` —
-all written while `backup-offsite` had never copied a byte. Now nearly true; will be
-true when the timer is enabled.
+all written while `backup-offsite` had never copied a byte.
 
 ### 6.3 Vault root token documented as a required credential
 `docs/WORKFLOWS.md:118-128`, `docs/SECURITY.md:26`, `docs/BACKUP-RESTORE.md:100` —
@@ -5681,6 +5736,66 @@ SSH CAs and X.509 CAs are different trust roots and should not be conflated),
 - **Archive `TODO-2026-07-14.md`** (25/26 done) and collapse `README.md`'s TODO to a
   pointer at this file.
 
+### 7.y This file's own status was wrong — **SWEPT 2026-09-20**
+
+Counting the checkboxes produced 49 open / 69 done. **25 of the 49 sat inside entries
+whose heading announced completion** — `RESOLVED`, `FIXED`, `ACCEPTED`, or struck
+through. Scanning headings said the work was finished; the boxes said otherwise. That is
+the same defect this file spends 5,000 lines documenting in the infrastructure — a green
+summary over unfinished work — reproduced in the document that records it.
+
+Sweeping them:
+
+```
+                     open   orphans  done
+before  2026-09-20     49        25    69
+after                  40        16    73
+plus the two follow-ups this entry adds below
+                       42        18    73
+```
+
+(That last line is deliberate. The first draft of this table said 40 and the file said 42,
+because the two new checkboxes below are themselves open items. A summary that disagrees
+with the thing it summarises is the defect this entry exists to record, so it is counted
+rather than rounded.)
+
+**Four were already done and never ticked.** §2.1's pihole config modes (merged #485),
+§3.12's dns-group identity (the inventory already had the right shape), §6.2's
+`services.md:21`, and §1.12's git question — which had an answer sitting in `git log` the
+whole time.
+
+**Seven were not tasks.** §4.17 had four *conditions* under a heading that said
+"Revisit if any of these become true", and §3.9 had a cross-reference. A checkbox that
+cannot be ticked inflates the count permanently; those are prose now.
+
+**What the sweep found on the way**, none of which was the thing being looked for:
+`services.md:20` still claimed the NAS exports via `smbd`, eighteen days after CLAUDE.md
+recorded that measured absent (§6.13); `services.md:21` had gone wrong a *second* time
+when §1.9 disabled the offsite timer; and §1.12's `--last 5` discovery — a verification
+step that prefix-matched `5` as a snapshot ID and silently ignored its own `--tag` filter.
+
+**The remaining 16, by what would close them** — so the next pass starts from a map
+rather than a count:
+
+| | n | how it closes |
+|---|---|---|
+| §1.4 mdadm `ARRAY` UUIDs · §3.15 node-exporter series · §6.12 `UDMA_CRC` · §2.13 history scrub · §2.1 `app_pwhash` | 5 | **one command on a host** |
+| §3.9 Helm `valuesObject` audit · §4.17 immich arm64 manifest · §4.17 `busybox:1.38` | 3 | **one repo or registry query** |
+| §1.2 break-glass keypair ×2 · §1.12 CronJob comments | 3 | **real work** |
+| §1.13 unattended-upgrades on etcd voters · §1.12 §3.5 attribution · §2.1 kv v1 plaintext | 3 | **a decision** |
+| §3.17 `opi-zero2w-2` radio · §2.13 rotate at next k3s upgrade | 2 | **physical / time-bound** |
+
+Eight of sixteen are a single command away. They have been open for weeks because nobody
+had a list saying so.
+
+- [ ] **Give §7 and §9's prose bullets checkboxes** — 17 items with no box at all,
+      invisible to any count and impossible to mark done. §9 is titled "Small, live,
+      cheap", which is exactly the category that should close in minutes.
+- [ ] **Ask what `n150-3` (`192.168.1.176`) is.** It is in the inventory, in exactly one
+      group, and appears nowhere in CLAUDE.md's fleet list. Same shape as `opi-zero2w-4`,
+      which turned out on 2026-09-19 to be the only host no playbook had ever reached
+      (§2.15). A machine nobody writes down is a machine nobody configures.
+
 ### 7.x Eight of eleven scripts had no executable bit — **FIXED 2026-09-20**
 
 ```
@@ -5896,10 +6011,12 @@ report and `PLAY RECAP` overstates the fleet by four.
 It also confuses failure attribution: three hosts passed verification in that run, but two
 of them were the same machine, which briefly looked like three independent data points.
 
-- [ ] Decide whether the `dns` group should use the machine names as members
-      (`dns: hosts: [octopi-dns, rpi4b, opi-zero2w-1, opi-zero2w-3]`) rather than defining
-      parallel entries with their own `ansible_host`. That keeps the role grouping and
-      removes the duplicate identity.
+- [x] **Already true — verified 2026-09-20.** The `dns` group lists bare machine names
+      (`octopi-dns`, `rpi4b`, `opi-zero2w-1`, `opi-zero2w-3`) with **no `ansible_host` of
+      their own**; each address is defined once, in `opi_zero2w` / `node_exporter` /
+      `standalone`. Exactly the shape this item asked for. Parsed the inventory rather
+      than grepping it — every host name resolves to one address, no duplicate identities
+      remain. Done at some point and never ticked.
 
 Related: §3.10 and §4.14 — the fleet's identity is inconsistent at the host level too.
 
