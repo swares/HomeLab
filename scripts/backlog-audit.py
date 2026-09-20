@@ -36,15 +36,32 @@ unboxed   A prose bullet in a section that otherwise uses checkboxes. It can
           §9 hold 17 of these, and §9 is titled "Small, live, cheap" — precisely
           the work that should close in minutes.
 
+GATING: AN INVARIANT AND A RATCHET
+----------------------------------
+These are two different kinds of thing and gating them the same way would make
+the check useless.
+
+`unowned` and `unboxed` are **structural invariants**. They should be zero and
+stay zero; a non-zero value means someone added an item the file cannot track.
+`--strict` fails on those, and it is safe to run on every PR.
+
+`orphans` is a **backlog**. It was 25 on 2026-09-20 and is worked down by
+sweeping, which takes measurement and judgement — gating on zero would block
+every unrelated PR until the sweep finished, and the first person blocked would
+delete the check. `--max-orphans N` is a ratchet instead: set it to today's
+count, lower it as entries are swept, and it fails only on regression.
+
 EXIT CODES
 ----------
-0  clean (or no --strict)
-1  --strict and at least one orphan or unowned item
+0  clean, or no gate requested
+1  a requested gate failed
+2  the file does not exist
 
 Usage:
-    scripts/backlog-audit.py                 # summary
-    scripts/backlog-audit.py --list          # every finding, with line numbers
-    scripts/backlog-audit.py --strict        # non-zero exit if orphans exist
+    scripts/backlog-audit.py                  # summary
+    scripts/backlog-audit.py --list           # every finding, with line numbers
+    scripts/backlog-audit.py --strict         # fail on unowned/unboxed (CI-safe)
+    scripts/backlog-audit.py --max-orphans 11 # ratchet; fail only if it grows
     scripts/backlog-audit.py --file X.md
 """
 
@@ -150,7 +167,9 @@ def main() -> int:
     ap.add_argument("--file", default="BACKLOG.md", type=Path)
     ap.add_argument("--list", action="store_true", help="show every finding")
     ap.add_argument("--strict", action="store_true",
-                    help="exit 1 if any orphan or unowned item exists")
+                    help="exit 1 on unowned/unboxed items (structural invariants)")
+    ap.add_argument("--max-orphans", type=int, default=None, metavar="N",
+                    help="exit 1 if orphans exceed N (a ratchet, not a target)")
     args = ap.parse_args()
 
     if not args.file.exists():
@@ -187,10 +206,18 @@ def main() -> int:
     elif r["orphans"] or r["unowned"]:
         print("\n  (--list to see them)")
 
-    if args.strict and (r["orphans"] or r["unowned"]):
-        print("\nFAIL: --strict and the file has orphaned or unowned items.")
-        return 1
-    return 0
+    failed = False
+    if args.strict and (r["unowned"] or r["unboxed"]):
+        print(f"\nFAIL: --strict — {len(r['unowned'])} unowned, "
+              f"{len(r['unboxed'])} unboxed. Every item needs an owning "
+              f"### entry and a checkbox, or nothing can track it.")
+        failed = True
+    if args.max_orphans is not None and len(r["orphans"]) > args.max_orphans:
+        print(f"\nFAIL: orphans {len(r['orphans'])} > --max-orphans "
+              f"{args.max_orphans}. Either sweep one, or an entry heading now "
+              f"claims completion over work that is not done.")
+        failed = True
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

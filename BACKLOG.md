@@ -5244,6 +5244,12 @@ items in the sweep, and none of them was work anyone could do:
 
 ## 5. Scheduled / time-bound
 
+### 5.1 Deadlines and their follow-ups
+
+An owning entry for this section, so its checkboxes belong to something. The table
+and the ESO/`token-admin` narrative below are the content; the actionable items are
+at the end.
+
 | Item | By | Ref |
 |---|---|---|
 | ~~Renew `token-admin` (720h TTL)~~ | ~~2026-09-06~~ | **Decided 2026-08-23: let it lapse.** Nothing automated uses it — see below |
@@ -5750,7 +5756,13 @@ SSH CAs and X.509 CAs are different trust roots and should not be conflated),
 
 ## 7. Repo hygiene
 
-- **There are three checkouts of this repo, and audits traverse all of them.**
+### 7.1 Assorted hygiene items
+
+Same treatment as §9.1 and for the same reason — these eight were prose bullets with
+no owning entry and no checkbox, so nothing could mark them done and no count saw
+them.
+
+- [ ] **There are three checkouts of this repo, and audits traverse all of them.**
   Found 08-09 while grepping for `ldap.yml`, which returned every hit twice:
 
       ~/lab/homelab/homelab                                        H4 working copy
@@ -5775,24 +5787,24 @@ SSH CAs and X.509 CAs are different trust roots and should not be conflated),
   Scope, checked 2026-08-27: **the Windows copy has no `actions-runner/` and no nested
   `HomeLab/`**, so sweeps run there are clean. This bites sweeps run on the H4.
 
-- **`ansible/playbooks/sandbox-vm-update.yml` references `bootstrap-lldap.yml`** in a
+- [ ] **`ansible/playbooks/sandbox-vm-update.yml` references `bootstrap-lldap.yml`** in a
   comment (1 hit, confirmed still present 2026-08-27). That playbook was deleted on
   08-03. Cosmetic, but it is the kind of stale pointer that sends someone looking for a
   file that has not existed for weeks.
 
-- **`Makefile:2` still lists `ldap` in `.PHONY`** though the target was removed on
+- [ ] **`Makefile:2` still lists `ldap` in `.PHONY`** though the target was removed on
   08-09 and the file carries a comment explaining the removal. Harmless; finish the job.
 
-- **`FETCH_HEAD` is tracked in git** — a git internal committed by accident.
-- **Duplicated, drifted CI config under `ansible/`** — `ansible/.gitlab-ci.yml`,
+- [ ] **`FETCH_HEAD` is tracked in git** — a git internal committed by accident.
+- [ ] **Duplicated, drifted CI config under `ansible/`** — `ansible/.gitlab-ci.yml`,
   `ansible/.github/workflows/*`, `ansible/.claude/settings.json`. Only the root copies
   are read; these are dead weight diverging silently.
-- **Mixed ArgoCD `repoURL` schemes** — 12 files use `git@github.com:`, but
+- [ ] **Mixed ArgoCD `repoURL` schemes** — 12 files use `git@github.com:`, but
   `gitops/apps/gitlab-runner.yaml:18,22` uses `https://`. Argo treats these as two
   repos needing two credentials.
-- **`.gitignore` path bug in `ansible/`** (C7) — and note this working copy lives in
+- [ ] **`.gitignore` path bug in `ansible/`** (C7) — and note this working copy lives in
   `Downloads`, so `LAB-URLS.md` and similar travel with any zip or sync of the folder.
-- **Archive `TODO-2026-07-14.md`** (25/26 done) and collapse `README.md`'s TODO to a
+- [ ] **Archive `TODO-2026-07-14.md`** (25/26 done) and collapse `README.md`'s TODO to a
   pointer at this file.
 
 ### 7.y This file's own status was wrong — **SWEPT 2026-09-20**
@@ -5923,13 +5935,36 @@ the first follow-up below: §5 and §9's contents are invisible to any per-entry
 which is the same defect as the 17 un-checkboxed bullets seen from the other side — those
 items have a box and no owner, these have an owner and no box.
 
-- [ ] **Give §5 and §9 proper `### N.M` entries**, so every checkbox has an owning entry
-      and the `unowned` count goes to zero. Cheap, and it makes this file auditable —
-      which, on the evidence that a five-line script found 25 stale items nobody had
-      noticed, is worth more than the tidiness.
-- [ ] **Wire `backlog-audit.py --strict` into CI** once `unowned` is zero. It already
-      exits 1 on orphans or unowned items; the only reason not to gate on it today is
-      that the file would fail.
+- [x] **Done 2026-09-20. `unowned` and `unboxed` are both zero**, via `### 5.1`, `### 7.1`
+      and `### 9.1` — owning entries for three sections that had none.
+
+      **The open count went 42 → 59, and that is the finding, not a side effect.** All
+      seventeen "unboxed" bullets turned out to be real work, not narrative: a duplicated
+      CI config, `FETCH_HEAD` tracked in git, 440 MB of stale etcd files, `rotate sudo
+      passwords on n150-1/n150-2 (exposed 2026-07-18)`. They had no checkbox, so nothing
+      could mark them done, so no count ever saw them. §9 is titled *"Small, live,
+      cheap"* — the section most likely to contain work that closes in minutes was the
+      one least visible.
+
+      A backlog that gets *larger* when you audit it was measuring the wrong thing before.
+
+- [x] **Gating added 2026-09-20 — as two different things, which is the point.**
+      `--strict` alone would have been useless here: it failed on 11 orphans, so putting
+      it in CI would have blocked every unrelated PR until the sweep finished, and the
+      first person blocked would have deleted the check.
+
+          --strict           fails on unowned/unboxed — structural INVARIANTS that
+                             should be zero and stay zero. Safe on every PR.
+          --max-orphans N    a RATCHET. Set it to today's count, lower it as entries
+                             are swept; it fails only on regression.
+
+      Verified in both directions: `--strict` passes now and fails on a synthetic file
+      with a loose checkbox; `--max-orphans 11` passes, `--max-orphans 10` fails.
+
+- [ ] **Add both to CI** — `scripts/backlog-audit.py --strict --max-orphans 11`. Lower the
+      ratchet whenever a sweep closes one. Not wired up here because touching the
+      workflows is its own change, and §7 already carries an entry about duplicated,
+      drifted CI config under `ansible/` that should be settled first.
 
 - [ ] **Give §7 and §9's prose bullets checkboxes** — 17 items with no box at all,
       invisible to any count and impossible to mark done. §9 is titled "Small, live,
@@ -6167,14 +6202,23 @@ Related: §3.10 and §4.14 — the fleet's identity is inconsistent at the host 
 
 ## 9. Small, live, cheap
 
-- **~440 MB of pre-migration files in the etcd snapshot directory** — found during Drill 2c.
+### 9.1 The list — small, live, cheap
+
+Everything in this section lives under one entry so that each item has an owning
+`### N.M` heading and is visible to `scripts/backlog-audit.py`. Before 2026-09-20
+these were prose bullets directly under `## 9.`: they could not be ticked, so they
+never appeared in any count, and a parser tracking the last heading seen filed them
+under whichever unrelated entry happened to precede the section. Nine pieces of real
+work, invisible for months, in a section titled *small, live, cheap*.
+
+- [ ] **~440 MB of pre-migration files in the etcd snapshot directory** — found during Drill 2c.
   `/mnt/cold-8t/k3s-etcd-snapshots/` holds `state-2026-06-25_1645.db` (19 MB),
   `state-2026-06-28_0300.db` (421 MB) and `etcd-2026-06-24_1739-odroid-nas-…`. None match
   the `etcd-snapshot-*` glob that `backup-etcd.sh.j2:98` prunes on, so they have sat there
   since June and will sit there forever. Confirm they are the pre-embedded-etcd sqlite
   state (`backup-etcd.sh.j2:14` mentions the `state.db` rename) and delete.
 
-- `lldap-backup` init container failed once and self-healed; a retry loop around
+- [ ] `lldap-backup` init container failed once and self-healed; a retry loop around
   `pg_dump` would make it deterministic (`TODO-2026-08-03.md:447-452`).
 - [x] **Re-sweep Ansible for `no_log` registers consumed later** — done 08-09.
   All 12 files carrying `no_log` were checked. Results, so this need not be redone:
@@ -6228,11 +6272,11 @@ Related: §3.10 and §4.14 — the fleet's identity is inconsistent at the host 
   playbook nobody runs is harmless right up until someone runs it. Note also
   `ldap.yml:9` silently falls back to the literal `CHANGEME-set-via-vault` (§2.4),
   which is a second reason to remove rather than repair.
-- Confirm each healthchecks.io check's Period/Grace matches
+- [ ] Confirm each healthchecks.io check's Period/Grace matches
   `ansible/playbooks/healthchecks.yml` — set by hand in the UI, nothing enforces it.
-- Delete `/etc/vault.d/vault.hcl.unused` on the H4.
-- Rotate sudo passwords on `n150-1`/`n150-2` (exposed 2026-07-18) — `rotate-passwords.yml`.
-- Pin the Ollama image and give Whisper a versioned tag (Kyverno `disallow-latest-tag`).
+- [ ] Delete `/etc/vault.d/vault.hcl.unused` on the H4.
+- [ ] Rotate sudo passwords on `n150-1`/`n150-2` (exposed 2026-07-18) — `rotate-passwords.yml`.
+- [ ] Pin the Ollama image and give Whisper a versioned tag (Kyverno `disallow-latest-tag`).
 - ~~Investigate Authelia health stuck `Progressing` in ArgoCD~~ — **DONE.** Resolved in
   an earlier session; the leftover PVC has also been removed. The entry survived only
   because it was carried in `README.md` and `docs/HARDWARE.md`, neither of which was
@@ -6255,9 +6299,9 @@ Related: §3.10 and §4.14 — the fleet's identity is inconsistent at the host 
   08-09, so this is deferred rather than fixed. Revisit: if the RSA key turns out to
   be a leftover, delete it from the control node rather than un-pushing it from each
   host, and consider ordering the lookup ed25519-first so it stops propagating.
-- Confirm `*.apps` wildcard answers only `.201`, not also `.160`.
-- `community.general` vs Ansible 2.17.14 version mismatch.
-- Mirror `bitnamilegacy/kubectl` into zot before the archive is withdrawn
+- [ ] Confirm `*.apps` wildcard answers only `.201`, not also `.160`.
+- [ ] `community.general` vs Ansible 2.17.14 version mismatch.
+- [ ] Mirror `bitnamilegacy/kubectl` into zot before the archive is withdrawn
   (`gitops/apps/kyverno.yaml:43-44`); blocked on §4.2.
 
 ---
