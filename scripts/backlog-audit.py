@@ -58,9 +58,18 @@ from pathlib import Path
 # A heading claims completion if it is struck through or carries one of these.
 # Kept explicit rather than clever: a regex that tried to infer "doneness" from
 # prose would be the kind of check that cannot say why it decided something.
+#
+# EVERY MARKER MUST DESCRIBE THE ENTRY'S SUBJECT, NOT AN ACTIVITY PERFORMED ON
+# IT. "SWEPT" was in this list for one revision and was wrong: §7.y is titled
+# SWEPT because a sweep happened, not because its subject is finished, so its
+# legitimate follow-ups were reported as orphans. Two of them, which is how the
+# defect was noticed — the entry's own text said 13 and its own script said 15.
+# If a future marker is ambiguous in that way, leave it out; a missed orphan is
+# cheaper than a false one, because a false one teaches people to ignore the
+# report.
 CLOSED_MARKERS = (
     "RESOLVED", "FIXED", "APPLIED", "ANSWERED",
-    "ACCEPTED", "CLOSED", "DONE", "SWEPT",
+    "ACCEPTED", "CLOSED", "DONE",
 )
 
 RE_SECTION = re.compile(r"^## (?!#)(.+)$")
