@@ -100,6 +100,20 @@ Read this before acting. Full context is in `docs/` (start with `ARCHITECTURE.md
 - Never read aloud, echo, or commit: `/etc/restic/password`, `ansible/.vault_pass`,
   `ansible/files/pull-secret.json`, any kubeconfig or k3s token. These are
   `.gitignore`d — keep it that way.
+- **SSH is key-only now, fleet-wide, and that has bitten once.** §2.15 set
+  `PasswordAuthentication no` everywhere on 2026-09-20; three days later it locked the
+  Windows laptop out of all fourteen hosts, because that laptop had never been given a key
+  and password auth had been carrying it silently. Recovery was the break-glass key, which
+  worked and is finally tested (§1.2). **Workstation keys live in
+  `ansible/files/admin-keys/*.pub`, installed by `ansible/playbooks/admin-keys.yml`** — add
+  them there, never by hand, or a rebuilt host or one returning from downtime will be
+  missing them. `xu3-1` is excluded deliberately (§2.16). Before removing any
+  authentication method, **enumerate who is actually using it**, not what the config says.
+- The break-glass private key belongs offline, in the envelope — not on a workstation. On
+  2026-09-23 it was found in a Windows home directory as `break-glass.txt`, which is
+  `swares` plus `NOPASSWD: ALL` (`bootstrap.yml:41`) on every Linux host. It was also the
+  only way back in that day, so the answer is a tested key plus a working workstation key,
+  not a shredded key and no route.
 
 ## Verify before asserting
 
