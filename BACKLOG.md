@@ -1396,7 +1396,7 @@ the primary from the secondary. Pin it.
 
 ---
 
-### 1.14 Vault had no snapshot for fifteen days — **CAUSE FOUND 2026-09-23; FIX WRITTEN, NOT YET APPLIED**
+### 1.14 Vault had no snapshot for fifteen days — **snapshot restored 2026-09-23; the gap is permanent**
 `ansible/playbooks/backup-vault.yml:4-7` (the header), and the script it deploys
 
 ```
@@ -1448,16 +1448,59 @@ the channel, and a correct alert went nowhere for fifteen days.
       cannot renew.
 - [x] Header recipe corrected: `-orphan`, `-period=768h`, and
       `-field=token | sudo tee … >/dev/null` so the value is never displayed.
-- [ ] **Mint the replacement token and confirm a snapshot lands.** Not done here because
-      it needs an admin token:
+- [x] **Applied and verified 2026-09-23.** A snapshot landed on the cold tier:
 
-          # on rpi5
-          vault token create -orphan -display-name=vault-backup -policy=vault-snapshot \
-            -period=768h -field=token | sudo tee /etc/vault.d/backup-token >/dev/null
-          sudo chmod 600 /etc/vault.d/backup-token
-          sudo systemctl start backup-vault.service
-          # then, on the H4 — the only evidence that counts:
-          ls -lt /mnt/cold-8t/vault-snapshots/ | head -3
+          -rw------- 1 swares swares 74271 Sep 23 19:18 vault-snap-20260923-151859.snap
+          -rw------- 1 swares swares 70680 Sep  8 06:31 vault-snap-20260908-023115.snap
+
+      **The token's properties were checked, not just its existence** — which matters,
+      because a fresh non-orphan token would have produced an identical successful
+      snapshot today and died again in 26 days:
+
+          orphan     true
+          period     768h
+          policies   [default vault-snapshot]
+          ttl        767h41m59s
+
+      `orphan true` is the fix. `period 768h` is the number Vault will actually honour,
+      and `vault token renew -self` in the script rolls it forward nightly so the ceiling
+      is never reached.
+
+      Two verification notes worth keeping, because both nearly produced a false pass:
+
+      - `wc -c` on the token file returned **Permission denied** as `swares` (0600 root),
+        which reads like a missing file if you are moving quickly. `sudo head -c 4` is the
+        cheap discriminator: `hvs.` is a real token, `Erro` means `tee` captured Vault's
+        error message into the file and left something plausibly non-empty that is not a
+        token.
+      - The first `systemctl start` **never ran** — swallowed by a multi-line paste — and
+        `systemctl is-active` reported `failed` from the *previous night's* timer run. A
+        latched failure state is indistinguishable from a fresh one. The journal's newest
+        timestamp is what says whether anything happened.
+
+- [ ] **THE GAP IS PERMANENT, and that is the cost of this entry.** Retention resumed with
+      the job, and `-mtime +30` had not run since Sep 8, so roughly seven snapshots older
+      than thirty days aged out in that single pass (`total 2020` → `total 1004`). The
+      restore timeline is now:
+
+          ~Aug 24 ─── Sep 8   │  ██ 15-day hole ██  │  Sep 23 ───▶
+
+      Vault's state for mid-September does not exist and cannot be reconstructed. Nothing
+      to do about it; recorded so that a future restore attempt does not discover it under
+      pressure. Tick this when the hole has aged out of the 30-day window naturally — on
+      or after **2026-10-23** — at which point the timeline is continuous again.
+
+**The heading deliberately does not say RESOLVED**, and that is the third time today this
+tension has come up. The snapshot is restored; four items below are still open, and three
+of them are not about Vault snapshots at all — they are a token-hygiene audit (§2's
+concern), alert-delivery redundancy (§3's), and journal retention on `rpi5` (§3/§4's).
+
+Calling the entry RESOLVED would have made all four orphans, which is exactly how the
+twenty-five orphans in §7.y were manufactured: an entry gets fixed, its heading says so,
+and the follow-ups it spawned — belonging to other concerns — stay inside it and go
+invisible. **Follow-up work that belongs to a different section should migrate there when
+someone next touches that section.** Until then, an honest heading keeps them countable.
+Only the first item below is genuinely this entry's residue.
 
 - [ ] **Audit every other unattended Vault token for `orphan=False`.** One command, and
       it prints accessors rather than tokens:
