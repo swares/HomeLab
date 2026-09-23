@@ -156,10 +156,34 @@ physical console, and the OPi Zero 2Ws and RPi 3B do not have one — item 8 is 
 route back in. `ansible/playbooks/break-glass-key.yml` installs the public half on every
 Linux host; the private half is generated offline and lives on paper only.
 
-- [ ] **Generate the pair offline** on a machine outside the lab, commit only
-      `ansible/files/break-glass.pub`, run the playbook, then **test it** —
-      `ssh -i ./break-glass -o IdentitiesOnly=yes <user>@192.168.1.160 'id'` — before
-      shredding the file copy. An untested break-glass key is worse than none.
+- [x] **TESTED 2026-09-23, under a real lockout, and it worked.** This item has said
+      *"an untested break-glass key is worse than none"* since August. It stopped being
+      untested the day it was the only way in.
+
+      §2.15 disabled `PasswordAuthentication` fleet-wide on 09-20. On 09-23 the Windows
+      laptop could not log in anywhere:
+
+          no supported authentication method. server sent: public key
+
+      The laptop had never had a key on those hosts — password auth had been carrying it.
+      No shell was open on the H4, so there was no second route. The break-glass key was
+      the only one left, and it answered on all three hosts tried:
+
+          ssh -i ./break-glass -o IdentitiesOnly=yes swares@192.168.1.160 id
+          ssh -i ./break-glass -o IdentitiesOnly=yes swares@192.168.1.42  id
+          ssh -i ./break-glass -o IdentitiesOnly=yes swares@192.168.1.21  id
+          -> uid=1000(swares) … 27(sudo) …   on each
+
+      Three hosts including two control-plane nodes, so this is not one lucky machine.
+      **Key auth is unaffected by `PasswordAuthentication no`**, which is why the
+      break-glass path survived the change that caused the lockout.
+
+      The file copy was shredded afterwards, which is the rest of this item. Worth
+      recording that it existed at all: it was sitting in the Windows home directory as
+      `break-glass.txt` — Notepad's extension — and that file is `swares` plus
+      `NOPASSWD: ALL` (`bootstrap.yml:41`) on every Linux host. Effectively root on the
+      fleet, at rest, on a portable machine. It is also the only reason today ended well,
+      which is the tension this entry lives inside.
 - [ ] Verify the paper transcription by typing it back **from the paper**. Diffing against
       the file proves the file is right, not the paper, and the paper is what you will be
       holding.
@@ -2236,6 +2260,25 @@ needs normalising and its synonyms accepting, and the dry run is what surfaced t
       `n150-1` and `n150-2` were `passwordauthentication yes` for as long as anyone can
       establish, while the task claiming to disable it reported `ok`.
 
+      **IT LOCKED THE WINDOWS LAPTOP OUT OF THE ENTIRE FLEET — 2026-09-23.**
+      `PasswordAuthentication no` removed the only authentication method that laptop had.
+      It had never been given an SSH key; password auth had been carrying it silently, and
+      `ansible/files/` held exactly one public key — the break-glass one — with no
+      mechanism for a workstation key at all.
+
+      This entry checks what the change does to `sshd` in considerable detail and never
+      asks **who was authenticating with a password**. That question is the one that
+      mattered, it costs one command (`grep -c 'sshd.*Accepted password' /var/log/auth.log`
+      or `lastlog`), and nobody asked it — including in review.
+
+      Recovered with the break-glass key, which is now tested for the first time since
+      August (§1.2). Fixed properly by `ansible/playbooks/admin-keys.yml` and
+      `ansible/files/admin-keys/`, so workstation keys are in git and land on any host that
+      is rebuilt or returns from the dead.
+
+      **Before hardening an authentication path, enumerate who is using the method you are
+      about to remove.** Not what the config says — who is actually authenticating.
+
       **One host silently missed the rollout, and that is the part to remember.**
       `opi-zero2w-2` went UNREACHABLE mid-run — `Connection timed out during banner
       exchange` — and the play carried on through the remaining three hosts and
@@ -2482,6 +2525,17 @@ Against: 2 GB RAM, a 2014 SoC, eMMC of unknown wear, and `LAB-DESIGN.md` calls t
 flaky. The Zero 2W spares are 4 GB, 64-bit and on current Debian — but they are WiFi,
 which is the whole problem.
 
+- [ ] **Remove the workstation key that today's recovery pushed to it.** On 2026-09-23 the
+      ad-hoc admin-key push targeted `all:!x86_nodes:!embedded`, which includes `xu3-1`, so
+      the Windows laptop's key is now in `~swares/.ssh/authorized_keys` there.
+      `admin-keys.yml` excludes the host going forward, but exclusion does not remove what
+      is already present:
+
+          ansible xu3-1 -i inventory/hosts.yml -m ansible.posix.authorized_key \
+            -a "user=swares state=absent key='$(cat files/admin-keys/wares-windows.pub)'"
+
+      A key granting `swares` — and therefore `NOPASSWD: ALL` — on a host running OpenSSL
+      1.0.2g is the one place in the lab not to put one.
 - [ ] **Decide: retire, or rebuild onto current Armbian with a real job.** Deferred
       deliberately 2026-09-20 — worth considering a use before powering it off, and the
       DNS-host question above is the one that might justify it.
@@ -3930,6 +3984,19 @@ Grep patterns run under `sudo` land in the journal they are searching.
       profile on `wlan0` to `bg` and re-measure. **Measure before codifying:** prove
       2.4 GHz actually helps on that board before putting it in Ansible, or the repo
       acquires a fix nobody verified.
+
+      **SECOND OCCURRENCE, DIFFERENT BOARD — 2026-09-23.** `opi-zero2w-1` was
+      `UNREACHABLE` with **`No route to host`** on `192.168.1.184` during the admin-key
+      push, so it is the only host in the fleet without the new workstation key. Note the
+      error differs from `-2`'s: a banner-exchange timeout is a slow link, *no route* is a
+      box that is off, hung, or off the network entirely.
+
+      That is **two of the four Zero 2W boards dropping out of fleet-wide changes in four
+      days**, and `opi-zero2w-1` is the DNS **tertiary** resolver. The `dns-*` blackbox
+      probes from §3.3 should have caught it — checking whether they did is the free test.
+      `ansible/playbooks/admin-keys.yml` exists partly because of this: a key pushed by an
+      ad-hoc command leaves a downed host permanently behind, where a committed playbook
+      catches it up whenever it returns.
 
       **FIRST OPERATIONAL COST — 2026-09-20.** Until now this entry rested on signal
       measurements: `-63 dBm`, `87.8 Mbit/s (MCS 2)`, `38/168 ms`. Today the link did

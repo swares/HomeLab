@@ -1,0 +1,124 @@
+---
+# Install workstation admin SSH public keys on every managed Linux host.
+#
+# WHY THIS EXISTS — 2026-09-23
+#
+# §2.15 disabled `PasswordAuthentication` fleet-wide on 2026-09-20. Two days
+# later the Windows laptop could not log in anywhere:
+#
+#     no supported authentication method. server sent: public key
+#
+# The hardening was right. What was missing is that the laptop had never had a
+# key on those hosts — password auth had been carrying it, and nobody asked who
+# was authenticating with a password before removing the option. `ansible/files/`
+# held exactly one public key, the break-glass one, and no mechanism existed for
+# a workstation key at all.
+#
+# Recovery was the break-glass key, which worked — see BACKLOG §1.2, whose
+# "test it" checkbox had been open since August and was finally answered by a
+# real lockout. The laptop key was then pushed by an ad-hoc `ansible -m
+# authorized_key` command, which is not reproducible and left `opi-zero2w-1`
+# (down at the time) permanently one key behind. This play is that command, made
+# reproducible.
+#
+# TO ADD A WORKSTATION: drop its public key in `ansible/files/admin-keys/` as
+# `<name>.pub` and run this. Public keys are not secrets; committing them is the
+# point, so a rebuilt or returning host gets every key without anyone
+# remembering.
+#
+# Run:
+#   ansible-playbook -i inventory/hosts.yml playbooks/admin-keys.yml --check
+#   ansible-playbook -i inventory/hosts.yml playbooks/admin-keys.yml
+#
+# To remove a key, delete the file and re-run with -e admin_keys_prune=true.
+# That is opt-in on purpose: a play that silently prunes authorized_keys is a
+# lockout waiting for a typo in a filename.
+- name: Install workstation admin SSH keys
+  # xu3-1 is deliberately EXCLUDED, decided 2026-09-23. It is in the usual
+  # pattern and did receive this key during the ad-hoc recovery push, but it runs
+  # Ubuntu 16.04 with OpenSSL 1.0.2g and is pending a retire-or-rebuild decision
+  # (§2.16). A key granting `swares` — which `bootstrap.yml` gives NOPASSWD sudo
+  # — on the least maintained host in the lab is the one place not to put it.
+  # The recovery copy was removed by hand; see §2.16.
+  hosts: "{{ admin_key_hosts | default('all:!x86_nodes:!embedded:!xu3-1') }}"
+  become: true
+  gather_facts: false
+
+  vars:
+    admin_key_dir: "{{ playbook_dir }}/../files/admin-keys"
+    admin_key_user: "{{ ansible_user | default('swares') }}"
+    admin_keys_prune: false
+
+  tasks:
+    - name: Collect the public keys to install
+      ansible.builtin.find:
+        paths: "{{ admin_key_dir }}"
+        patterns: "*.pub"
+      delegate_to: localhost
+      become: false
+      run_once: true
+      check_mode: false   # read-only; must run under --check or the asserts below are vacuous
+      register: admin_key_files
+
+    # An empty key directory would otherwise produce a play that loops over
+    # nothing and reports success on every host — the exact failure this play was
+    # written after. See the next assert for the same lesson one level down.
+    - name: There must be at least one key to install
+      ansible.builtin.assert:
+        that:
+          - admin_key_files.files | length > 0
+        fail_msg: >-
+          No *.pub files in {{ admin_key_dir }}. Refusing to run: a play that
+          installs nothing and reports success is worse than one that fails.
+        quiet: true
+      run_once: true
+
+    # THE EMPTY-KEY LESSON, and why this assert exists.
+    #
+    # On 2026-09-23 the recovery push ran with an unset shell variable, so
+    # `ansible.posix.authorized_key` received `key: ""`. It did not error. It
+    # reported **SUCCESS on thirteen hosts** with `changed: false`, and anyone
+    # reading that output would conclude the key was deployed. It was not.
+    #
+    # So every key is validated as a key before anything is installed — shape
+    # checked, not merely non-empty, because `key: "hello"` would also have been
+    # accepted silently.
+    - name: Every file must contain a public key
+      ansible.builtin.assert:
+        that:
+          - lookup('file', item) is match('^(ssh-ed25519|ssh-rsa|ecdsa-sha2-[a-z0-9-]+|sk-ssh-ed25519@openssh\.com) AAAA')
+        fail_msg: >-
+          {{ item | basename }} does not look like an SSH public key. Refusing to
+          install any key: authorized_key accepts an empty or malformed value and
+          reports success, so nothing downstream would tell you.
+        quiet: true
+      loop: "{{ admin_key_files.files | map(attribute='path') | list }}"
+      loop_control:
+        label: "{{ item | basename }}"
+      run_once: true
+
+    - name: Install each admin key for {{ admin_key_user }}
+      ansible.posix.authorized_key:
+        user: "{{ admin_key_user }}"
+        key: "{{ lookup('file', item) }}"
+        state: present
+        exclusive: false
+      loop: "{{ admin_key_files.files | map(attribute='path') | list }}"
+      loop_control:
+        label: "{{ item | basename }}"
+
+    # `exclusive: false` above means removing a file does not remove the key from
+    # the hosts. Pruning is a separate, opt-in pass so that a renamed or
+    # accidentally deleted file cannot lock anyone out. It keeps the break-glass
+    # key and the Ansible control-node key, neither of which lives in this
+    # directory.
+    - name: Report that pruning was not attempted
+      ansible.builtin.debug:
+        msg: >-
+          Keys in {{ admin_key_dir }} are installed. Keys already on the hosts but
+          NOT in that directory were left alone — including the break-glass key
+          (§1.2) and the control-node key from bootstrap.yml. Re-run with
+          -e admin_keys_prune=true to remove a key you have deleted from the
+          directory, and read `authorized_keys` on one host first.
+      run_once: true
+      when: not admin_keys_prune | bool
