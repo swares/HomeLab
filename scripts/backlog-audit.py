@@ -95,7 +95,22 @@ RE_BOX = re.compile(r"^\s*- \[([ xX])\]")
 RE_BULLET = re.compile(r"^- (?!\[)")
 
 
+# Markers are matched as substrings, so a NEGATED marker would match its own
+# negation: "NOT YET APPLIED" contains "APPLIED". That is not hypothetical — it
+# happened on 2026-09-23, on §1.14, whose heading says the fix is *not* applied
+# and which the tool therefore counted as complete, turning four honest open items
+# into four phantom orphans. §2.14 has carried "FIXED …, not yet applied" for weeks
+# and escaped only because that one is also struck through.
+#
+# Stripping the negation before matching is deliberately dumber than parsing it:
+# the phrase this repo actually writes is "not yet <marker>", so that is the phrase
+# removed. A heading needing more nuance than this should be reworded, not
+# accommodated.
+RE_NEGATED = re.compile(r"\bnot\s+yet\s+\w+", re.IGNORECASE)
+
+
 def heading_claims_done(text: str) -> bool:
+    text = RE_NEGATED.sub("", text)
     return "~~" in text or any(m in text for m in CLOSED_MARKERS)
 
 
