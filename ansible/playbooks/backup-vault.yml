@@ -3,8 +3,40 @@
 #
 # Prerequisites (one-time, manual on rpi5):
 #   vault policy write vault-snapshot (path sys/storage/raft/snapshot, read)
+#   vault token create -orphan -display-name=vault-backup -policy=vault-snapshot \
+#     -period=768h -field=token | sudo tee /etc/vault.d/backup-token >/dev/null
+#   sudo chmod 600 /etc/vault.d/backup-token
+#
+# THE PREVIOUS VERSION OF THOSE THREE LINES CAUSED A FIFTEEN-DAY BACKUP OUTAGE.
+# It read:
+#
 #   vault token create -display-name=vault-backup -period=87600h -policy=vault-snapshot
-#   echo "<token>" | sudo tee /etc/vault.d/backup-token && sudo chmod 600 /etc/vault.d/backup-token
+#   echo "<token>" | sudo tee /etc/vault.d/backup-token && sudo chmod 600 …
+#
+# Three defects, each sufficient on its own. See BACKLOG §1.14.
+#
+#   1. NO `-orphan`. The token was a CHILD of whatever token created it — an admin
+#      token. Vault revokes children when the parent expires or is revoked, and
+#      `docs/OPS.md` plus §1.11 record that `token-admin` is *deliberately* allowed
+#      to lapse. So this backup was built to die on the admin token's ~30-day
+#      cycle. Last good snapshot 2026-09-08; token-admin's 720h TTL from ~08-09
+#      expired the same day.
+#
+#   2. `-period=87600h` WAS NEVER HONOURED. Vault caps period at the effective
+#      max_ttl — 768h here — and warns on creation:
+#        period of "87600h" exceeded the effective max_ttl of "768h"; period
+#        value is capped accordingly
+#      A comment promising ten years described a 32-day token. Ask for 768h so the
+#      number in the repo is the number Vault uses.
+#
+#   3. NOTHING RENEWED IT. A periodic token lives one period at a time. The
+#      snapshot script now runs `vault token renew -self` before each snapshot;
+#      see the comment there.
+#
+# `-field=token | sudo tee … >/dev/null` is also deliberate: the earlier recipe
+# printed the token to the terminal, and on 2026-09-23 a live one was pasted into
+# a transcript while diagnosing exactly this failure. That is §2.13's second
+# occurrence. Never print a token you are about to write to a file.
 #
 - name: Configure Vault raft snapshot backups
   hosts: vault
@@ -54,6 +86,29 @@
           set -euo pipefail
           export VAULT_ADDR="{{ vault_addr }}"
           export VAULT_TOKEN="$(cat {{ vault_backup_token_file }})"
+
+          # RENEW BEFORE USE — added 2026-09-23 after fifteen days with no snapshot.
+          #
+          # This token is PERIODIC, and a periodic token does not live forever: it
+          # lives for one period and must be renewed inside it. Nothing renewed
+          # this one. The header of this playbook said `-period=87600h` (ten
+          # years), but Vault caps period at the effective max_ttl, which here is
+          # **768h**, and says so on creation:
+          #
+          #   period of "87600h" exceeded the effective max_ttl of "768h";
+          #   period value is capped accordingly
+          #
+          # So the documented ten-year token was a 32-day token all along, and the
+          # job that depends on it never asked for more time. Renewing on every run
+          # makes the period roll forward daily, which is the whole point of a
+          # periodic token.
+          #
+          # NOT prefixed with `-` and not `|| true`: if the renew fails, the token
+          # is already dead or dying and the snapshot is the thing that matters.
+          # Failing here fails the unit, which trips LabBackupUnitFailed — the alert
+          # that did fire for fifteen days while nobody was able to read it.
+          vault token renew -self >/dev/null
+
           SNAP_DIR=/tmp/vault-snapshots
           mkdir -p "$SNAP_DIR"
           SNAP="$SNAP_DIR/vault-snap-$(date +%Y%m%d-%H%M%S).snap"

@@ -1396,6 +1396,97 @@ the primary from the secondary. Pin it.
 
 ---
 
+### 1.14 Vault had no snapshot for fifteen days — **CAUSE FOUND 2026-09-23; FIX WRITTEN, NOT YET APPLIED**
+`ansible/playbooks/backup-vault.yml:4-7` (the header), and the script it deploys
+
+```
+/mnt/cold-8t/vault-snapshots/   newest = vault-snap-20260908-023115.snap   (Sep 8)
+backup-vault.service            failed, every night since
+```
+
+Fifteen days with no snapshot of the store holding the restic repository passwords, the
+Cloudflare R2 credentials, the lldap bind password, and the fleet login password. Vault's
+raft data lived only on `rpi5`'s SD card for that window.
+
+```
+vault-snapshot.sh: Error taking the snapshot: Error making API request.
+URL: GET http://127.0.0.1:8200/v1/sys/storage/raft/snapshot
+Code: 403 · permission denied · invalid token
+```
+
+**Three stacked defects, each sufficient alone**, all of them in the six-line "one-time,
+manual" recipe at the top of the playbook:
+
+**1. The token had no `-orphan`, so it was a child of `token-admin`.** Vault revokes a
+token's children when the parent expires. `docs/OPS.md` and §1.11 record that
+`token-admin` is *deliberately allowed to lapse* — "nothing automated uses it, so an
+expired one is expected, not an incident." Something automated did use it: this. The
+backup was built to die on a ~30-day cycle, and the arithmetic fits — `token-admin` is
+minted at 720h, one issued around 08-09 expires 09-08, and the last good snapshot is
+**09-08**.
+
+**2. `-period=87600h` was never honoured.** Vault caps period at the effective `max_ttl`
+and says so at creation:
+
+```
+period of "87600h" exceeded the effective max_ttl of "768h"; period value is capped
+```
+
+A comment promising ten years described a 32-day token. Nobody re-read the creation
+output; there was no reason to, because it said `Success!` underneath.
+
+**3. Nothing renewed it.** A periodic token lives one period at a time and must be
+renewed inside it. `vault token renew -self` now runs before every snapshot, so the
+period rolls forward daily — which is what "periodic" is for.
+
+**The monitoring was not the failure. Delivery was.** `LabBackupUnitFailed` fired
+correctly, nightly, from the first failure. ntfy delivered it, as it had before — to a
+phone that had been stolen. There is exactly one subscriber, so losing the device lost
+the channel, and a correct alert went nowhere for fifteen days.
+
+- [x] `vault token renew -self` added to the snapshot script, failing the unit if it
+      cannot renew.
+- [x] Header recipe corrected: `-orphan`, `-period=768h`, and
+      `-field=token | sudo tee … >/dev/null` so the value is never displayed.
+- [ ] **Mint the replacement token and confirm a snapshot lands.** Not done here because
+      it needs an admin token:
+
+          # on rpi5
+          vault token create -orphan -display-name=vault-backup -policy=vault-snapshot \
+            -period=768h -field=token | sudo tee /etc/vault.d/backup-token >/dev/null
+          sudo chmod 600 /etc/vault.d/backup-token
+          sudo systemctl start backup-vault.service
+          # then, on the H4 — the only evidence that counts:
+          ls -lt /mnt/cold-8t/vault-snapshots/ | head -3
+
+- [ ] **Audit every other unattended Vault token for `orphan=False`.** One command, and
+      it prints accessors rather than tokens:
+
+          for a in $(vault list -format=json auth/token/accessors \
+                      | python3 -c 'import json,sys;print(" ".join(json.load(sys.stdin)))'); do
+            vault token lookup -accessor -format=json "$a" | python3 -c '
+          import json,sys; d=json.load(sys.stdin)["data"]
+          print(d.get("display_name"), "orphan=", d.get("orphan"), d.get("policies"))'
+          done
+
+      On 2026-09-23 this showed only two tokens — `token-vault-backup` (orphan=False) and
+      `token-token-admin` (orphan=True) — so the blast radius was one job. Any future
+      unattended token with `orphan=False` has the same timer running.
+
+- [ ] **Give alert delivery a second endpoint.** A laptop browser subscriber or a desktop
+      ntfy topic costs nothing and would have surfaced this on 09-09. Redundancy belongs
+      on the thing that tells you, not only on the thing being watched — the same argument
+      the lab already accepts for four DNS resolvers.
+
+- [ ] **`rpi5`'s journal retains about four days.** `SystemMaxUse=100M` with 99.5M in use,
+      so `journalctl --since -90d` showed a first failure of **Sep 19** when the snapshot
+      evidence says **Sep 9**. Ten days of history had already rotated away. Same shape as
+      §3.14 — retention well inside what the configuration implies — and it cost a wrong
+      answer about when this started. Either raise the cap on the host that runs Vault, or
+      stop trusting its journal for anything older than a week.
+
+---
+
 ## 2. Security
 
 ### 2.1 ~~Pi-hole admin UI deploys unauthenticated~~ — **RESOLVED 2026-08-28; the primary really was, the secondary never was**
@@ -2054,6 +2145,29 @@ session that had twice explicitly said not to paste the value. Reading a rule an
 it under debugging pressure are different things — the durable fix is not typing secrets on
 command lines at all, which is why `--token-file` was reached for in the first place. That
 it is unsupported on the restore path (§ Drill 2c) is an upstream gap worth knowing.
+
+**SECOND OCCURRENCE — 2026-09-23, and the process note above predicted it exactly.** While
+diagnosing §1.14, a live Vault token with the `vault-snapshot` policy was pasted into a
+transcript, because the suggested command was `vault token create …` with no `-field=token`
+and no redirection — so Vault printed the token, as it is documented to. That policy reads
+`sys/storage/raft/snapshot`, i.e. a dump of the entire store.
+
+```
+vault token revoke -accessor col4IdpIEg232TgP2tRU61aI
+Success! Revoked token (if it existed)
+```
+
+Revoked within minutes, and a replacement minted with
+`-field=token | sudo tee … >/dev/null`.
+
+**Note where the fault was: in the command that was suggested, not in the pasting.** "Do
+not paste secrets" asks a person to notice a secret in output they were told to produce.
+The durable version is that any command handed over during diagnosis must not be capable
+of printing one — `-field` plus a redirect, `grep -c` instead of `grep -n`, an accessor
+instead of a token. Both occurrences of this entry happened while gathering evidence under
+pressure, which is the condition in which nobody re-reads output before pasting it.
+`backup-vault.yml`'s header now carries the safe recipe; the one it replaced printed the
+token on purpose.
 
 ### 2.12 Vault is never restarted, so it silently runs an old binary — **mechanism open; the seven-week instance was resolved 08-16**
 **Heading corrected 2026-08-21** — it described an instance that the entry's own first sentence
@@ -5978,6 +6092,18 @@ committed inside it.**
 The rule the tool now carries: *every marker must describe the entry's subject, not an
 activity performed on it.* A missed orphan is cheaper than a false one, because a false
 one teaches people to ignore the report.
+
+**Second marker bug, 2026-09-23, same lesson from the other direction.** Markers are
+matched as substrings, so **"NOT YET APPLIED" contains "APPLIED"** — §1.14's heading says
+its fix is *not* applied and the tool read that as a completion claim, turning four honest
+open items into four phantom orphans. §2.14 has carried *"FIXED …, not yet applied"* for
+weeks and escaped only because it is struck through as well.
+
+Fixed by stripping `not yet <word>` before matching, which is deliberately dumber than
+parsing negation: that is the phrase this repo actually writes. Verified against seven
+headings including both real cases. **Both marker bugs were found the same way** — the
+prose and the script disagreed, and the difference was chased instead of rounded. That is
+now twice that the tool's value came from contradicting the person using it.
 
 **Kept from the hand-counted version, because it is the worked example that justifies the
 script.** Before `backlog-audit.py` existed, reconciling round 2 by hand produced a
