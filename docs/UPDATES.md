@@ -44,7 +44,9 @@ GitHub Actions — validate.yml (on every PR and push to main)
 
 Human reviews + merges (or auto-merge fires for patches)
   └─ ArgoCD selfHeal picks up change within ~30s
-  └─ Kubernetes rolling update (maxSurge=1, maxUnavailable=0)
+  └─ Kubernetes rollout — surge-first for stateless Deployments (k8s default at replicas: 1);
+     nine Deployments use Recreate and are briefly down on every update.
+     Not zero-downtime: see docs/AVAILABILITY.md §4.1–4.2.
 ```
 
 ### Renovate policy
@@ -172,7 +174,10 @@ For each agent (serial: 1 — one at a time):
   5. kubectl uncordon <node>
 ```
 
-Running `serial: 1` keeps one agent schedulable throughout.
+Running `serial: 1` keeps one agent schedulable throughout. It does **not** keep the
+drained agent's pinned workloads (ollama / ollama-2, `local-path` PVCs) up — they are
+Pending until the node returns. Note the play currently reboots whenever *any* package
+changed, not only when `reboot-required` exists (docs/AVAILABILITY.md §4.3, D6).
 
 ### Tier C — standalone Linux hosts — upgrade + reboot
 
@@ -207,8 +212,10 @@ ansible-playbook playbooks/update-hosts.yml --check --vault-password-file .vault
 ## 4. Pi-hole application — `update-non-apt.yml -t pihole`
 
 Pi-hole ships its own `pihole -up` updater and is not managed by apt.
-The play updates the **secondary DNS node first** to preserve DNS availability;
-if the secondary breaks, the primary is still serving.
+**Correction (2026-10-02):** the play does **not** update a secondary first. It updates
+only octopi (the primary). The Pi-hole secondary, rpi4b, is not updated by any
+automation; opi-zero2w-1 runs dnsmasq. The steps below describe the intended design,
+not the current code — see docs/AVAILABILITY.md §4.5 and plan item B6.
 
 ```
 1. pihole -up on dns-2 (opi-zero2w-1, secondary)
@@ -364,4 +371,4 @@ Requires per-VM inventory vars (`kvm_host`, `libvirt_vm_name`, `health_check_url
 | Vault TLS | Medium | Currently plain HTTP; add before exposing beyond LAN |
 | ~~octopi OS upgrade (Raspbian Buster → Bookworm)~~ | ✅ Done (2026-07-13) | Bookworm + Pi-hole v6.4.3/FTL v6.7 confirmed running |
 | ~~zswap on n150-1/n150-2~~ | ✅ Done (2026-07-03) | zswap enabled: zstd compressor, zsmalloc zpool, 20% max pool |
-| ~~Shared storage (n150-1 ↔ n150-2)~~ | ✅ Done (2026-07-03) | NFS `/srv/libvirt-shared` exported from H4; libvirt-shared pool active on both nodes; VM live migration ready |
+| ~~Shared storage (n150-1 ↔ n150-2)~~ | ✅ Done (2026-07-03) | NFS `/srv/libvirt-shared` exported from **n150-1** (not H4 — `shared-storage.yml`); was down 37 days (BACKLOG §3.16), and cannot support evacuating n150-1 itself. Replaced by storage-copy live migration in docs/AVAILABILITY.md V1 |
