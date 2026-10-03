@@ -4,8 +4,13 @@
 
 Swept from every `.md` file and all code/config in the repo. The sections it replaced
 have been collapsed to pointers: `README.md`, `docs/OVERVIEW.md`, `docs/services.md`,
-and the dated `TODO-2026-07-14.md` / `TODO-2026-07-23.md` / `TODO-2026-08-03.md` files,
+and the dated `archive/TODO-2026-07-14.md` / `archive/TODO-2026-07-23.md` / `archive/TODO-2026-08-03.md` files,
 which are now historical session notes — keep them for the reasoning, not the tasks.
+
+**Moved 2026-10-03.** The dated TODO files now live in `archive/`, unedited, so every
+`file:line` citation below still resolves at its new path. `README.md` was restructured
+the same day, so `README.md:<line>` citations in this file refer to commit `6cb781f`,
+the last commit before that change.
 
 The reason for consolidating: those six lists disagreed. Offsite backup was marked
 **DONE** in three of them while the unit had never copied a byte, the Vault root token
@@ -324,7 +329,7 @@ Note the doc's list still says "Vault root token" — as of 08-07 there delibera
 isn't one. See §6.3.
 
 ### 1.3 ~~Finish the offsite tier~~ — **DONE, verified running 08-15**
-`TODO-2026-08-03.md:274`, `ansible/playbooks/backup-offsite.yml:59`
+`archive/TODO-2026-08-03.md:274`, `ansible/playbooks/backup-offsite.yml:59`
 
 **SEED COMPLETE 2026-08-11 02:19 UTC.** ~3.1 days wall clock, 44m35s CPU, ~204 GiB.
 Retention applied on the first run, keeping 32 snapshots across five groups
@@ -894,7 +899,7 @@ So the chain from the envelope is: unseal with item 5 → root shell on the rpi5
 config → generate-root → full admin. It works. It just needs host root as well as the
 envelope, which in a rebuild you would have anyway.
 
-**And it was documented twice.** `TODO-2026-08-03.md:727-814` carries a section titled
+**And it was documented twice.** `archive/TODO-2026-08-03.md:727-814` carries a section titled
 *"Why `generate-root` was blocked — and the actual fix"*: the identical 403 with no token,
 the `enable_unauthenticated_access` remedy, and at `:760` the full list of families —
 **`"rekey"`, `"generate-root"`, `"generate-operation-token"`**. The `rekey` family is
@@ -1771,7 +1776,7 @@ The playbook was deleted rather than fixed; see §9. It preseeded slapd and boun
 header said "never hardcode it". It had also been dead since 2026-07-18.
 
 ### 2.5 ~~Vault unseal keys sit beside the sealed data~~ — **claim corrected 08-15; storage kept, deliberately**
-`ansible/templates/vault-unseal.sh.j2:6`, `TODO-2026-08-03.md:871-876`
+`ansible/templates/vault-unseal.sh.j2:6`, `archive/TODO-2026-08-03.md:871-876`
 
 `docs/SECURITY.md` described the shares as "Offline, physically secure". They are on the
 RPi5 at `0400`, next to the raft store they unseal, so root there is equivalent to full
@@ -1991,7 +1996,7 @@ for. All three were written from reading the repo. All three corrections came fr
 measuring the running system.
 
 ### 2.8 Optional: tighten `admin` so it cannot self-escalate
-`ansible/files/vault-policies/admin.hcl`, `TODO-2026-08-03.md:310`
+`ansible/files/vault-policies/admin.hcl`, `archive/TODO-2026-08-03.md:310`
 
 `admin` holds `create` plus `sudo` on `sys/policies/acl/*` and `auth/*`, so a token
 carrying it can write a policy granting anything and mint a token for it — root at
@@ -3257,7 +3262,7 @@ package manager said, and warns by name if a host process holds 9100 on a cluste
 cannot reach the LAN.
 
 ### 3.7 Alloy restart recency filter
-`TODO-2026-08-03.md:335` — benign historical restarts keep surfacing.
+`archive/TODO-2026-08-03.md:335` — benign historical restarts keep surfacing.
 
 ### 3.8 `PolicyViolation` events fire continuously against dead ReplicaSets
 
@@ -6019,17 +6024,20 @@ them.
 - [ ] **`Makefile:2` still lists `ldap` in `.PHONY`** though the target was removed on
   08-09 and the file carries a comment explaining the removal. Harmless; finish the job.
 
-- [ ] **`FETCH_HEAD` is tracked in git** — a git internal committed by accident.
-- [ ] **Duplicated, drifted CI config under `ansible/`** — `ansible/.gitlab-ci.yml`,
+- [x] **`FETCH_HEAD` is tracked in git** — a git internal committed by accident.
+  Removed 2026-10-03.
+- [x] **Duplicated, drifted CI config under `ansible/`** — `ansible/.gitlab-ci.yml`,
   `ansible/.github/workflows/*`, `ansible/.claude/settings.json`. Only the root copies
-  are read; these are dead weight diverging silently.
+  are read; these are dead weight diverging silently. Moved to
+  `archive/ansible-stale-ci/` 2026-10-03.
 - [ ] **Mixed ArgoCD `repoURL` schemes** — 12 files use `git@github.com:`, but
   `gitops/apps/gitlab-runner.yaml:18,22` uses `https://`. Argo treats these as two
   repos needing two credentials.
 - [ ] **`.gitignore` path bug in `ansible/`** (C7) — and note this working copy lives in
   `Downloads`, so `LAB-URLS.md` and similar travel with any zip or sync of the folder.
-- [ ] **Archive `TODO-2026-07-14.md`** (25/26 done) and collapse `README.md`'s TODO to a
-  pointer at this file.
+- [x] **Archive `TODO-2026-07-14.md`** (25/26 done) and collapse `README.md`'s TODO to a
+  pointer at this file. Done 2026-10-03: all three dated TODO files moved to `archive/`
+  unedited, and the README section is now a pointer.
 
 ### 7.y This file's own status was wrong — **SWEPT 2026-09-20**
 
@@ -6455,7 +6463,7 @@ work, invisible for months, in a section titled *small, live, cheap*.
   state (`backup-etcd.sh.j2:14` mentions the `state.db` rename) and delete.
 
 - [ ] `lldap-backup` init container failed once and self-healed; a retry loop around
-  `pg_dump` would make it deterministic (`TODO-2026-08-03.md:447-452`).
+  `pg_dump` would make it deterministic (`archive/TODO-2026-08-03.md:447-452`).
 - [x] **Re-sweep Ansible for `no_log` registers consumed later** — done 08-09.
   All 12 files carrying `no_log` were checked. Results, so this need not be redone:
 
