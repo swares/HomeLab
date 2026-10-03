@@ -74,8 +74,9 @@ from a snapshot.
 A backup verification job wrote its results to the journal. None of it reached Loki.
 The cause stacked four deep:
 
-1. The Helm values used two keys that don't exist in the chart. **Helm silently
-   discards unknown values**, so the volume was never mounted, on any node.
+1. The Helm values used two keys that don't exist in the chart, one for the volume and
+   one for the mount. **Helm silently discards unknown values**, so neither was ever
+   created, on any node.
 2. With the mount fixed, the container's `/etc/machine-id` was empty, so the journal
    reader looked for a journal belonging to no machine. It found zero entries, which
    is not an error.
