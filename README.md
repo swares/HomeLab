@@ -12,6 +12,10 @@ EKS cluster from nothing, runs a slice of the same stack (Argo CD, Kyverno, Lite
 IRSA and an ALB, and destroys it every night for about $1 a session. It is deliberately
 detachable: nothing in this repo depends on it.
 
+> **Read the story:** [docs/CASE-STUDY.md](docs/CASE-STUDY.md) covers the design
+> decisions, two outages, and the failures that reported success, plus the habits that
+> came out of them.
+
 ```mermaid
 flowchart TB
     PR["Change starts as a pull request"] --> GIT[("git · main<br/>single source of truth")]
@@ -76,6 +80,7 @@ flowchart TB
 | `ansible/` | Host provisioning: storage, k3s install, backups, Argo bootstrap, password rotation |
 | `gitops/` | What Argo deploys — `bootstrap/` (app-of-apps), `apps/`, `workloads/` |
 | `docs/` | Architecture, hardware, runbook, security, AI inference, service catalog, updates |
+| `docs/CASE-STUDY.md` | The write-up: decisions, incidents, lessons, open gaps |
 | `scripts/` | One-shot helpers (`enable-winrm.ps1`, `lab-check.sh`, flannel FDB service) |
 | `ci/` | OPA/conftest policies run by CI against every workload manifest |
 | `tofu/`, `packer/` | OpenTofu (VMs, DNS) and Packer image builds |
