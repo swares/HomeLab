@@ -157,7 +157,8 @@ the workload namespace. See `gitops/workloads/immich/external-secret.yaml` for a
 
 ## Updates and rollback
 
-See [docs/UPDATES.md](docs/UPDATES.md) for the full update workflow. Short version:
+See [docs/UPDATES.md](docs/UPDATES.md) for the full update workflow. For what those updates do to live traffic, and the plan to make them
+non-disruptive, see [docs/AVAILABILITY.md](docs/AVAILABILITY.md). Short version:
 
 | Layer | Update | Rollback |
 |-------|--------|----------|
