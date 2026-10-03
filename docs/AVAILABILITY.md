@@ -43,6 +43,24 @@ have drifted apart; this document reconciles them.
 | VMs | Every host or guest reboot is a GitLab outage | Host maintenance: < 1 s pause. Guest reboot: still an outage **[HW-LIMIT]** |
 | Bare metal | n150-1/2 never patched; weekly avoidable reboots | All patched; reboots rare (Livepatch); unavoidable residue is the NAS **[HW-LIMIT]** |
 
+### At a glance: availability today and after the plan
+
+Planned events only (patching, upgrades, image updates), estimated from the manifests
+and playbooks under the assumptions in §5. Unplanned failures are excluded. Phase 0 of
+the plan replaces these estimates with load-tested measurements.
+
+| Service | Today | After Phases 1–5 | Remaining cause |
+|---|---|---|---|
+| Ingress | ~99.995 % | **≥ 99.999 %** | — |
+| SSO | ~99.99 % | **≥ 99.999 %** | — |
+| AI gateway | ~99.97 % | **≥ 99.999 %** gateway; backends at half capacity during agent maintenance | One NPU node down = half capacity **[HW-LIMIT]** |
+| Immich (web/API) | ~99.95–99.97 % | **≥ 99.99 %** | Originals unavailable during H4 reboots **[HW-LIMIT]** |
+| Home Assistant | ~99.97 % | **~99.99 %** | Single-instance by design; ~30–90 s per HA release |
+| MQTT | ~99.97 % | **≥ 99.99 %** | Session takeover on broker failover |
+| GitLab | — | Host maintenance non-disruptive | Guest reboots 3–8 min **[HW-LIMIT]** |
+| NAS (NFS) | ~99.99 % | **~99.995 %** (rarer reboots) | Single storage node **[HW-LIMIT]** |
+| LAN DNS | degraded weekly | **no stalls** | — |
+
 ---
 
 ## 2. What "uninterrupted" means here
@@ -129,7 +147,7 @@ home-assistant, lldap, minio, zot, semaphore, and all four Postgres instances
 | rpi5 (Vault) | Auto-unseal; ESO serves cached secrets | 0 s user-visible; ESO sync errors 1–2 min |
 | octopi (Pi-hole primary) | LAN clients that list it first wait the resolver timeout (~5 s on glibc) per lookup before failing over | 1–2 min of slow lookups, no hard failure. Cluster unaffected (octopi is last) |
 | opi-zero2w-2 (MQTT) | Home Assistant connects only to `.188`; the bridge to `-4` replicates topics but is **not** client failover | **1–2 min MQTT outage; QoS-0 messages lost** |
-| xu3-1 | Build agent | Irrelevant to service |
+| xu3-1 | No service role (not a build agent; BACKLOG §2.16) | Irrelevant to service |
 
 ### 4.5 Pi-hole application update (`update-non-apt.yml -t pihole`)
 - **Only octopi is updated.** The play header and `UPDATES.md` say "secondary first",
@@ -222,7 +240,7 @@ because the volume cannot follow the pod.
 
 Ordered so each phase is useful on its own and later phases build on earlier ones.
 Every item is a GitOps PR or an Ansible change run with `--check` first, per CLAUDE.md.
-**Decisions marked ◆ need your sign-off before any code is written** (§9).
+**Decisions marked ◆ need your sign-off before any code is written** (§8).
 
 ### Phase 0 — Measure first (½ day, no risk)
 
@@ -327,29 +345,11 @@ here is a proposal for you, not something to be performed.
 - **Network and power.** One router/switch, no documented UPS. These dominate
   *unplanned* availability more than anything above. **[HW-LIMIT]** — a UPS for the
   rack and the switch is the single highest-value hardware purchase for this goal.
-- **xu3-1** build agent — not on any served path.
+- **xu3-1** — no service role (not a build agent; BACKLOG §2.16), not on any served path.
 
 ---
 
-## 8. Projected availability after the plan
-
-Same assumptions as §5 (planned events only).
-
-| Service | Today | After Phases 1–5 | Remaining cause |
-|---|---|---|---|
-| Ingress | ~99.995 % | **≥ 99.999 %** | — |
-| SSO | ~99.99 % | **≥ 99.999 %** | — |
-| AI gateway | ~99.97 % | **≥ 99.999 %** gateway; backends at half capacity during agent maintenance | One NPU node down = half capacity **[HW-LIMIT]** |
-| Immich (web/API) | ~99.95–99.97 % | **≥ 99.99 %** | Originals unavailable during H4 reboots **[HW-LIMIT]** |
-| Home Assistant | ~99.97 % | **~99.99 %** | Single-instance by design; ~30–90 s per HA release |
-| MQTT | ~99.97 % | **≥ 99.99 %** | Session takeover on broker failover |
-| GitLab | — | Host maintenance non-disruptive | Guest reboots 3–8 min **[HW-LIMIT]** |
-| NAS (NFS) | ~99.99 % | **~99.995 %** (rarer reboots) | Single storage node **[HW-LIMIT]** |
-| LAN DNS | degraded weekly | **no stalls** | — |
-
----
-
-## 9. Decisions needed before any code
+## 8. Decisions needed before any code
 
 1. **S1/S2/S3 — storage stack.** CNPG + Longhorn + Garage is the recommendation. The
    alternative is CNPG only (Phase 2 for databases) and accepting `local-path` for
@@ -366,7 +366,7 @@ alone should remove most of the *request-visible* errors without touching storag
 
 ---
 
-## 10. How to prove it
+## 9. How to prove it
 
 The claim is true for a layer when **M2's load test, run during that layer's
 maintenance process, meets §2's criteria**:
