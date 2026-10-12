@@ -6016,13 +6016,20 @@ them.
   Scope, checked 2026-08-27: **the Windows copy has no `actions-runner/` and no nested
   `HomeLab/`**, so sweeps run there are clean. This bites sweeps run on the H4.
 
-- [ ] **`ansible/playbooks/sandbox-vm-update.yml` references `bootstrap-lldap.yml`** in a
-  comment (1 hit, confirmed still present 2026-08-27). That playbook was deleted on
-  08-03. Cosmetic, but it is the kind of stale pointer that sends someone looking for a
-  file that has not existed for weeks.
+- [x] **Already fixed — verified 2026-10-12.** The comment at
+  `sandbox-vm-update.yml:400` no longer points at a live file; it explains the deletion:
 
-- [ ] **`Makefile:2` still lists `ldap` in `.PHONY`** though the target was removed on
-  08-09 and the file carries a comment explaining the removal. Harmless; finish the job.
+      # lldap_admin_pass comes from Ansible Vault. (bootstrap-lldap.yml, which
+      # previously shared this var, was deleted 2026-08-02 with the ldap-1 VM.)
+
+  So it is a historical note rather than a stale pointer, and nobody would go looking.
+  Somebody fixed it and never ticked this. One small discrepancy left standing: this item
+  says the playbook was deleted **08-03**, the comment says **08-02**. Not worth chasing,
+  recorded so the next reader does not treat the mismatch as a finding.
+
+- [x] **Done 2026-10-12.** `ldap` removed from `.PHONY`; `make -n help` still parses.
+  `.PHONY` names a non-existent target without complaining, which is precisely why it
+  survived three months after the `ldap:` target went with the ldap-1 VM.
 
 - [x] **`FETCH_HEAD` is tracked in git** — a git internal committed by accident.
   Removed 2026-10-03.
@@ -6030,11 +6037,44 @@ them.
   `ansible/.github/workflows/*`, `ansible/.claude/settings.json`. Only the root copies
   are read; these are dead weight diverging silently. Moved to
   `archive/ansible-stale-ci/` 2026-10-03.
-- [ ] **Mixed ArgoCD `repoURL` schemes** — 12 files use `git@github.com:`, but
-  `gitops/apps/gitlab-runner.yaml:18,22` uses `https://`. Argo treats these as two
-  repos needing two credentials.
-- [ ] **`.gitignore` path bug in `ansible/`** (C7) — and note this working copy lives in
-  `Downloads`, so `LAB-URLS.md` and similar travel with any zip or sync of the folder.
+- [x] **Done 2026-10-12 — and the count had grown since this was written.** Thirteen
+  sources used `git@github.com:`, not twelve, and *two* lines in
+  `gitops/apps/gitlab-runner.yaml` used `https://`, not one. Both normalised to `git@`;
+  all **fifteen** references to this repo are now one spelling.
+
+  Argo keys repository credentials by the URL string, so the two spellings were two
+  repositories to it — and the `https` one had no credential, working only because the
+  repo is public. Normalised *toward* `git@` because that deploy key demonstrably works
+  for the other thirteen. The reverse (https everywhere, no key needed now the repo is
+  public) is defensible but is a design choice, not a cleanup, so it was not made here.
+- [x] **Fixed 2026-10-12, and it was worse than "path bug" suggests.** `ansible/.gitignore`
+  carried three rules copied from the root file, prefix and all:
+
+      ansible/.vault_pass              <- inside ansible/, resolves to ansible/ansible/…
+      ansible/files/pull-secret.json
+      ansible/files/*.secret
+
+  **Patterns in a `.gitignore` are relative to that file**, so all three matched nothing.
+  Corrected to `.vault_pass`, `files/pull-secret.json`, `files/*.secret`, and verified —
+  `git check-ignore -v` now names `ansible/.gitignore` as the matching rule where it
+  previously named the root.
+
+  **No secret was ever exposed**: the root `.gitignore` has the same three lines, in the
+  one place that prefix is correct, and it was doing the work the whole time. The defect
+  is subtler than an exposure — it was a second layer that *looked* like protection and
+  provided none, which is worse than no second layer, because a reader checking
+  `ansible/.gitignore` would stop looking.
+
+  **A note on how this was verified, because the first attempt was careless.** Testing
+  the patterns by `touch`-ing `ansible/.vault_pass` and friends put empty files named
+  after real secrets into the authoritative checkout — in a repo whose first rule is
+  never to commit those names — and an empty `.vault_pass` there is its own hazard, since
+  a run using `--vault-password-file` would get an empty password and fail as though the
+  vault were corrupt. `git check-ignore -v --no-index <path>` evaluates paths that **do
+  not exist** and was available from the start. Test ignore rules that way.
+
+  Still true and unaddressed: this working copy lives in `Downloads`, so `LAB-URLS.md`
+  and similar travel with any zip or sync of the folder.
 - [x] **Archive `TODO-2026-07-14.md`** (25/26 done) and collapse `README.md`'s TODO to a
   pointer at this file. Done 2026-10-03: all three dated TODO files moved to `archive/`
   unedited, and the README section is now a pointer.

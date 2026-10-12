@@ -15,11 +15,24 @@ spec:
         valueFiles:
           - $values/gitops/workloads/gitlab-runner/values.yaml
     # Source 2: values file from this repo (ref-only — used by source 1 valueFiles)
-    - repoURL: https://github.com/swares/HomeLab.git
+    #
+    # SCHEME NORMALISED 2026-10-12 (BACKLOG §7.1). These two were the only
+    # `https://github.com/swares/HomeLab.git` in the tree; thirteen other sources use
+    # `git@github.com:swares/HomeLab.git`. Argo CD keys its repository credentials by
+    # the URL string, so the two spellings are two repositories to it — one of which
+    # had no credential and worked only because the repo is public. Matching the
+    # thirteen means one credential, one cache entry, and `argocd repo list` showing
+    # one entry instead of two for the same thing.
+    #
+    # Deliberately normalised TOWARD git@ rather than away from it: that deploy key
+    # demonstrably works for thirteen Applications. Going the other way — https
+    # everywhere, no key needed now the repo is public — is a defensible design
+    # choice, but it is a choice, not a cleanup, so it is not made here.
+    - repoURL: git@github.com:swares/HomeLab.git
       targetRevision: main
       ref: values
     # Source 3: kustomize manifests (ExternalSecret for runner token)
-    - repoURL: https://github.com/swares/HomeLab.git
+    - repoURL: git@github.com:swares/HomeLab.git
       targetRevision: main
       path: gitops/workloads/gitlab-runner
   destination:

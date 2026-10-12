@@ -1,7 +1,21 @@
 # Secrets -- never commit
-ansible/.vault_pass
-ansible/files/pull-secret.json
-ansible/files/*.secret
+#
+# PATHS ARE RELATIVE TO THIS FILE, i.e. to ansible/. Until 2026-10-12 the three
+# lines below read `ansible/.vault_pass`, `ansible/files/pull-secret.json` and
+# `ansible/files/*.secret` — copied from the root .gitignore, where that prefix is
+# correct. Inside ansible/ they resolve to ansible/ansible/… and matched nothing.
+#
+# The secrets were never actually exposed: the ROOT .gitignore carries the same
+# three lines and is in the right place for them, and `git check-ignore -v` names
+# that file as the one doing the work. So this file was a second layer that looked
+# like protection and provided none — which is worse than no second layer, because
+# anyone reading it would stop looking.
+#
+# BACKLOG §7.1 (C7). Verify with:
+#   git check-ignore -v ansible/.vault_pass
+.vault_pass
+files/pull-secret.json
+files/*.secret
 **/*.key
 **/*.pem
 kubeconfig
