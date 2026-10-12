@@ -1,5 +1,10 @@
 # Convenience targets. All Ansible runs target the host(s) in inventory/hosts.yml.
-.PHONY: help check storage microshift backup argocd all dns ai-nodes vault ldap mqtt k3s-vms \
+#
+# `ldap` removed from .PHONY 2026-10-12 (BACKLOG §7.1): the target went when the
+# ldap-1 VM was decommissioned on 2026-07-04 and lldap moved into k3s, but the
+# .PHONY entry stayed. Harmless — .PHONY names a non-existent target without
+# complaint — which is exactly why it survived three months.
+.PHONY: help check storage microshift backup argocd all dns ai-nodes vault mqtt k3s-vms \
         k3s-registry update-containers update-vms bake-image validate-rollout ansible-deps bootstrap \
         push-m5stack
 
